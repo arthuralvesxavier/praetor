@@ -27,5 +27,5 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   // Upload routes are excluded so the proxy never buffers/truncates request bodies.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/documents/upload).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|api/documents/upload).*)"],
 };
