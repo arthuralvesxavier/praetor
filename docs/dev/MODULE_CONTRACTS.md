@@ -81,6 +81,7 @@ Values are the English enum ids from `@/domain/enums`.
 
 | Route | Params |
 |---|---|
+| `/dashboard` | `periodo=30d\|90d\|6m\|12m\|ytd\|all` (padrão `12m`), `unidade`, `area`, `responsavel` — ver `src/modules/dashboard/bi-filters.ts` |
 | `/processos` | `q`, `status`, `area`, `phase`, `risco`, `unidade`, `responsavel`, `pagina` |
 | `/preventivo` | `q`, `status`, `categoria`, `risco`, `unidade`, `responsavel`, `pagina` |
 | `/contratos` | `q`, `status`, `tipo`, `vencendo=1` (ends within org setting days), `responsavel`, `pagina` |

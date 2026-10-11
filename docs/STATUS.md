@@ -74,11 +74,14 @@ Primeira versão funcional (outubro de 2026). Esta página separa o que **funcio
   - reanálise de desatualizadas (desligada por padrão);
   - revisão de retenção (**só conta**).
 
-**Dashboard (`/dashboard`)**
+**Painel de BI (`/dashboard`)**
 
-- Indicadores de processos, ocorrências, prazos, contratos e IA.
-- Exposição financeira **informada nos cadastros** (não é estimativa da IA), carga por responsável, próximos prazos, alertas e atividade recente.
-- Tudo filtrado pelo escopo do usuário.
+- Filtros numa linha (parâmetros de URL `periodo`, `unidade`, `area`, `responsavel`): período (30 e 90 dias com granularidade semanal; 6 e 12 meses, ano atual e todo o período, este limitado a 36 meses, com granularidade mensal), unidade, área jurídica e responsável. A área filtra processos e os prazos/tarefas vinculados a eles; ocorrências e contratos não têm área.
+- Indicadores (processos ativos com entradas no período e no período anterior, exposição e provisão informadas, prazos vencidos e próximos, ocorrências abertas, encerramentos, tarefas em atraso, contratos vencendo), cada um com link para a lista filtrada.
+- Gráficos em HTML/CSS renderizados no servidor (`src/modules/dashboard/components/charts/`): entradas × encerramentos de processos, ocorrências registradas × resolvidas, risco atual (barras 100%), ocorrências por categoria, exposição por área e por probabilidade de perda, carga de prazos por semana, pendências por responsável e processos por fase, além da tabela de maiores exposições. Cada marca tem tooltip (hover e teclado), cada gráfico tem "Ver dados em tabela", e barras e trechos levam aos registros. Cores validadas com o validador de paleta (cores de status para risco, sempre com rótulo).
+- Seção "Acompanhamento", sem filtros: próximos prazos, alertas, contratos, IA e atividade recente.
+- Exposição financeira **informada nos cadastros** (não é estimativa da IA). Tudo calculado dentro do escopo de visibilidade do usuário (`src/modules/dashboard/bi-service.ts`), testado em `tests/dashboard/bi.test.ts`.
+- Pendente: exportação (CSV/PDF), comparação entre períodos em gráfico, filtros salvos e modo escuro.
 
 **Administração (`/admin`)**
 
