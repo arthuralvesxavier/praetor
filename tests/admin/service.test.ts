@@ -5,6 +5,7 @@ import type { AuthContext } from "@/server/auth/context";
 import type { Database } from "@/server/db/client";
 import { auditLogs, legalProcesses, organizations, sessions, teamMembers, teams, units, users } from "@/server/db/schema";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/lib/errors";
+import { DEFAULT_ROUTINES } from "@/server/jobs/routines";
 import {
   createTeam,
   createUnit,
@@ -229,7 +230,7 @@ describe("organization settings and routines", () => {
 
   it("creates default routines and enforces the minimum interval", async () => {
     const routines = await listRoutines(adminA());
-    expect(routines.length).toBe(4);
+    expect(routines.length).toBe(DEFAULT_ROUTINES.length);
     const stale = routines.find((r) => r.type === "stale_analysis_refresh")!;
     await expect(updateRoutine(adminA(), stale.id, { enabled: true, intervalMinutes: 5 })).rejects.toBeInstanceOf(ValidationError);
     await updateRoutine(adminA(), stale.id, { enabled: true, intervalMinutes: 30, autoRefresh: true, maxPerRun: 3 });

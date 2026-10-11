@@ -204,3 +204,214 @@ Every screen that mixes sources must label them with `<OriginBadge origin=... />
 cadastrado manualmente / importado / sugerido pela IA (pendente de validação humana).
 AI output is shown only inside analysis views with sources, date, limitations,
 validation points and the disclaimer — never merged silently into record fields.
+
+---
+
+# v2 — Carteira, contingências, entrada de processos e simulações
+
+Added by the v2 reformulation (migration `drizzle/0001_v2_portfolio.sql`, additive only).
+Everything above still applies. Business rules come from the requirements document
+("Levantamento de requisitos — gestão de passivo"): RN-01..RN-12, RF-01..RF-24.
+
+## Business rules that code must enforce
+
+| Rule | Where |
+|---|---|
+| RN-01/RN-09 CNJ number is the key: one `legal_processes` row per CNJ; each instance is a `process_instances` row. Counts never add instances. | processes, imports |
+| RN-02 Valor da causa and valor liquidado are never summed; always shown side by side and labeled. | everywhere |
+| RN-03 Null is not zero: `null` liquidated = "não apurado" (UI shows "Não apurado", CSV leaves the cell empty). | everywhere |
+| RN-04/RN-05/RN-07 Exposure and provision: use the pure functions in `@/domain/contingency` (`netExposure`, `provisionFor`, `addToBucket`). Estimates are always flagged. | contingency, reports, dashboard |
+| RN-06 Extinction by payment = new `liquidated` valuation with amount 0 and reason "Quitação"; history stays. | contingency |
+| RN-08 Divergent values are recorded (proposed valuation with reason), never overwritten silently. | imports, contingency |
+| RN-10 Monthly snapshot; a `closed` period is immutable and reports read it from `portfolio_snapshot_items`. | contingency, reports |
+| RN-11 Proposed values only become `official` through an identified human (`reviewedById`). Below `settings.contingency.confidenceThreshold` they cannot be bulk-approved. | contingency |
+| RN-12 Loss of patronage: `status = closed`, `closureReason = lost_patronage`; out of the active portfolio, history kept. | processes |
+| RF-12 Automatic risk suggestions are always `status = proposed`. | contingency |
+| AI / e-mail | Simulated only in this version. Every simulated output is labeled (see "Simulation labeling"). |
+
+## Ownership (v2 build)
+
+Each package owns the files listed; do not edit files owned by another package.
+Shared files not listed (enums, schema, access, permissions, nav, job handlers,
+routines registry, test fixtures, docs) are owned by the integrator: report needed changes instead.
+
+| Package | Owns |
+|---|---|
+| brand-shell | `src/components/brand/**`, `src/components/layout/**`, `src/app/(app)/layout.tsx`, `src/app/(app)/busca/**`, `src/app/globals.css`, `src/app/icon.svg`, `src/app/favicon.ico`, `src/app/apple-icon.png`, `src/app/page.tsx`, `src/components/landing/**`, `src/app/login/**`, `scripts/generate-icons.mjs` |
+| portfolio | `src/modules/processes/**`, `src/app/(app)/processos/**`, `src/app/api/processes/**` |
+| contingency | `src/modules/contingency/**`, `src/app/(app)/contingencias/**`, `src/app/(app)/acordos/**`, `src/app/api/contingency/**` |
+| hearings-alerts | `src/modules/hearings/**`, `src/modules/alerts/**`, `src/modules/work/**`, `src/app/(app)/audiencias/**`, `src/app/(app)/alertas/**`, `src/app/(app)/prazos/**` |
+| imports | `src/modules/imports/**`, `src/app/(app)/importacoes/**`, `src/app/api/imports/**` |
+| briefs-ai | `src/modules/briefs/**`, `src/server/integrations/ai/case-brief/**`, `src/server/integrations/text-extraction.ts`, `src/modules/documents/**`, `src/app/(app)/analises-preliminares/**`, `src/app/(app)/documentos/**`, `src/app/api/documents/**` |
+| intake-distribution | `src/modules/intake/**`, `src/modules/distribution/**`, `src/app/(app)/entrada/**`, `src/app/(app)/distribuicao/**` |
+| emails | `src/modules/emails/**`, `src/server/integrations/email/**`, `src/app/(app)/emails/**` |
+| reports-preventive | `src/modules/reports/**`, `src/modules/preventive-intel/**`, `src/app/(app)/relatorios/**`, `src/app/(app)/inteligencia-preventiva/**`, `src/app/api/reports/**` |
+| admin-dashboard | `src/modules/admin/**`, `src/modules/organization/**`, `src/app/(app)/admin/**`, `src/modules/dashboard/**`, `src/app/(app)/dashboard/**` |
+
+Tests: each package writes its own `tests/<package>/**`. Shared fixture: `tests/helpers/fixtures.ts`
+(`setupFixture()` now also returns `companyA`, `lawFirmA` and contexts `accountant`, `auditor`,
+`externalCounsel` — the latter belongs to `lawFirmA`).
+
+## New roles and permissions
+
+Roles: `accountant` (contabilidade), `auditor` (auditoria), `external_counsel` (escritório externo,
+`AuthContext.lawFirmId`). See `ROLE_PERMISSIONS` in `src/server/auth/permissions.ts` and rules 10–13
+in `src/server/auth/access.ts`. New permissions: `contingency:read|write|approve`, `snapshot:close`,
+`report:read`, `import:run`, `intake:manage`, `distribution:manage`, `brief:read|review`,
+`email:read|send`, `preventive_intel:read`.
+
+New row-visibility builders (`@/server/auth/access`): `processChildWhere(ctx, table)`,
+`valuationWhere`, `guaranteeWhere`, `riskAssessmentWhere`, `settlementWhere`, `hearingWhere`,
+`intakeWhere`, `caseBriefWhere`, `emailWhere`, and `visible*Ids` for each. `entityReferenceWhere`
+also resolves `hearing`, `settlement`, `valuation`, `guarantee`, `case_brief`, `intake`.
+Companies, law firms, distribution rules, import batches and snapshots are organization-level
+(permission-gated, `organization_id = ctx.organizationId`).
+
+## New tables (see the schema files for column docs)
+
+`companies`, `law_firms` (core.ts) · `process_instances` + new `legal_processes` columns
+(`companyId`, `lawFirmId`, `instance`, `processClass`, `city`, `state`, `phaseDetail`,
+`liquidatedAmountCents`, `riskPercentageBp`, `closureReason`, `needsVerification`,
+`verificationNote`, `lastMovementAt`, `importBatchId`) (legal.ts) · `process_valuations`,
+`process_guarantees`, `process_risk_assessments`, `settlements`, `settlement_installments`,
+`portfolio_snapshots`, `portfolio_snapshot_items` (contingency.ts) · `hearings`,
+`distribution_rules`, `case_intakes` (operations.ts) · `case_briefs`, `case_brief_revisions`,
+`case_brief_sources` (briefs.ts) · `email_messages`, `email_events` (email.ts) ·
+`import_batches`, `import_rows` (imports.ts). `document_versions` gained `pageCount` and
+`pageOffsets`. `process_parties.liabilityNature`, `process_events.cnjMovementCode|instance`.
+
+Denormalized mirrors on `legal_processes` (kept in sync by the contingency service inside the same
+transaction): `liquidatedAmountCents` = latest OFFICIAL liquidated valuation, `riskPercentageBp` /
+`lossProbability` = official risk assessment in force, `provisionAmountCents` = current provision.
+The import commit may write the mirrors directly for the initial load (same rules).
+
+Organization settings gained `contingency`, `email`, `intake` and two alert windows; always read
+them through `mergeOrganizationSettings` / `loadOrganization` (`@/modules/analyses/org-settings`).
+
+## v2 cross-module APIs (stubs exist; owners implement the bodies, signatures are fixed)
+
+```ts
+// @/modules/organization/service  (implemented)
+listCompanyOptions(ctx): Promise<{ id; name }[]>
+listLawFirmOptions(ctx): Promise<{ id; name }[]>
+assertCompanyInOrg(ctx, id, db?) / assertLawFirmInOrg(ctx, id, db?)   // ValidationError on field companyId / lawFirmId
+
+// @/modules/processes/service  (implemented)
+searchProcesses(ctx, q, limit = 8): Promise<{ id; number; title; court; status }[]>
+
+// @/modules/alerts/service  (implemented)
+countOpenAlerts(ctx): Promise<{ total; critical }>
+
+// @/modules/contingency/service
+getProcessContingencySummary(ctx, processId): Promise<ProcessContingencySummary>
+getPortfolioExposure(ctx, filters?): Promise<{ rows: PortfolioExposureRow[]; totals: MoneyBucket }>
+proposeValuation(ctx, input: ProposeValuationInput): Promise<{ id }>     // always `proposed`
+// @/modules/contingency/components/process-tabs
+<ProcessContingencyTab ctx processId />  <ProcessSettlementsTab ctx processId />  <ProcessValuesSummary ctx processId />
+// @/modules/contingency/routines
+runPortfolioAlertsRoutine(rc) / runMonthlySnapshotRoutine(rc): Promise<string>
+
+// @/modules/hearings/service
+listUpcomingHearings(ctx, { days?, limit? }): Promise<UpcomingHearing[]>
+// @/modules/hearings/components/process-hearings-tab
+<ProcessHearingsTab ctx processId />
+// @/modules/hearings/routines
+runHearingAlertsRoutine(rc): Promise<string>
+
+// @/modules/briefs/service
+requestCaseBrief(ctx, processId, { intakeId?, inline? }): Promise<{ briefId; status }>
+runCaseBriefJob(briefId, { attempt, maxAttempts }): Promise<void>            // job "case_brief.generate" { briefId }
+getLatestCaseBriefSummary(ctx, processId): Promise<CaseBriefSummary | null>
+getCaseBriefEmailDigest(ctx, briefId): Promise<CaseBriefEmailDigest>
+onDocumentTextReadyForBriefs({ organizationId, documentId, versionId }): Promise<void>
+// @/modules/briefs/demo-documents
+buildDemoCaseDocuments(info: DemoCaseInfo, { variant? }): Promise<DemoDocument[]>   // fictitious PDFs (pdf-lib)
+// @/modules/briefs/components/process-brief-tab
+<ProcessBriefTab ctx processId />
+
+// @/modules/emails/service   (templates' data types in @/modules/emails/templates)
+sendTemplatedEmail(ctx, { template, toUserId, data, linkPath, processId?, briefId?, intakeId?, entity? }): Promise<{ emailId }>
+// @/modules/emails/components/process-emails-tab
+<ProcessEmailsTab ctx processId />
+// @/server/integrations/email
+getEmailProvider(): EmailProvider (SimulatedEmailProvider only) · getEmailRuntimeInfo()
+
+// @/modules/distribution/service
+decideAssignment(ctx, processId): Promise<AssignmentDecision>
+assignResponsible(ctx, processId, { force? }): Promise<AssignmentDecision>
+
+// @/modules/intake/service
+processIntakeJob(intakeId, { attempt, maxAttempts }): Promise<void>         // job "intake.process" { intakeId }
+getIntakeCounts(ctx): Promise<IntakeCounts>
+
+// @/server/integrations/ai/case-brief/provider
+CaseBriefProvider.generate(CaseBriefRequest): Promise<{ brief: CaseBrief; usage }>
+pageForOffset(pageOffsets, offset): number | null
+```
+
+Process-detail tab content components are async server components `({ ctx, processId })` that check
+their own permission and render nothing (or a short pt-BR notice) when the user lacks it.
+
+## Process detail tabs (`/processos/[id]?aba=...`)
+
+`visao-geral` (default) · `partes` · `instancias` · `movimentacoes` · `valores` (contingency) ·
+`acordos` (contingency) · `audiencias` (hearings) · `analise-preliminar` (briefs) · `documentos` ·
+`prazos` · `emails` (emails) · `ia` · `comentarios` · `historico`.
+Links into the brief use `/processos/<id>?aba=analise-preliminar`.
+
+## New routes and URL params
+
+| Route | Params |
+|---|---|
+| `/processos` | v1 params + `tribunal`, `instancia`, `cidade`, `uf`, `empresa`, `escritorio`, `classe`, `valor_min`, `valor_max` (reais), `liquidado=com\|sem`, `verificar=1`, `carteira=ativa\|encerrada\|todas` (default `ativa`), `ordem` |
+| `/entrada` | `status`, `pagina` |
+| `/entrada/[id]` | — (pipeline timeline) |
+| `/analises-preliminares` | `status`, `responsavel`, `pagina` |
+| `/analises-preliminares/[id]` | `editar=1` |
+| `/audiencias` | `periodo=7d\|30d\|90d\|passadas`, `status`, `responsavel`, `pagina` |
+| `/alertas` | `tipo`, `severidade`, `situacao=abertos\|resolvidos` |
+| `/contingencias` | `empresa`, `tribunal`, `instancia`, `fase` |
+| `/contingencias/revisao` | `origem`, `confianca=baixa\|alta`, `pagina`, `item` (selected valuation) |
+| `/contingencias/provisao` | `competencia=YYYY-MM` |
+| `/acordos` | `status`, `vencendo=1`, `pagina` |
+| `/relatorios` | `tipo`, `empresa`, `unidade`, `competencia` |
+| `/inteligencia-preventiva` | `empresa`, `tribunal` |
+| `/distribuicao` | `aba=regras\|carga` |
+| `/emails` | `modelo`, `destinatario`, `processo`, `pagina` |
+| `/emails/[id]` | — |
+| `/importacoes`, `/importacoes/nova`, `/importacoes/[id]` | `/importacoes/[id]`: `aba=resumo\|linhas\|inconsistencias\|divergencias`, `nivel`, `acao`, `planilha`, `pagina` |
+| `/busca` | `q` |
+
+`/dashboard` gains `empresa`. Money in URLs is in reais (integer); services take cents.
+Uploads that are not documents go through a route handler excluded from the proxy matcher
+(`/api/imports/upload` is already excluded in `src/proxy.ts`). `/brand/*` (public logo files) too.
+
+## Simulation labeling (mandatory UI rule)
+
+- Anything produced by the simulated case-brief provider shows `CASE_BRIEF_DEMO_NOTICE`
+  (`@/domain/case-brief`) and each item shows its provenance badge (`PROVENANCE_LABELS`):
+  Extraído (with document + page + quote), Cadastro/planilha, Ilustrativo, Lacuna.
+- Every simulated e-mail shows a banner "Envio simulado — nenhuma mensagem foi enviada" and its
+  subject starts with "[Simulação]".
+- Indicators computed from data must be visually separated from illustrative suggestions
+  (label "Calculado a partir da carteira" vs "Sugestão ilustrativa").
+- Demo documents carry "DOCUMENTO FICTÍCIO — GERADO PARA DEMONSTRAÇÃO" on every page.
+- Never present simulated or illustrative content as a fact of the case; never invent case law,
+  court movements, CNJ movement codes or tribunal integrations. Tribunal integrations (DataJud,
+  MNI, PJe) are shown as "não integrado nesta versão".
+
+## Demo data facts (spreadsheet `scripts/seed-data/files/Passivo_TESTE_Consolidado_DADOS_FICTICIOS.xlsx`)
+
+Fictitious data provided by the client for the demo. Sheets: "Dashboard" (summary — ignore),
+"Consolidado Geral" (1166 rows + header; a TOTAL row near row 1097, extra rows after it),
+"1º Grau" (TOTAL near 717), "2º Grau" (no Cidade column; TOTAL near 241), "3º Grau (TST)"
+(Instância values "3º Grau (TST)" and "TST"; TOTAL near 143), "Atualização Geral (29-07-2026)"
+(narrative log — ignore for rows). Columns: Instância, TRT/Tribunal, Nº do Processo, Parte Autora,
+Parte Ré, Cidade, Vara / Órgão Julgador / Turma, Classe, Fase, Valor da Causa (R$),
+Valor Liquidado/Apurado - 1º grau (R$). 208 CNJs repeat in Consolidado (up to 3 instances).
+Fase is a composite string (e.g. "Execução — ARQUIVADO def. …", "PAGO/EXTINTO — arquivado def.
+2026-06-25", "Conhecimento — Saiu do acervo … verificar", "Recurso decidido — baixou do 2º grau
+(à origem/TST)"). City variants ("Palmas - TO", "Palmas/TO", "Palmas"), non-city values
+("Cejusc Digital", "Secretaria de Cálculos Judiciais"). The client party is
+"EMPRESA MODELO TESTE LTDA (e outros)". Values diverge across sheets for some CNJs.
+Read it with `read-excel-file/node` (v9: default export returns `[{ sheet, data: rows[][] }]`).

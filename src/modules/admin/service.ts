@@ -23,7 +23,6 @@ import {
   auditLogs,
   contracts,
   deadlines,
-  DEFAULT_ORGANIZATION_SETTINGS,
   documents,
   legalProcesses,
   occurrences,
@@ -36,6 +35,7 @@ import {
   users,
   type OrganizationSettings,
 } from "@/server/db/schema";
+import { mergeOrganizationSettings } from "@/modules/analyses/org-settings";
 import { enqueueJob } from "@/server/jobs/queue";
 import { ensureDefaultRoutines } from "@/server/jobs/routines";
 import { processPendingJobs } from "@/server/jobs/worker";
@@ -976,14 +976,7 @@ export async function deleteUnit(ctx: AuthContext, id: string): Promise<{ outcom
 // Organization settings
 // ---------------------------------------------------------------------------
 
-function mergeSettings(raw: Partial<OrganizationSettings> | null | undefined): OrganizationSettings {
-  const d = DEFAULT_ORGANIZATION_SETTINGS;
-  return {
-    ai: { ...d.ai, ...(raw?.ai ?? {}) },
-    alerts: { ...d.alerts, ...(raw?.alerts ?? {}) },
-    retention: { ...d.retention, ...(raw?.retention ?? {}) },
-  };
-}
+const mergeSettings = mergeOrganizationSettings;
 
 function flattenSettings(name: string, s: OrganizationSettings) {
   return {
@@ -1039,6 +1032,7 @@ export async function updateOrganizationSettings(ctx: AuthContext, input: Organi
         autoAnalyzeOnUpload: data.autoAnalyzeOnUpload,
       },
       alerts: {
+        ...current.alerts,
         upcomingDeadlineDays: data.upcomingDeadlineDays,
         contractExpirationDays: data.contractExpirationDays,
       },
@@ -1046,6 +1040,9 @@ export async function updateOrganizationSettings(ctx: AuthContext, input: Organi
         closedRecordRetentionDays: data.closedRecordRetentionDays,
         auditLogRetentionDays: data.auditLogRetentionDays,
       },
+      contingency: current.contingency,
+      email: current.email,
+      intake: current.intake,
     };
     const changes = diffChanges(flattenSettings(org.name, current), flattenSettings(data.name, next));
     if (!changes) return;

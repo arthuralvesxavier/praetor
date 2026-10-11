@@ -19,6 +19,8 @@ import { logger } from "@/server/lib/logger";
 import { resolveStaleAlerts, upsertAlert } from "@/modules/alerts/service";
 import { listStaleAnalysesForRefresh, requestAnalysis } from "@/modules/analyses/service";
 import { loadOrganization } from "@/modules/analyses/org-settings";
+import { runMonthlySnapshotRoutine, runPortfolioAlertsRoutine } from "@/modules/contingency/routines";
+import { runHearingAlertsRoutine } from "@/modules/hearings/routines";
 import type { OrganizationSettings } from "@/server/db/schema";
 import { safeErrorMessage } from "./queue";
 
@@ -34,6 +36,9 @@ export const DEFAULT_ROUTINES: { type: RoutineType; intervalMinutes: number; con
   { type: "contract_expiration_alerts", intervalMinutes: 360, config: {} },
   { type: "stale_analysis_refresh", intervalMinutes: 1440, config: { autoRefresh: false, maxPerRun: 5 } },
   { type: "retention_review", intervalMinutes: 10080, config: {} },
+  { type: "hearing_alerts", intervalMinutes: 60, config: {} },
+  { type: "portfolio_alerts", intervalMinutes: 360, config: {} },
+  { type: "monthly_snapshot", intervalMinutes: 1440, config: {} },
 ];
 
 export async function ensureDefaultRoutines(organizationId: string, db: DbOrTx = getDb()): Promise<void> {
@@ -43,7 +48,7 @@ export async function ensureDefaultRoutines(organizationId: string, db: DbOrTx =
     .onConflictDoNothing({ target: [scheduledRoutines.organizationId, scheduledRoutines.type] });
 }
 
-type RoutineContext = {
+export type RoutineContext = {
   organizationId: string;
   isDemo: boolean;
   settings: OrganizationSettings;
@@ -88,6 +93,9 @@ const ROUTINES: Record<RoutineType, (rc: RoutineContext) => Promise<string>> = {
   contract_expiration_alerts: runContractExpirationAlerts,
   stale_analysis_refresh: runStaleAnalysisRefresh,
   retention_review: runRetentionReview,
+  hearing_alerts: runHearingAlertsRoutine,
+  portfolio_alerts: runPortfolioAlertsRoutine,
+  monthly_snapshot: runMonthlySnapshotRoutine,
 };
 
 function clipTitle(t: string, max = 140): string {

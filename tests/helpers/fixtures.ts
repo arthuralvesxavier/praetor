@@ -27,7 +27,7 @@ import type { ContractInput } from "@/modules/contracts/schemas";
 import { createDeadline, createTask, type DeadlineInput, type TaskInput } from "@/modules/work/service";
 import type { AuthContext } from "@/server/auth/context";
 import type { Database } from "@/server/db/client";
-import { organizations, units, users } from "@/server/db/schema";
+import { companies, lawFirms, organizations, units, users } from "@/server/db/schema";
 import { resetEnvCache } from "@/server/env";
 import { setAiProviderForTesting } from "@/server/integrations/ai";
 import { LocalStorageProvider, setStorageForTesting } from "@/server/integrations/storage";
@@ -48,6 +48,11 @@ export type FixtureUsers = {
   analystRe: AuthContext;
   /** Admin of organization B. */
   adminB: AuthContext;
+  /** v2 roles (organization A). */
+  accountant: AuthContext;
+  auditor: AuthContext;
+  /** External counsel of law firm A (`lawFirmA`). */
+  externalCounsel: AuthContext;
 };
 
 export type Fixture = {
@@ -58,6 +63,10 @@ export type Fixture = {
   unitSp: string;
   unitRe: string;
   unitB: string;
+  /** Company of organization A. */
+  companyA: string;
+  /** Law firm of organization A (the external counsel belongs to it). */
+  lawFirmA: string;
   ctx: FixtureUsers;
   teardown: () => Promise<void>;
 };
@@ -89,8 +98,9 @@ function userCtx(
   unitId: string | null,
   name: string,
   email: string,
+  lawFirmId: string | null = null,
 ): AuthContext {
-  return { kind: "user", userId, organizationId, role, unitId, name, email, isDemoOrganization: false };
+  return { kind: "user", userId, organizationId, role, unitId, lawFirmId, name, email, isDemoOrganization: false };
 }
 
 /** Call in `beforeAll`. Pair with `fixture.teardown()` in `afterAll`. */
@@ -110,13 +120,28 @@ export async function setupFixture(slugPrefix = "sec"): Promise<Fixture> {
   const [sp] = await db.insert(units).values({ organizationId: a.id, name: "São Paulo" }).returning();
   const [re] = await db.insert(units).values({ organizationId: a.id, name: "Recife" }).returning();
   const [ub] = await db.insert(units).values({ organizationId: b.id, name: "Matriz B" }).returning();
+  const [companyA] = await db
+    .insert(companies)
+    .values({ organizationId: a.id, name: "Empresa Fictícia A Ltda." })
+    .returning();
+  const [firmA] = await db
+    .insert(lawFirms)
+    .values({ organizationId: a.id, name: "Escritório Fictício A Advogados" })
+    .returning();
 
-  const mk = async (orgId: string, email: string, name: string, role: Role, unitId: string | null) => {
+  const mk = async (
+    orgId: string,
+    email: string,
+    name: string,
+    role: Role,
+    unitId: string | null,
+    lawFirmId: string | null = null,
+  ) => {
     const [u] = await db
       .insert(users)
-      .values({ organizationId: orgId, name, email: `${slugPrefix}.${email}`, passwordHash: "x", role, unitId })
+      .values({ organizationId: orgId, name, email: `${slugPrefix}.${email}`, passwordHash: "x", role, unitId, lawFirmId })
       .returning();
-    return userCtx(role, u.id, orgId, unitId, name, u.email);
+    return userCtx(role, u.id, orgId, unitId, name, u.email, lawFirmId);
   };
 
   const ctx: FixtureUsers = {
@@ -128,6 +153,9 @@ export async function setupFixture(slugPrefix = "sec"): Promise<Fixture> {
     lawyerRe: await mk(a.id, "adv.re@a.test", "Rafael Advogado RE", "lawyer", re.id),
     analystRe: await mk(a.id, "analista.re@a.test", "Rita Analista RE", "analyst", re.id),
     adminB: await mk(b.id, "admin@b.test", "Bruno Admin B", "admin", null),
+    accountant: await mk(a.id, "contabil@a.test", "Clara Contadora", "accountant", null),
+    auditor: await mk(a.id, "auditor@a.test", "Otávio Auditor", "auditor", null),
+    externalCounsel: await mk(a.id, "escritorio@a.test", "Eva Escritório Externo", "external_counsel", null, firmA.id),
   };
 
   return {
@@ -138,6 +166,8 @@ export async function setupFixture(slugPrefix = "sec"): Promise<Fixture> {
     unitSp: sp.id,
     unitRe: re.id,
     unitB: ub.id,
+    companyA: companyA.id,
+    lawFirmA: firmA.id,
     ctx,
     teardown: async () => {
       setStorageForTesting(undefined);

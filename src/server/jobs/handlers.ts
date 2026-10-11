@@ -5,6 +5,8 @@ import { getDb } from "@/server/db/client";
 import { documentVersions } from "@/server/db/schema";
 import { logger } from "@/server/lib/logger";
 import { onDocumentVersionTextReady, runAnalysisJob } from "@/modules/analyses/service";
+import { onDocumentTextReadyForBriefs, runCaseBriefJob } from "@/modules/briefs/service";
+import { processIntakeJob } from "@/modules/intake/service";
 import type { JobRow } from "./queue";
 import { runRoutine } from "./routines";
 
@@ -27,6 +29,8 @@ export class InvalidJobPayloadError extends Error {
 const analysisPayload = z.object({ analysisId: z.uuid(), notes: z.array(z.string()).optional() });
 const extractPayload = z.object({ versionId: z.uuid() });
 const routinePayload = z.object({ routineId: z.uuid() });
+const intakePayload = z.object({ intakeId: z.uuid() });
+const briefPayload = z.object({ briefId: z.uuid() });
 
 export const JOB_HANDLERS: Record<JobType, JobHandler> = {
   "analysis.run": async (job) => {
@@ -57,16 +61,26 @@ export const JOB_HANDLERS: Record<JobType, JobHandler> = {
       logger.error("extract_text_org_mismatch", { jobId: job.id, versionId: version.id });
       throw new InvalidJobPayloadError(job.type);
     }
-    await onDocumentVersionTextReady({
-      organizationId: version.organizationId,
-      documentId: version.documentId,
-      versionId: version.id,
-    });
+    const ready = { organizationId: version.organizationId, documentId: version.documentId, versionId: version.id };
+    await onDocumentVersionTextReady(ready);
+    await onDocumentTextReadyForBriefs(ready);
   },
 
   "routine.run": async (job) => {
     const p = routinePayload.safeParse(job.payload);
     if (!p.success) throw new InvalidJobPayloadError(job.type);
     await runRoutine(p.data.routineId);
+  },
+
+  "intake.process": async (job) => {
+    const p = intakePayload.safeParse(job.payload);
+    if (!p.success) throw new InvalidJobPayloadError(job.type);
+    await processIntakeJob(p.data.intakeId, { attempt: job.attempts, maxAttempts: job.maxAttempts });
+  },
+
+  "case_brief.generate": async (job) => {
+    const p = briefPayload.safeParse(job.payload);
+    if (!p.success) throw new InvalidJobPayloadError(job.type);
+    await runCaseBriefJob(p.data.briefId, { attempt: job.attempts, maxAttempts: job.maxAttempts });
   },
 };

@@ -34,6 +34,11 @@ const ROUTINE_DESCRIPTIONS: Record<RoutineType, string> = {
     "Identifica análises de IA desatualizadas (fontes alteradas). Pode solicitar novas análises automaticamente, se configurado.",
   retention_review:
     "Relata registros encerrados elegíveis para revisão de exclusão. Não exclui nada; registros com retenção legal (legal hold) não são considerados.",
+  hearing_alerts: "Gera alertas de audiências e sessões de julgamento próximas.",
+  portfolio_alerts:
+    "Gera alertas de parcelas de acordo a vencer, valores aguardando conferência, execução sem valor apurado, garantias paradas e processos marcados para verificação.",
+  monthly_snapshot:
+    "Atualiza a prévia do fechamento do mês corrente. Competências fechadas nunca são recalculadas.",
 };
 
 const usd = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });

@@ -25,6 +25,10 @@ export type OrganizationSettings = {
     upcomingDeadlineDays: number;
     /** A contract is "expiring" when it ends within this many days. */
     contractExpirationDays: number;
+    /** A hearing is "upcoming" when scheduled within this many days. */
+    upcomingHearingDays: number;
+    /** A settlement installment is "due" within this many days. */
+    installmentDueDays: number;
   };
   retention: {
     /** Days after closure before closed/archived records become eligible for deletion review. */
@@ -32,12 +36,52 @@ export type OrganizationSettings = {
     /** Days audit log entries are kept. */
     auditLogRetentionDays: number;
   };
+  /** Contingências (RN-04, RN-05, RN-11, RNF-14). */
+  contingency: {
+    /** Percentual (0–100) aplicado sobre a base de provisão por classificação de risco. */
+    riskPercentages: { remote: number; possible: number; probable: number };
+    /** Confiança mínima (0–100) de uma extração automática para conferência em lote; abaixo dela a conferência é individual. */
+    confidenceThreshold: number;
+    /** Garantia vinculada sem alteração há mais de N dias gera alerta de "depósito parado". */
+    idleGuaranteeDays: number;
+    /** Incrementado a cada mudança de percentual; gravado em cada classificação e fechamento. */
+    rulesVersion: number;
+  };
+  /** E-mail. Nesta etapa o único modo disponível é `simulated` (nada é enviado). */
+  email: {
+    mode: "simulated";
+    senderName: string;
+    /** Endereço fictício exibido nas simulações. */
+    senderAddress: string;
+    notifyOnBriefReady: boolean;
+    notifyOnAssignment: boolean;
+  };
+  /** Pipeline de entrada de processos. */
+  intake: {
+    autoAssign: boolean;
+    autoGenerateBrief: boolean;
+    autoNotify: boolean;
+  };
 };
 
 export const DEFAULT_ORGANIZATION_SETTINGS: OrganizationSettings = {
   ai: { monthlyTokenBudget: 2_000_000, maxInputChars: 120_000, autoAnalyzeOnUpload: true },
-  alerts: { upcomingDeadlineDays: 7, contractExpirationDays: 60 },
+  alerts: { upcomingDeadlineDays: 7, contractExpirationDays: 60, upcomingHearingDays: 10, installmentDueDays: 10 },
   retention: { closedRecordRetentionDays: 1825, auditLogRetentionDays: 1825 },
+  contingency: {
+    riskPercentages: { remote: 0, possible: 50, probable: 100 },
+    confidenceThreshold: 85,
+    idleGuaranteeDays: 180,
+    rulesVersion: 1,
+  },
+  email: {
+    mode: "simulated",
+    senderName: "Praetor (simulação)",
+    senderAddress: "nao-responda@praetor.invalid",
+    notifyOnBriefReady: true,
+    notifyOnAssignment: true,
+  },
+  intake: { autoAssign: true, autoGenerateBrief: true, autoNotify: true },
 };
 
 export const organizations = pgTable("organizations", {
@@ -65,6 +109,42 @@ export const units = pgTable(
   (t) => [uniqueIndex("units_org_name_uq").on(t.organizationId, t.name)],
 );
 
+/**
+ * Empresas (pessoas jurídicas) do grupo atendidas pelo jurídico (RNF-13).
+ * Processos, relatórios e indicadores podem ser filtrados por empresa.
+ */
+export const companies = pgTable(
+  "companies",
+  {
+    id: id(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    name: text("name").notNull(),
+    /** CNPJ (opcional). */
+    document: text("document"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("companies_org_name_uq").on(t.organizationId, t.name)],
+);
+
+/** Escritórios externos (RF-20, RF-21). Usuários `external_counsel` pertencem a um escritório. */
+export const lawFirms = pgTable(
+  "law_firms",
+  {
+    id: id(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    name: text("name").notNull(),
+    document: text("document"),
+    contactName: text("contact_name"),
+    contactEmail: text("contact_email"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("law_firms_org_name_uq").on(t.organizationId, t.name)],
+);
+
 export const users = pgTable(
   "users",
   {
@@ -77,6 +157,8 @@ export const users = pgTable(
     role: text("role").$type<Role>().notNull(),
     /** Primary unit. Lawyers and analysts only see records of their unit (see src/server/auth/access.ts). */
     unitId: uuid("unit_id").references(() => units.id),
+    /** Required for `external_counsel`: they only see processes assigned to this law firm. */
+    lawFirmId: uuid("law_firm_id").references(() => lawFirms.id),
     jobTitle: text("job_title"),
     isActive: boolean("is_active").notNull().default(true),
     lastLoginAt: ts("last_login_at"),

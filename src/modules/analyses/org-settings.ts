@@ -9,10 +9,18 @@ import { NotFoundError } from "@/server/lib/errors";
  */
 export function mergeOrganizationSettings(raw: Partial<OrganizationSettings> | null | undefined): OrganizationSettings {
   const d = DEFAULT_ORGANIZATION_SETTINGS;
+  const contingency = { ...d.contingency, ...(raw?.contingency ?? {}) };
   return {
     ai: { ...d.ai, ...(raw?.ai ?? {}) },
     alerts: { ...d.alerts, ...(raw?.alerts ?? {}) },
     retention: { ...d.retention, ...(raw?.retention ?? {}) },
+    contingency: {
+      ...contingency,
+      riskPercentages: { ...d.contingency.riskPercentages, ...(raw?.contingency?.riskPercentages ?? {}) },
+    },
+    // Only the simulated mode exists in this version, whatever an older row says.
+    email: { ...d.email, ...(raw?.email ?? {}), mode: "simulated" },
+    intake: { ...d.intake, ...(raw?.intake ?? {}) },
   };
 }
 

@@ -18,14 +18,36 @@ function labels<const T extends readonly string[]>(
 // Users & access
 // ---------------------------------------------------------------------------
 
-export const ROLES = ["admin", "legal_manager", "lawyer", "analyst", "executive"] as const;
+export const ROLES = [
+  "admin",
+  "legal_manager",
+  "lawyer",
+  "analyst",
+  "executive",
+  "accountant",
+  "auditor",
+  "external_counsel",
+] as const;
 export type Role = (typeof ROLES)[number];
 export const ROLE_LABELS = labels(ROLES, {
   admin: "Administrador",
   legal_manager: "Gestor jurídico",
   lawyer: "Advogado",
   analyst: "Analista",
-  executive: "Executivo",
+  executive: "Diretoria / executivo",
+  accountant: "Contabilidade / controladoria",
+  auditor: "Auditoria e compliance",
+  external_counsel: "Escritório externo",
+});
+export const ROLE_DESCRIPTIONS = labels(ROLES, {
+  admin: "Acesso total, inclusive usuários, parâmetros e integrações.",
+  legal_manager: "Gestão do jurídico: vê toda a carteira (inclusive sigilosos), aprova valores e distribui demandas.",
+  lawyer: "Jurídico interno: carteira da sua unidade e os casos sob sua responsabilidade.",
+  analyst: "Apoio jurídico: cadastra entradas, documentos, prazos e tarefas da sua unidade.",
+  executive: "Diretoria: consulta painéis e relatórios da carteira não sigilosa, sem editar.",
+  accountant: "Contabilidade: valores, garantias, risco, provisão e fechamento mensal (sem peças sigilosas).",
+  auditor: "Auditoria: leitura da carteira não sigilosa, relatórios e trilha de auditoria.",
+  external_counsel: "Escritório externo: somente os processos atribuídos ao seu escritório.",
 });
 
 // ---------------------------------------------------------------------------
@@ -86,6 +108,19 @@ export const ENTITY_TYPES = [
   "team",
   "unit",
   "organization",
+  "company",
+  "law_firm",
+  "hearing",
+  "settlement",
+  "valuation",
+  "guarantee",
+  "risk_assessment",
+  "case_brief",
+  "intake",
+  "email",
+  "import_batch",
+  "snapshot",
+  "distribution_rule",
 ] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 export const ENTITY_TYPE_LABELS = labels(ENTITY_TYPES, {
@@ -100,6 +135,19 @@ export const ENTITY_TYPE_LABELS = labels(ENTITY_TYPES, {
   team: "Equipe",
   unit: "Unidade",
   organization: "Organização",
+  company: "Empresa",
+  law_firm: "Escritório externo",
+  hearing: "Audiência",
+  settlement: "Acordo",
+  valuation: "Valoração",
+  guarantee: "Garantia",
+  risk_assessment: "Classificação de risco",
+  case_brief: "Análise preliminar",
+  intake: "Entrada de processo",
+  email: "E-mail (simulado)",
+  import_batch: "Importação de planilha",
+  snapshot: "Fechamento mensal",
+  distribution_rule: "Regra de distribuição",
 });
 
 // ---------------------------------------------------------------------------
@@ -136,6 +184,7 @@ export const PROCESS_PHASES = [
   "pre_filing",
   "knowledge",
   "appeal",
+  "liquidation",
   "enforcement",
   "settlement",
   "closed",
@@ -145,9 +194,40 @@ export const PROCESS_PHASE_LABELS = labels(PROCESS_PHASES, {
   pre_filing: "Pré-ajuizamento",
   knowledge: "Conhecimento",
   appeal: "Recursal",
+  liquidation: "Liquidação",
   enforcement: "Execução / cumprimento",
   settlement: "Acordo em andamento",
   closed: "Encerrado",
+});
+
+/** Grau / instância em que o processo (ou um vínculo de instância) tramita. */
+export const PROCESS_INSTANCES = ["first", "second", "superior"] as const;
+export type ProcessInstance = (typeof PROCESS_INSTANCES)[number];
+export const PROCESS_INSTANCE_LABELS = labels(PROCESS_INSTANCES, {
+  first: "1º grau",
+  second: "2º grau",
+  superior: "Tribunal superior (3º grau)",
+});
+
+/** Motivo de saída da carteira ativa (RF-06 / RN-12). */
+export const CLOSURE_REASONS = [
+  "paid_extinct",
+  "settlement_fulfilled",
+  "dismissed",
+  "archived",
+  "returned_to_origin",
+  "lost_patronage",
+  "other",
+] as const;
+export type ClosureReason = (typeof CLOSURE_REASONS)[number];
+export const CLOSURE_REASON_LABELS = labels(CLOSURE_REASONS, {
+  paid_extinct: "Pago / extinto pela satisfação",
+  settlement_fulfilled: "Acordo cumprido",
+  dismissed: "Improcedente / extinto sem ônus",
+  archived: "Arquivado definitivamente",
+  returned_to_origin: "Baixado à origem",
+  lost_patronage: "Saída do acervo / perda do patrocínio",
+  other: "Outro motivo",
 });
 
 export const PROCESS_STATUSES = ["active", "suspended", "archived", "closed"] as const;
@@ -159,13 +239,23 @@ export const PROCESS_STATUS_LABELS = labels(PROCESS_STATUSES, {
   closed: "Encerrado",
 });
 
-export const PARTY_ROLES = ["plaintiff", "defendant", "third_party", "other"] as const;
+export const PARTY_ROLES = ["plaintiff", "defendant", "third_party", "public_prosecutor", "other"] as const;
 export type PartyRole = (typeof PARTY_ROLES)[number];
 export const PARTY_ROLE_LABELS = labels(PARTY_ROLES, {
   plaintiff: "Polo ativo",
   defendant: "Polo passivo",
   third_party: "Terceiro interessado",
+  public_prosecutor: "Ministério Público",
   other: "Outro",
+});
+
+/** Natureza da responsabilidade da parte ré (análise jurídica, opcional). */
+export const LIABILITY_NATURES = ["direct", "joint", "subsidiary"] as const;
+export type LiabilityNature = (typeof LIABILITY_NATURES)[number];
+export const LIABILITY_NATURE_LABELS = labels(LIABILITY_NATURES, {
+  direct: "Direta",
+  joint: "Solidária",
+  subsidiary: "Subsidiária",
 });
 
 export const PROCESS_EVENT_TYPES = [
@@ -303,6 +393,16 @@ export const DOCUMENT_CATEGORIES = [
   "report",
   "internal",
   "other",
+  "initial_petition",
+  "defense",
+  "calculation",
+  "judgment",
+  "appellate_decision",
+  "hearing_minutes",
+  "release_order",
+  "settlement_term",
+  "power_of_attorney",
+  "sensitive_health",
 ] as const;
 export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number];
 export const DOCUMENT_CATEGORY_LABELS = labels(DOCUMENT_CATEGORIES, {
@@ -315,6 +415,16 @@ export const DOCUMENT_CATEGORY_LABELS = labels(DOCUMENT_CATEGORIES, {
   report: "Relatório / parecer",
   internal: "Documento interno",
   other: "Outro",
+  initial_petition: "Petição inicial",
+  defense: "Contestação / defesa",
+  calculation: "Planilha de cálculos",
+  judgment: "Sentença",
+  appellate_decision: "Acórdão",
+  hearing_minutes: "Ata de audiência",
+  release_order: "Alvará",
+  settlement_term: "Termo de acordo",
+  power_of_attorney: "Procuração / substabelecimento",
+  sensitive_health: "Atestado, laudo ou CAT (dado sensível)",
 });
 
 export const CONFIDENTIALITY_LEVELS = ["internal", "confidential", "restricted"] as const;
@@ -462,6 +572,15 @@ export const ALERT_TYPES = [
   "risk_signal",
   "analysis_stale",
   "analysis_failed",
+  "hearing_upcoming",
+  "settlement_installment_due",
+  "valuation_pending_review",
+  "enforcement_without_value",
+  "guarantee_idle",
+  "process_needs_verification",
+  "brief_pending_review",
+  "intake_unassigned",
+  "new_process_received",
 ] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 export const ALERT_TYPE_LABELS = labels(ALERT_TYPES, {
@@ -473,6 +592,15 @@ export const ALERT_TYPE_LABELS = labels(ALERT_TYPES, {
   risk_signal: "Sinal de risco",
   analysis_stale: "Análise desatualizada",
   analysis_failed: "Falha em análise",
+  hearing_upcoming: "Audiência próxima",
+  settlement_installment_due: "Parcela de acordo a vencer",
+  valuation_pending_review: "Valor aguardando conferência",
+  enforcement_without_value: "Execução sem valor apurado",
+  guarantee_idle: "Depósito / garantia parada",
+  process_needs_verification: "Processo marcado para verificação",
+  brief_pending_review: "Análise preliminar aguardando revisão",
+  intake_unassigned: "Entrada sem responsável",
+  new_process_received: "Novo processo recebido",
 });
 
 export const ALERT_SEVERITIES = ["info", "warning", "critical"] as const;
@@ -490,6 +618,8 @@ export const JOB_TYPES = [
   "analysis.run",
   "document.extract_text",
   "routine.run",
+  "intake.process",
+  "case_brief.generate",
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
@@ -498,6 +628,9 @@ export const ROUTINE_TYPES = [
   "contract_expiration_alerts",
   "stale_analysis_refresh",
   "retention_review",
+  "hearing_alerts",
+  "portfolio_alerts",
+  "monthly_snapshot",
 ] as const;
 export type RoutineType = (typeof ROUTINE_TYPES)[number];
 export const ROUTINE_TYPE_LABELS = labels(ROUTINE_TYPES, {
@@ -505,4 +638,273 @@ export const ROUTINE_TYPE_LABELS = labels(ROUTINE_TYPES, {
   contract_expiration_alerts: "Alertas de vigência contratual",
   stale_analysis_refresh: "Reanálise de análises desatualizadas",
   retention_review: "Revisão de retenção de dados",
+  hearing_alerts: "Alertas de audiências",
+  portfolio_alerts: "Pendências da carteira (acordos, valores, garantias, verificações)",
+  monthly_snapshot: "Fechamento mensal da carteira (prévia)",
+});
+
+// ---------------------------------------------------------------------------
+// Contingências: valoração, garantias, risco, acordos, fechamento mensal
+// ---------------------------------------------------------------------------
+
+/**
+ * Tipos de valoração (RF-07/RF-09). Valores de tipos diferentes NUNCA se somam
+ * (RN-02): valor da causa é exposição declarada; liquidado é dívida apurada.
+ */
+export const VALUATION_KINDS = ["claim", "liquidated", "settlement", "deposit", "paid", "fees", "estimate"] as const;
+export type ValuationKind = (typeof VALUATION_KINDS)[number];
+export const VALUATION_KIND_LABELS = labels(VALUATION_KINDS, {
+  claim: "Valor da causa",
+  liquidated: "Valor liquidado / apurado",
+  settlement: "Valor de acordo",
+  deposit: "Depósito",
+  paid: "Valor pago",
+  fees: "Honorários",
+  estimate: "Estimativa (não oficial)",
+});
+
+/**
+ * Valores importados, extraídos de documento ou sugeridos ficam `proposed` até
+ * conferência humana identificada (RN-11); `official` exige `reviewedById`.
+ * Valores nunca são sobrescritos: nova apuração = novo registro (RF-09).
+ */
+export const VALUATION_STATUSES = ["proposed", "official", "rejected", "superseded"] as const;
+export type ValuationStatus = (typeof VALUATION_STATUSES)[number];
+export const VALUATION_STATUS_LABELS = labels(VALUATION_STATUSES, {
+  proposed: "Proposto — aguardando conferência",
+  official: "Oficial",
+  rejected: "Rejeitado",
+  superseded: "Substituído por valor mais recente",
+});
+
+/** Where a valuation came from. Used for source prevalence (RN-08): document > official system > manual. */
+export const VALUATION_SOURCES = ["document", "official_system", "spreadsheet", "manual", "simulation"] as const;
+export type ValuationSource = (typeof VALUATION_SOURCES)[number];
+export const VALUATION_SOURCE_LABELS = labels(VALUATION_SOURCES, {
+  document: "Peça dos autos",
+  official_system: "Sistema oficial do tribunal",
+  spreadsheet: "Planilha importada",
+  manual: "Lançamento manual",
+  simulation: "Extração simulada (demonstração)",
+});
+
+export const GUARANTEE_KINDS = [
+  "judicial_deposit",
+  "appeal_deposit",
+  "seizure",
+  "surety_insurance",
+  "bank_guarantee",
+  "other",
+] as const;
+export type GuaranteeKind = (typeof GUARANTEE_KINDS)[number];
+export const GUARANTEE_KIND_LABELS = labels(GUARANTEE_KINDS, {
+  judicial_deposit: "Depósito judicial",
+  appeal_deposit: "Depósito recursal",
+  seizure: "Penhora / bloqueio",
+  surety_insurance: "Seguro garantia",
+  bank_guarantee: "Carta de fiança",
+  other: "Outra garantia",
+});
+
+/** Only `linked` guarantees reduce the net exposure (RN-04). */
+export const GUARANTEE_STATUSES = ["linked", "released_to_plaintiff", "returned_to_company"] as const;
+export type GuaranteeStatus = (typeof GUARANTEE_STATUSES)[number];
+export const GUARANTEE_STATUS_LABELS = labels(GUARANTEE_STATUSES, {
+  linked: "Vinculada ao processo",
+  released_to_plaintiff: "Liberada ao autor",
+  returned_to_company: "Devolvida à empresa",
+});
+
+export const SETTLEMENT_STATUSES = [
+  "proposal",
+  "negotiating",
+  "signed",
+  "homologated",
+  "fulfilled",
+  "breached",
+  "cancelled",
+] as const;
+export type SettlementStatus = (typeof SETTLEMENT_STATUSES)[number];
+export const SETTLEMENT_STATUS_LABELS = labels(SETTLEMENT_STATUSES, {
+  proposal: "Proposta",
+  negotiating: "Em negociação",
+  signed: "Firmado",
+  homologated: "Homologado",
+  fulfilled: "Cumprido",
+  breached: "Descumprido",
+  cancelled: "Recusado / cancelado",
+});
+
+export const INSTALLMENT_STATUSES = ["pending", "paid", "cancelled"] as const;
+export type InstallmentStatus = (typeof INSTALLMENT_STATUSES)[number];
+export const INSTALLMENT_STATUS_LABELS = labels(INSTALLMENT_STATUSES, {
+  pending: "A pagar",
+  paid: "Paga",
+  cancelled: "Cancelada",
+});
+
+export const SNAPSHOT_STATUSES = ["preview", "closed"] as const;
+export type SnapshotStatus = (typeof SNAPSHOT_STATUSES)[number];
+export const SNAPSHOT_STATUS_LABELS = labels(SNAPSHOT_STATUSES, {
+  preview: "Prévia (recalculável)",
+  closed: "Competência fechada (imutável)",
+});
+
+// ---------------------------------------------------------------------------
+// Audiências
+// ---------------------------------------------------------------------------
+
+export const HEARING_KINDS = ["initial", "conciliation", "instruction", "unified", "judgment_session", "other"] as const;
+export type HearingKind = (typeof HEARING_KINDS)[number];
+export const HEARING_KIND_LABELS = labels(HEARING_KINDS, {
+  initial: "Audiência inicial",
+  conciliation: "Conciliação",
+  instruction: "Instrução",
+  unified: "Audiência una",
+  judgment_session: "Sessão de julgamento / pauta",
+  other: "Outra",
+});
+
+export const HEARING_MODES = ["in_person", "virtual", "hybrid"] as const;
+export type HearingMode = (typeof HEARING_MODES)[number];
+export const HEARING_MODE_LABELS = labels(HEARING_MODES, {
+  in_person: "Presencial",
+  virtual: "Telepresencial",
+  hybrid: "Híbrida",
+});
+
+export const HEARING_STATUSES = ["scheduled", "held", "rescheduled", "cancelled"] as const;
+export type HearingStatus = (typeof HEARING_STATUSES)[number];
+export const HEARING_STATUS_LABELS = labels(HEARING_STATUSES, {
+  scheduled: "Designada",
+  held: "Realizada",
+  rescheduled: "Redesignada",
+  cancelled: "Cancelada",
+});
+
+// ---------------------------------------------------------------------------
+// Entrada de processos, distribuição e análise preliminar
+// ---------------------------------------------------------------------------
+
+export const INTAKE_SOURCES = ["manual", "import", "simulated_feed"] as const;
+export type IntakeSource = (typeof INTAKE_SOURCES)[number];
+export const INTAKE_SOURCE_LABELS = labels(INTAKE_SOURCES, {
+  manual: "Cadastro manual",
+  import: "Importação de planilha",
+  simulated_feed: "Chegada simulada (demonstração)",
+});
+
+export const INTAKE_STATUSES = [
+  "received",
+  "assigned",
+  "analyzing",
+  "brief_ready",
+  "notified",
+  "in_review",
+  "approved",
+  "failed",
+  "cancelled",
+] as const;
+export type IntakeStatus = (typeof INTAKE_STATUSES)[number];
+export const INTAKE_STATUS_LABELS = labels(INTAKE_STATUSES, {
+  received: "Recebido",
+  assigned: "Responsável definido",
+  analyzing: "Lendo documentos (simulação)",
+  brief_ready: "Análise preliminar pronta",
+  notified: "Advogado notificado (e-mail simulado)",
+  in_review: "Em revisão pelo advogado",
+  approved: "Análise aprovada",
+  failed: "Falha no processamento",
+  cancelled: "Cancelado",
+});
+
+export const ASSIGNMENT_METHODS = ["rule", "least_loaded", "round_robin", "manual", "kept"] as const;
+export type AssignmentMethod = (typeof ASSIGNMENT_METHODS)[number];
+export const ASSIGNMENT_METHOD_LABELS = labels(ASSIGNMENT_METHODS, {
+  rule: "Regra de distribuição",
+  least_loaded: "Menor carga de trabalho",
+  round_robin: "Rodízio da equipe",
+  manual: "Atribuição manual",
+  kept: "Responsável já cadastrado",
+});
+
+export const CASE_BRIEF_STATUSES = ["generating", "ready_for_review", "in_review", "approved", "rejected", "failed"] as const;
+export type CaseBriefStatus = (typeof CASE_BRIEF_STATUSES)[number];
+export const CASE_BRIEF_STATUS_LABELS = labels(CASE_BRIEF_STATUSES, {
+  generating: "Em processamento",
+  ready_for_review: "Pronta para revisão",
+  in_review: "Em revisão (editada)",
+  approved: "Aprovada pelo advogado",
+  rejected: "Rejeitada",
+  failed: "Falhou",
+});
+
+// ---------------------------------------------------------------------------
+// E-mail (simulado nesta etapa)
+// ---------------------------------------------------------------------------
+
+/** `simulated`: rendered and stored, never delivered. `live` is reserved for a future real provider. */
+export const EMAIL_MODES = ["simulated", "live"] as const;
+export type EmailMode = (typeof EMAIL_MODES)[number];
+export const EMAIL_MODE_LABELS = labels(EMAIL_MODES, {
+  simulated: "Envio simulado — nenhuma mensagem real é enviada",
+  live: "Envio real",
+});
+
+export const EMAIL_TEMPLATES = [
+  "case_brief_ready",
+  "intake_assigned",
+  "deadline_reminder",
+  "hearing_reminder",
+  "daily_digest",
+  "brief_approved",
+] as const;
+export type EmailTemplate = (typeof EMAIL_TEMPLATES)[number];
+export const EMAIL_TEMPLATE_LABELS = labels(EMAIL_TEMPLATES, {
+  case_brief_ready: "Análise preliminar disponível",
+  intake_assigned: "Novo processo atribuído",
+  deadline_reminder: "Lembrete de prazo",
+  hearing_reminder: "Lembrete de audiência",
+  daily_digest: "Resumo diário de pendências",
+  brief_approved: "Análise preliminar aprovada",
+});
+
+export const EMAIL_STATUSES = ["simulated", "failed", "cancelled"] as const;
+export type EmailStatus = (typeof EMAIL_STATUSES)[number];
+export const EMAIL_STATUS_LABELS = labels(EMAIL_STATUSES, {
+  simulated: "Envio simulado registrado",
+  failed: "Falha ao gerar",
+  cancelled: "Cancelado",
+});
+
+// ---------------------------------------------------------------------------
+// Importação de planilhas
+// ---------------------------------------------------------------------------
+
+export const IMPORT_BATCH_STATUSES = ["analyzed", "committed", "rolled_back", "failed"] as const;
+export type ImportBatchStatus = (typeof IMPORT_BATCH_STATUSES)[number];
+export const IMPORT_BATCH_STATUS_LABELS = labels(IMPORT_BATCH_STATUSES, {
+  analyzed: "Analisada — aguardando confirmação",
+  committed: "Importada",
+  rolled_back: "Desfeita",
+  failed: "Falhou",
+});
+
+export const IMPORT_ROW_ACTIONS = ["create", "update", "unchanged", "merge_instance", "skip", "error"] as const;
+export type ImportRowAction = (typeof IMPORT_ROW_ACTIONS)[number];
+export const IMPORT_ROW_ACTION_LABELS = labels(IMPORT_ROW_ACTIONS, {
+  create: "Novo processo",
+  update: "Atualiza processo existente",
+  unchanged: "Sem alterações",
+  merge_instance: "Vínculo de instância (mesmo CNJ)",
+  skip: "Ignorada",
+  error: "Com erro — não importada",
+});
+
+export const ISSUE_LEVELS = ["error", "warning", "info"] as const;
+export type IssueLevel = (typeof ISSUE_LEVELS)[number];
+export const ISSUE_LEVEL_LABELS = labels(ISSUE_LEVELS, {
+  error: "Erro",
+  warning: "Alerta",
+  info: "Informação",
 });

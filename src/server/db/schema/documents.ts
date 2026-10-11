@@ -1,4 +1,4 @@
-import { boolean, date, index, integer, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type { ConfidentialityLevel, DocumentCategory, TextExtractionStatus } from "@/domain/enums";
 import { createdAt, deletedAt, id, ts, updatedAt } from "./_columns";
 import { organizations, users } from "./core";
@@ -66,6 +66,13 @@ export const documentVersions = pgTable(
      */
     extractedText: text("extracted_text"),
     extractedAt: ts("extracted_at"),
+    /** Number of pages (PDF) when known. */
+    pageCount: integer("page_count"),
+    /**
+     * Character offset in `extractedText` where each page starts (index 0 = page 1).
+     * Lets analyses cite "página N" for a quoted excerpt. Null for non-paged formats.
+     */
+    pageOffsets: jsonb("page_offsets").$type<number[]>(),
     changeNote: text("change_note"),
     uploadedById: uuid("uploaded_by_id").references(() => users.id),
     createdAt: createdAt(),

@@ -26,6 +26,9 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Upload routes are excluded so the proxy never buffers/truncates request bodies.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|api/documents/upload).*)"],
+  // Upload routes are excluded so the proxy never buffers/truncates request bodies;
+  // /brand/* are public static logo files (used by the public landing page).
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|brand/|api/documents/upload|api/imports/upload).*)",
+  ],
 };

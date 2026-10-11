@@ -5,7 +5,7 @@ import { ALERT_SEVERITIES, ALERT_TYPES, ENTITY_TYPES } from "@/domain/enums";
 import { entityHref, type EntityRef } from "@/domain/entities";
 import type { AuthContext } from "@/server/auth/context";
 import { entityReferenceWhere } from "@/server/auth/access";
-import { assertCan } from "@/server/auth/permissions";
+import { assertCan, can } from "@/server/auth/permissions";
 import { getDb, type DbOrTx } from "@/server/db/client";
 import { alerts } from "@/server/db/schema";
 import { recordAudit } from "@/server/services/audit";
@@ -188,4 +188,23 @@ export async function resolveStaleAlerts(
     )
     .returning({ id: alerts.id });
   return rows.length;
+}
+
+/** Open alerts visible to ctx (header bell). */
+export async function countOpenAlerts(ctx: AuthContext): Promise<{ total: number; critical: number }> {
+  if (!can(ctx, "dashboard:read")) return { total: 0, critical: 0 };
+  const [row] = await getDb()
+    .select({
+      total: sql<number>`count(*)::int`,
+      critical: sql<number>`count(*) filter (where ${alerts.severity} = 'critical')::int`,
+    })
+    .from(alerts)
+    .where(
+      and(
+        eq(alerts.organizationId, ctx.organizationId),
+        isNull(alerts.resolvedAt),
+        entityReferenceWhere(ctx, alerts.entityType, alerts.entityId),
+      ),
+    );
+  return { total: row?.total ?? 0, critical: row?.critical ?? 0 };
 }

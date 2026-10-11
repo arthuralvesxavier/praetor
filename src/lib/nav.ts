@@ -1,9 +1,20 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  BellRing,
   CalendarClock,
+  ChartColumn,
+  FileSearch,
   FileSignature,
+  FileSpreadsheet,
   FileText,
+  Gavel,
+  Handshake,
+  Inbox,
+  Landmark,
   LayoutDashboard,
+  Lightbulb,
+  Mail,
+  Route,
   Scale,
   Settings,
   ShieldCheck,
@@ -20,22 +31,76 @@ export type NavItem = {
   permissions: readonly Permission[];
 };
 
-/** Main navigation (sidebar). Filter with `can(ctx, perm)` before rendering — hiding is not authorization. */
-export const NAV_ITEMS: readonly NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, permissions: ["dashboard:read"] },
-  { href: "/processos", label: "Processos", icon: Scale, permissions: ["process:read"] },
-  { href: "/preventivo", label: "Jurídico preventivo", icon: ShieldCheck, permissions: ["occurrence:read"] },
-  { href: "/contratos", label: "Contratos", icon: FileSignature, permissions: ["contract:read"] },
-  { href: "/documentos", label: "Documentos", icon: FileText, permissions: ["document:read"] },
-  { href: "/prazos", label: "Prazos e tarefas", icon: CalendarClock, permissions: ["deadline:read"] },
-  { href: "/ia", label: "Central de IA", icon: Sparkles, permissions: ["analysis:read"] },
+export type NavGroup = {
+  /** Section title in the sidebar; null = no title. */
+  label: string | null;
+  items: readonly NavItem[];
+};
+
+/**
+ * Main navigation (sidebar), grouped by area. Filter each item with
+ * `can(ctx, perm)` before rendering — hiding is not authorization (every page
+ * calls requirePageContext). Empty groups are not rendered.
+ */
+export const NAV_GROUPS: readonly NavGroup[] = [
   {
-    href: "/admin",
-    label: "Administração",
-    icon: Settings,
-    permissions: ["admin:users", "admin:organization", "audit:read"],
+    label: null,
+    items: [
+      { href: "/dashboard", label: "Painel executivo", icon: LayoutDashboard, permissions: ["dashboard:read"] },
+      { href: "/alertas", label: "Alertas e pendências", icon: BellRing, permissions: ["dashboard:read"] },
+    ],
+  },
+  {
+    label: "Contencioso",
+    items: [
+      { href: "/processos", label: "Carteira de processos", icon: Scale, permissions: ["process:read"] },
+      { href: "/entrada", label: "Entrada de processos", icon: Inbox, permissions: ["intake:manage", "distribution:manage"] },
+      { href: "/analises-preliminares", label: "Análises preliminares", icon: FileSearch, permissions: ["brief:read"] },
+      { href: "/audiencias", label: "Audiências", icon: Gavel, permissions: ["process:read"] },
+      { href: "/prazos", label: "Prazos e tarefas", icon: CalendarClock, permissions: ["deadline:read", "task:read"] },
+    ],
+  },
+  {
+    label: "Contingências",
+    items: [
+      { href: "/contingencias", label: "Valores e provisão", icon: Landmark, permissions: ["contingency:read"] },
+      { href: "/acordos", label: "Acordos", icon: Handshake, permissions: ["contingency:read"] },
+      { href: "/relatorios", label: "Relatórios", icon: ChartColumn, permissions: ["report:read"] },
+    ],
+  },
+  {
+    label: "Preventivo e contratos",
+    items: [
+      { href: "/preventivo", label: "Ocorrências preventivas", icon: ShieldCheck, permissions: ["occurrence:read"] },
+      {
+        href: "/inteligencia-preventiva",
+        label: "Inteligência preventiva",
+        icon: Lightbulb,
+        permissions: ["preventive_intel:read"],
+      },
+      { href: "/contratos", label: "Contratos", icon: FileSignature, permissions: ["contract:read"] },
+      { href: "/documentos", label: "Documentos", icon: FileText, permissions: ["document:read"] },
+    ],
+  },
+  {
+    label: "Operação",
+    items: [
+      { href: "/distribuicao", label: "Distribuição", icon: Route, permissions: ["distribution:manage"] },
+      { href: "/emails", label: "Central de e-mails", icon: Mail, permissions: ["email:read"] },
+      { href: "/importacoes", label: "Importação de planilhas", icon: FileSpreadsheet, permissions: ["import:run"] },
+      { href: "/ia", label: "Central de IA", icon: Sparkles, permissions: ["analysis:read"] },
+      {
+        href: "/admin",
+        label: "Administração",
+        icon: Settings,
+        permissions: ["admin:users", "admin:organization", "audit:read"],
+      },
+    ],
   },
 ];
+
+/** Flat list (kept for callers that do not render groups). */
+export const NAV_ITEMS: readonly NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 /** True when `pathname` is `href` or one of its sub-routes. */
 export function isNavActive(pathname: string, href: string): boolean {

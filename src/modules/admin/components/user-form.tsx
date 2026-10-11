@@ -6,19 +6,11 @@ import { FormField } from "@/components/ui/form-field";
 import { FormMessage } from "@/components/ui/form-message";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
-import { ROLE_LABELS, type Role } from "@/domain/enums";
+import { ROLE_DESCRIPTIONS, ROLE_LABELS, type Role } from "@/domain/enums";
 import { fieldError, type FormState } from "@/lib/form";
 import type { Option } from "@/lib/options";
 import { optionsFromLabels } from "@/lib/options";
 import { PendingButton, useAdminForm, type FormAction } from "./form-utils";
-
-const ROLE_DESCRIPTIONS: Record<Role, string> = {
-  admin: "Acesso total, inclusive usuários, configurações e auditoria.",
-  legal_manager: "Vê todos os registros (inclusive confidenciais), valida prazos e consulta auditoria.",
-  lawyer: "Cadastra e edita registros da sua unidade e daqueles em que é responsável.",
-  analyst: "Apoia o cadastro de ocorrências, contratos, documentos, prazos e tarefas da sua unidade.",
-  executive: "Somente consulta registros não confidenciais da organização.",
-};
 
 export type UserFormValues = {
   id?: string;

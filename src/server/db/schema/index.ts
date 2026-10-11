@@ -3,3 +3,8 @@ export * from "./legal";
 export * from "./documents";
 export * from "./work";
 export * from "./ai";
+export * from "./contingency";
+export * from "./operations";
+export * from "./briefs";
+export * from "./email";
+export * from "./imports";

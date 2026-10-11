@@ -926,3 +926,29 @@ export async function removeProcessEvent(ctx: AuthContext, eventId: string): Pro
   });
   return { processId: event.processId };
 }
+
+// ---------------------------------------------------------------------------
+// Global search (header search box)
+// ---------------------------------------------------------------------------
+
+export type ProcessSearchResult = {
+  id: string;
+  number: string;
+  title: string;
+  court: string;
+  status: ProcessListItem["status"];
+};
+
+/** Quick search by CNJ number (with or without punctuation), title or party name, within the visible portfolio. */
+export async function searchProcesses(ctx: AuthContext, q: string, limit = 8): Promise<ProcessSearchResult[]> {
+  assertCan(ctx, "process:read");
+  const term = q.trim().slice(0, 120);
+  if (term.length < 2) return [];
+  const p = legalProcesses;
+  return getDb()
+    .select({ id: p.id, number: p.number, title: p.title, court: p.court, status: p.status })
+    .from(p)
+    .where(and(processWhere(ctx), searchCondition(term)))
+    .orderBy(desc(p.updatedAt), asc(p.id))
+    .limit(Math.min(25, Math.max(1, limit)));
+}

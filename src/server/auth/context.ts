@@ -13,6 +13,8 @@ export type AuthContext = {
   organizationId: string;
   role: Role;
   unitId: string | null;
+  /** Law firm of an `external_counsel` user (their row scope). Absent/null for everyone else. */
+  lawFirmId?: string | null;
   name: string;
   email: string | null;
   isDemoOrganization: boolean;
@@ -28,6 +30,7 @@ export function systemContext(organizationId: string, isDemoOrganization = false
     organizationId,
     role: "admin",
     unitId: null,
+    lawFirmId: null,
     name: "Sistema",
     email: null,
     isDemoOrganization,
