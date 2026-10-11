@@ -9,6 +9,7 @@ import { getCurrentUser } from "@/server/auth/session";
 import { getDb } from "@/server/db/client";
 import { organizations } from "@/server/db/schema";
 import { logger } from "@/server/lib/logger";
+import { Logo } from "@/components/brand/logo";
 import { LoginForm } from "./login-form";
 
 export const metadata: Metadata = { title: "Entrar" };
@@ -45,14 +46,8 @@ export default async function LoginPage(props: PageProps<"/login">) {
   return (
     <div className="grid min-h-dvh lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
       <aside className="relative hidden flex-col justify-between overflow-hidden bg-sidebar px-10 py-12 text-sidebar-foreground lg:flex">
-        <Link href="/" className="flex w-fit items-center gap-3 rounded-md focus-visible:outline-2 focus-visible:outline-sidebar-indicator">
-          <span
-            aria-hidden="true"
-            className="inline-flex size-10 items-center justify-center rounded-lg bg-primary-600 ring-1 ring-white/10"
-          >
-            <Scale className="size-5 text-white" />
-          </span>
-          <span className="text-lg font-semibold tracking-tight text-white">Praetor</span>
+        <Link href="/" aria-label="Praetor — página inicial" className="w-fit rounded-md focus-visible:outline-2 focus-visible:outline-sidebar-indicator">
+          <Logo />
         </Link>
         <div className="max-w-md">
           <p className="text-2xl leading-snug font-semibold tracking-tight text-white">
@@ -75,14 +70,8 @@ export default async function LoginPage(props: PageProps<"/login">) {
       <main id="conteudo" className="flex items-center justify-center px-4 py-10 sm:px-8">
         <div className="w-full max-w-md">
           <div className="mb-8 lg:hidden">
-            <Link href="/" className="flex w-fit items-center gap-2.5 rounded-md">
-              <span
-                aria-hidden="true"
-                className="inline-flex size-9 items-center justify-center rounded-md bg-primary text-white"
-              >
-                <Scale className="size-4" />
-              </span>
-              <span className="text-lg font-semibold tracking-tight text-slate-900">Praetor</span>
+            <Link href="/" aria-label="Praetor — página inicial" className="w-fit rounded-md">
+              <Logo tone="light" />
             </Link>
             <p className="mt-2 text-sm text-muted-foreground">Gestão jurídica preventiva e contenciosa com apoio de IA</p>
           </div>

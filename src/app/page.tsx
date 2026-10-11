@@ -1,14 +1,15 @@
 import {
   ArrowRight,
+  Ban,
   BookOpenCheck,
   CalendarClock,
+  ChevronDown,
   FileStack,
   FileText,
   Gavel,
   LayoutDashboard,
   Lock,
   Scale,
-  ScrollText,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -17,84 +18,97 @@ import {
 } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ButtonLink } from "@/components/ui/button";
+import type { CSSProperties } from "react";
+import { Logo, LogoMark } from "@/components/brand/logo";
+import { FlowStepper } from "@/components/landing/flow-stepper";
+import { CountUp, RevealRoot, Spotlight } from "@/components/landing/motion";
+import { ProductPreview } from "@/components/landing/product-preview";
+import { SiteHeader } from "@/components/landing/site-header";
 import { getCurrentUser } from "@/server/auth/session";
 
 /**
  * Public presentation page shown before the login. It contains no tenant data:
  * the only server read is whether the visitor already has a session, to switch
- * the call to action between "Entrar" and "Ir para o painel".
+ * the call to action between "Entrar" and "Ir para o painel". Product visuals
+ * are illustrative and labeled as such; there are no testimonials, client
+ * logos or usage statistics, because none exist yet.
  */
 export const metadata: Metadata = {
   title: { absolute: "Praetor — Gestão jurídica preventiva e contenciosa" },
   description:
-    "Plataforma de gestão jurídica corporativa: jurídico preventivo, contencioso, contratos, documentos, prazos e análises de apoio por IA com fontes citadas.",
+    "Plataforma de gestão jurídica corporativa: jurídico preventivo, contencioso, contratos, documentos, prazos, painel de BI e análises de apoio por IA com fontes citadas.",
 };
+
+const delay = (ms: number) => ({ "--reveal-delay": `${ms}ms` }) as CSSProperties;
 
 const FRONTS = [
   {
     icon: ShieldAlert,
+    kicker: "Antes do conflito",
     title: "Jurídico preventivo",
-    text: "Registre ocorrências que ainda não viraram processo, organize fatos e documentos, identifique sinais de risco e informações faltantes e acompanhe um plano de ação com responsáveis e prazos.",
+    text: "Registre ocorrências que ainda não viraram processo, organize fatos e documentos e acompanhe um plano de ação com responsáveis e prazos.",
+    points: ["Sinais de risco e informações faltantes", "Plano de ação acompanhado", "Vínculo posterior com processo"],
   },
   {
     icon: Gavel,
+    kicker: "Durante o litígio",
     title: "Gestão do contencioso",
-    text: "Centralize processos, partes, movimentações, valores, documentos, prazos e tarefas. Separe com clareza o que foi cadastrado, o que foi importado e o que foi gerado por IA.",
+    text: "Centralize processos, partes, movimentações, valores, documentos, prazos e tarefas — separando o que foi cadastrado, importado ou gerado por IA.",
+    points: ["Linha do tempo de movimentações", "Exposição e provisão informadas", "Prazos com validação humana"],
   },
 ] as const;
 
 const MODULES: { icon: LucideIcon; title: string; text: string }[] = [
-  {
-    icon: LayoutDashboard,
-    title: "Dashboard executivo",
-    text: "Processos por situação, prazos vencidos e próximos, riscos, exposição informada e pendências por responsável — cada número leva aos registros que o originam.",
-  },
-  {
-    icon: Scale,
-    title: "Processos",
-    text: "Cadastro completo, linha do tempo de movimentações, partes, documentos, comentários e histórico de alterações.",
-  },
-  {
-    icon: ShieldAlert,
-    title: "Ocorrências preventivas",
-    text: "Fatos, áreas envolvidas, plano de ação e vínculo posterior com um processo judicial, quando necessário.",
-  },
-  {
-    icon: FileStack,
-    title: "Contratos e documentos",
-    text: "Vigência, renovação, obrigações, histórico de versões e download protegido por permissão.",
-  },
-  {
-    icon: CalendarClock,
-    title: "Prazos e tarefas",
-    text: "Calendário, alertas de vencimento e fila de validação para prazos sugeridos pela IA.",
-  },
-  {
-    icon: Sparkles,
-    title: "Central de IA",
-    text: "Resumos, extração de informações, contradições, documentos faltantes, ações preventivas e perguntas sobre os registros acessíveis.",
-  },
-  {
-    icon: UsersRound,
-    title: "Administração",
-    text: "Usuários, equipes, unidades, perfis de acesso, configurações e trilha de auditoria.",
-  },
+  { icon: LayoutDashboard, title: "Painel de BI", text: "Filtros por período, unidade, área e responsável, com clique direto nos registros que originam cada número." },
+  { icon: Scale, title: "Processos", text: "Cadastro completo, partes, movimentações, documentos, comentários e histórico de alterações." },
+  { icon: ShieldAlert, title: "Preventivo", text: "Ocorrências, áreas envolvidas, plano de ação e conversão em processo quando necessário." },
+  { icon: FileStack, title: "Contratos e documentos", text: "Vigência, renovação, obrigações, versões e download protegido por permissão." },
+  { icon: CalendarClock, title: "Prazos e tarefas", text: "Calendário, alertas de vencimento e fila de validação para prazos sugeridos pela IA." },
+  { icon: Sparkles, title: "Central de IA", text: "Resumos, extração, contradições, documentos faltantes e perguntas sobre os registros acessíveis." },
+  { icon: UsersRound, title: "Administração", text: "Usuários, equipes, unidades, cinco perfis de acesso, configurações e auditoria." },
 ];
 
-const AI_PRINCIPLES = [
-  "Toda análise apresenta as fontes utilizadas, a data, as limitações e os pontos que exigem validação.",
-  "A IA não prevê resultados e não substitui a avaliação de um advogado.",
-  "Prazos sugeridos pela IA só passam a valer depois de validados por uma pessoa.",
-  "Instruções escondidas em documentos enviados são tratadas como dados, nunca como comandos.",
-  "Sem credenciais de IA, o modo demonstrativo é identificado em todas as telas.",
-] as const;
+const AI_DOES = [
+  "Cita as fontes de cada achado, com versão do documento.",
+  "Informa data, limitações e pontos que exigem validação.",
+  "Trata instruções escondidas em documentos como dados, não como comandos.",
+  "Evita reprocessar análises idênticas e respeita um orçamento mensal.",
+];
+const AI_DOESNT = [
+  "Prever o resultado de processos.",
+  "Inventar jurisprudência, citações ou movimentações.",
+  "Calcular prazos processuais sem validação humana.",
+  "Alterar registros por conta própria.",
+];
 
-const GOVERNANCE: { icon: LucideIcon; text: string }[] = [
-  { icon: Lock, text: "Isolamento entre organizações e visibilidade por perfil, unidade e confidencialidade." },
-  { icon: FileText, text: "Documentos sem URL pública: o download exige sessão e permissão." },
-  { icon: BookOpenCheck, text: "Registro de auditoria das alterações relevantes e das análises." },
-  { icon: ShieldCheck, text: "Estrutura para retenção de dados e bloqueio de exclusão (legal hold)." },
+const GOVERNANCE: { icon: LucideIcon; title: string; text: string }[] = [
+  { icon: Lock, title: "Isolamento", text: "Cada organização só enxerga os próprios dados; dentro dela, a visibilidade segue perfil, unidade e confidencialidade." },
+  { icon: FileText, title: "Documentos protegidos", text: "Sem URL pública: o download exige sessão e permissão, e os tipos de arquivo são validados no envio." },
+  { icon: BookOpenCheck, title: "Auditoria", text: "As alterações relevantes, os acessos a documentos e as análises de IA ficam registrados." },
+  { icon: ShieldCheck, title: "Retenção", text: "Estrutura para prazos de retenção e bloqueio de exclusão (legal hold)." },
+];
+
+const FAQ = [
+  {
+    q: "A IA substitui o advogado?",
+    a: "Não. As análises são apoio: apontam achados com as fontes usadas, mostram limitações e listam o que precisa ser validado. A decisão é sempre de uma pessoa, e nada é alterado automaticamente.",
+  },
+  {
+    q: "O sistema calcula prazos processuais?",
+    a: "Não. Prazos são cadastrados por pessoas. Quando a IA encontra uma data em um documento, ela sugere um prazo que fica aguardando validação humana — as regras de contagem (dias úteis, feriados, suspensões) precisam ser conferidas por quem conhece o caso.",
+  },
+  {
+    q: "Existe integração com tribunais?",
+    a: "Ainda não. Nesta versão, movimentações são cadastradas manualmente ou marcadas como importadas, com a fonte informada. Integrações dependem de fonte autorizada, documentação e credenciais.",
+  },
+  {
+    q: "Quem pode ver cada informação?",
+    a: "São cinco perfis — administrador, gestor jurídico, advogado, analista e executivo (somente consulta). Advogados e analistas veem os registros da própria unidade e os que estão sob sua responsabilidade; registros confidenciais ficam restritos.",
+  },
+  {
+    q: "E se não houver credenciais de IA configuradas?",
+    a: "A plataforma funciona em modo demonstrativo, claramente identificado em todas as telas. Resultados desse modo nunca são apresentados como análises reais.",
+  },
 ];
 
 export default async function LandingPage() {
@@ -102,231 +116,341 @@ export default async function LandingPage() {
   const cta = user ? { href: "/dashboard", label: "Ir para o painel" } : { href: "/login", label: "Entrar" };
 
   return (
-    <div className="min-h-dvh bg-canvas text-foreground">
+    <RevealRoot className="min-h-dvh bg-white text-[15px] text-slate-900">
       <a
         href="#conteudo"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:shadow"
       >
         Pular para o conteúdo
       </a>
-
-      <header className="bg-sidebar text-sidebar-foreground">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <Link href="/" className="flex items-center gap-2.5 rounded-md focus-visible:outline-2 focus-visible:outline-sidebar-indicator">
-            <span
-              aria-hidden="true"
-              className="inline-flex size-9 items-center justify-center rounded-lg bg-primary-600 ring-1 ring-white/10"
-            >
-              <Scale className="size-4.5 text-white" />
-            </span>
-            <span className="text-lg font-semibold tracking-tight text-white">Praetor</span>
-          </Link>
-          <nav aria-label="Seções da página" className="hidden items-center gap-6 text-sm text-sidebar-muted md:flex">
-            <a href="#frentes" className="hover:text-white">Frentes</a>
-            <a href="#modulos" className="hover:text-white">Módulos</a>
-            <a href="#ia" className="hover:text-white">IA responsável</a>
-            <a href="#nome" className="hover:text-white">O nome</a>
-          </nav>
-          <ButtonLink href={cta.href} size="sm" className="bg-white text-primary hover:bg-primary-50 active:bg-primary-100">
-            {cta.label}
-          </ButtonLink>
-        </div>
-      </header>
+      <SiteHeader cta={cta} />
 
       <main id="conteudo">
-        {/* Hero */}
-        <section className="bg-sidebar pb-20 text-sidebar-foreground">
-          <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 pt-12 sm:px-6 lg:grid-cols-[1.1fr_0.9fr] lg:pt-20">
+        {/* ------------------------------------------------------------- Hero */}
+        <Spotlight className="overflow-hidden bg-[#0b1a2c]" color="rgba(212, 176, 98, 0.13)" size={560}>
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 opacity-[0.35]"
+            style={{
+              backgroundImage:
+                "linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px)",
+              backgroundSize: "56px 56px",
+              maskImage: "radial-gradient(ellipse 80% 70% at 50% 30%, black, transparent)",
+            }}
+          />
+          <div aria-hidden="true" className="pointer-events-none absolute -top-40 -right-40 size-[36rem] rounded-full bg-[#2f5282]/40 blur-3xl" />
+          <div aria-hidden="true" className="pointer-events-none absolute -bottom-48 -left-24 size-[28rem] rounded-full bg-brass-500/10 blur-3xl" />
+
+          <div className="relative mx-auto grid max-w-6xl items-center gap-14 px-4 pt-32 pb-24 sm:px-6 lg:grid-cols-[1.05fr_0.95fr] lg:pt-40 lg:pb-32">
             <div>
-              <p className="text-xs font-semibold tracking-[0.18em] text-sidebar-indicator uppercase">
-                Gestão jurídica corporativa
+              <p data-reveal className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-medium text-slate-200">
+                <span aria-hidden="true" className="size-1.5 rounded-full bg-brass-400" />
+                Gestão jurídica corporativa · preventivo e contencioso
               </p>
-              <h1 className="mt-4 text-3xl leading-tight font-semibold tracking-tight text-white sm:text-4xl lg:text-[2.75rem]">
-                Do risco ao processo, com a IA como apoio contínuo — e o advogado no comando.
+              <h1 data-reveal style={delay(80)} className="mt-6 font-display text-5xl leading-[1.02] font-semibold tracking-tight text-white sm:text-6xl lg:text-7xl">
+                Antecipe riscos.
+                <br />
+                Conduza processos.
+                <br />
+                <span className="bg-gradient-to-r from-brass-300 via-brass-400 to-brass-500 bg-clip-text text-transparent">Decida com fontes.</span>
               </h1>
-              <p className="mt-5 max-w-xl text-base leading-relaxed text-sidebar-muted">
-                O Praetor reúne o jurídico preventivo e a gestão do contencioso em uma só plataforma: ocorrências,
-                processos, contratos, documentos, prazos e análises de apoio com fontes citadas.
+              <p data-reveal style={delay(160)} className="mt-6 max-w-xl text-lg leading-relaxed text-slate-300">
+                O Praetor reúne o jurídico preventivo e a gestão do contencioso em uma só plataforma — com a inteligência
+                artificial como apoio contínuo e o advogado sempre no comando.
               </p>
-              <div className="mt-8 flex flex-wrap gap-3">
-                <ButtonLink href={cta.href} size="lg" className="bg-white text-primary hover:bg-primary-50 active:bg-primary-100">
-                  {cta.label}
-                  <ArrowRight aria-hidden="true" />
-                </ButtonLink>
-                <ButtonLink
-                  href="#modulos"
-                  size="lg"
-                  variant="ghost"
-                  className="text-white ring-1 ring-white/20 hover:bg-white/10 hover:text-white active:bg-white/15"
+              <div data-reveal style={delay(240)} className="mt-9 flex flex-wrap gap-3">
+                <Link
+                  href={cta.href}
+                  className="group inline-flex items-center gap-2 rounded-full bg-brass-400 px-6 py-3 text-sm font-semibold text-[#0b1a2c] shadow-lg shadow-brass-500/20 transition hover:bg-brass-300"
                 >
-                  Conhecer os módulos
-                </ButtonLink>
+                  {user ? "Ir para o painel" : "Acessar a plataforma"}
+                  <ArrowRight aria-hidden="true" className="size-4 transition-transform group-hover:translate-x-0.5" />
+                </Link>
+                <a
+                  href="#como-funciona"
+                  className="inline-flex items-center gap-2 rounded-full px-6 py-3 text-sm font-semibold text-white ring-1 ring-white/25 transition hover:bg-white/10"
+                >
+                  Ver como funciona
+                </a>
               </div>
+              <ul data-reveal style={delay(320)} className="mt-10 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-400">
+                {["Fontes citadas", "Validação humana", "Isolamento por organização"].map((t) => (
+                  <li key={t} className="inline-flex items-center gap-2">
+                    <ShieldCheck aria-hidden="true" className="size-4 text-brass-400" />
+                    {t}
+                  </li>
+                ))}
+              </ul>
             </div>
-
-            {/* Decorative product preview — illustrative shapes, no real data. */}
-            <div aria-hidden="true" className="hidden lg:block">
-              <div className="rounded-xl bg-white/5 p-4 ring-1 ring-white/10">
-                <div className="grid grid-cols-3 gap-3">
-                  {["Processos ativos", "Prazos próximos", "Riscos altos"].map((label, i) => (
-                    <div key={label} className="rounded-lg bg-white p-3">
-                      <p className="text-[11px] text-slate-500">{label}</p>
-                      <div className={`mt-2 h-5 w-10 rounded ${["bg-primary-200", "bg-amber-200", "bg-orange-200"][i]}`} />
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-3 space-y-2 rounded-lg bg-white p-4">
-                  {[80, 62, 45, 30].map((w, i) => (
-                    <div key={w} className="flex items-center gap-3">
-                      <div className="h-2 w-16 rounded bg-slate-200" />
-                      <div className="h-2 flex-1 rounded bg-slate-100">
-                        <div
-                          className={`h-2 rounded ${["bg-emerald-400", "bg-amber-400", "bg-orange-400", "bg-red-400"][i]}`}
-                          style={{ width: `${w}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-3 flex items-start gap-3 rounded-lg bg-ai-50 p-4">
-                  <Sparkles className="mt-0.5 size-4 shrink-0 text-ai-600" />
-                  <div className="flex-1 space-y-2">
-                    <div className="h-2 w-3/4 rounded bg-ai-200" />
-                    <div className="h-2 w-1/2 rounded bg-ai-200" />
-                    <div className="flex gap-1.5 pt-1">
-                      <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-medium text-ai-700">S1</span>
-                      <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-medium text-ai-700">S2</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <div data-reveal style={delay(200)}>
+              <ProductPreview />
             </div>
           </div>
-        </section>
+          <a
+            href="#plataforma"
+            aria-label="Rolar para a plataforma"
+            className="absolute bottom-6 left-1/2 hidden -translate-x-1/2 text-slate-400 transition hover:text-white lg:block"
+          >
+            <ChevronDown aria-hidden="true" className="size-6 motion-safe:animate-bounce" />
+          </a>
+        </Spotlight>
 
-        {/* Two fronts */}
-        <section id="frentes" className="mx-auto max-w-6xl scroll-mt-6 px-4 py-16 sm:px-6">
-          <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Duas frentes, uma visão</h2>
-          <p className="mt-2 max-w-2xl text-muted-foreground">
-            Antecipar conflitos e conduzir bem os que já existem fazem parte do mesmo trabalho.
-          </p>
-          <div className="mt-8 grid gap-5 md:grid-cols-2">
-            {FRONTS.map(({ icon: Icon, title, text }) => (
-              <article key={title} className="rounded-xl border border-border bg-surface p-6 shadow-xs">
-                <span className="inline-flex size-10 items-center justify-center rounded-lg bg-primary-50 text-primary">
-                  <Icon aria-hidden="true" className="size-5" />
-                </span>
-                <h3 className="mt-4 text-lg font-semibold text-slate-900">{title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{text}</p>
-              </article>
+        {/* ------------------------------------------------------------ Facts */}
+        <section aria-label="A plataforma em números" className="border-b border-slate-200 bg-white">
+          <dl className="mx-auto grid max-w-6xl grid-cols-2 gap-px bg-slate-200 lg:grid-cols-4">
+            {[
+              { n: 7, s: "", label: "módulos integrados" },
+              { n: 5, s: "", label: "perfis de acesso" },
+              { n: 100, s: "%", label: "das análises com fontes, data e limitações" },
+              { n: 0, s: "", label: "prazos da IA sem validação humana" },
+            ].map((f, i) => (
+              <div key={f.label} data-reveal style={delay(i * 80)} className="bg-white px-6 py-8 text-center">
+                <dt className="sr-only">{f.label}</dt>
+                <dd>
+                  <span className="block font-display text-5xl font-semibold text-[#1f3a5f]">
+                    <CountUp value={f.n} suffix={f.s} />
+                  </span>
+                  <span className="mt-1 block text-sm text-slate-500">{f.label}</span>
+                </dd>
+              </div>
             ))}
-          </div>
+          </dl>
         </section>
 
-        {/* Modules */}
-        <section id="modulos" className="scroll-mt-6 border-y border-border bg-surface">
-          <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6">
-            <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Módulos</h2>
-            <p className="mt-2 max-w-2xl text-muted-foreground">
-              Um fluxo integrado: registrar a ocorrência ou o processo, anexar documentos, solicitar uma análise, revisar
-              o resultado, criar tarefas e acompanhar tudo no dashboard.
-            </p>
-            <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {MODULES.map(({ icon: Icon, title, text }) => (
-                <li key={title} className="rounded-xl border border-border p-5">
-                  <div className="flex items-center gap-3">
-                    <Icon aria-hidden="true" className="size-5 text-primary-600" />
-                    <h3 className="font-semibold text-slate-900">{title}</h3>
-                  </div>
-                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{text}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
-
-        {/* Responsible AI + governance */}
-        <section id="ia" className="mx-auto grid max-w-6xl scroll-mt-6 gap-8 px-4 py-16 sm:px-6 lg:grid-cols-2">
-          <div className="rounded-xl border border-ai-200 bg-ai-50 p-6">
-            <div className="flex items-center gap-2 text-ai-800">
-              <Sparkles aria-hidden="true" className="size-5" />
-              <h2 className="text-xl font-semibold tracking-tight">IA responsável</h2>
+        {/* ----------------------------------------------------------- Fronts */}
+        <section id="plataforma" className="scroll-mt-16 bg-white">
+          <div className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
+            <div data-reveal className="max-w-2xl">
+              <p className="text-xs font-semibold tracking-[0.18em] text-brass-600 uppercase">Plataforma</p>
+              <h2 className="mt-3 font-display text-4xl font-semibold text-slate-900 sm:text-5xl">Duas frentes, uma visão</h2>
+              <p className="mt-4 text-lg text-slate-600">Antecipar conflitos e conduzir bem os que já existem fazem parte do mesmo trabalho.</p>
             </div>
-            <ul className="mt-5 space-y-3">
-              {AI_PRINCIPLES.map((text) => (
-                <li key={text} className="flex items-start gap-2.5 text-sm leading-relaxed text-ai-900">
-                  <span aria-hidden="true" className="mt-2 size-1.5 shrink-0 rounded-full bg-ai-500" />
-                  {text}
-                </li>
+            <div className="mt-12 grid gap-6 md:grid-cols-2">
+              {FRONTS.map(({ icon: Icon, kicker, title, text, points }, i) => (
+                <Spotlight key={title} className="rounded-2xl" color="rgba(47, 82, 130, 0.10)">
+                  <article
+                    data-reveal
+                    style={delay(i * 120)}
+                    className="relative h-full rounded-2xl border border-slate-200 bg-white p-8 transition-shadow duration-300 hover:shadow-xl hover:shadow-slate-900/5"
+                  >
+                    <span className="inline-flex size-12 items-center justify-center rounded-xl bg-[#1f3a5f] text-white">
+                      <Icon aria-hidden="true" className="size-6" />
+                    </span>
+                    <p className="mt-6 text-xs font-semibold tracking-[0.16em] text-brass-600 uppercase">{kicker}</p>
+                    <h3 className="mt-1 font-display text-3xl font-semibold">{title}</h3>
+                    <p className="mt-3 leading-relaxed text-slate-600">{text}</p>
+                    <ul className="mt-6 space-y-2.5">
+                      {points.map((p) => (
+                        <li key={p} className="flex items-center gap-2.5 text-sm text-slate-700">
+                          <span aria-hidden="true" className="inline-flex size-5 items-center justify-center rounded-full bg-brass-400/15">
+                            <span className="size-1.5 rounded-full bg-brass-500" />
+                          </span>
+                          {p}
+                        </li>
+                      ))}
+                    </ul>
+                  </article>
+                </Spotlight>
               ))}
-            </ul>
-          </div>
-          <div className="rounded-xl border border-border bg-surface p-6 shadow-xs">
-            <div className="flex items-center gap-2 text-slate-900">
-              <ShieldCheck aria-hidden="true" className="size-5 text-primary-600" />
-              <h2 className="text-xl font-semibold tracking-tight">Segurança e governança</h2>
             </div>
-            <ul className="mt-5 space-y-3">
-              {GOVERNANCE.map(({ icon: Icon, text }) => (
-                <li key={text} className="flex items-start gap-2.5 text-sm leading-relaxed text-muted-foreground">
-                  <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary-600" />
-                  {text}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-5 text-xs text-subtle-foreground">
-              Esses controles não equivalem a uma declaração de conformidade legal ou de segurança completa.
-            </p>
           </div>
         </section>
 
-        {/* Name */}
-        <section id="nome" className="scroll-mt-6 bg-sidebar text-sidebar-foreground">
-          <div className="mx-auto flex max-w-4xl flex-col items-start gap-6 px-4 py-16 sm:px-6 md:flex-row md:gap-10">
-            <span
-              aria-hidden="true"
-              className="inline-flex size-14 shrink-0 items-center justify-center rounded-xl bg-primary-600 ring-1 ring-white/10"
-            >
-              <ScrollText className="size-7 text-white" />
-            </span>
-            <div>
-              <h2 className="text-2xl font-semibold tracking-tight text-white">Por que “Praetor”?</h2>
-              <p className="mt-4 leading-relaxed text-sidebar-muted">
-                <em className="text-white not-italic">Praetor</em> é a palavra latina para <strong className="font-semibold text-white">pretor</strong>,
-                o magistrado que administrava a justiça na Roma Antiga. Ao assumir o cargo, o pretor publicava o seu
-                <em> edito</em> — as regras que aplicaria —, orientando as pessoas antes do conflito, e conduzia os
-                litígios quando eles surgiam.
+        {/* ----------------------------------------------------- How it works */}
+        <section id="como-funciona" className="scroll-mt-16 bg-slate-50">
+          <div className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
+            <div data-reveal className="max-w-2xl">
+              <p className="text-xs font-semibold tracking-[0.18em] text-brass-600 uppercase">Como funciona</p>
+              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Do registro à decisão, em um fluxo</h2>
+              <p className="mt-4 text-lg text-slate-600">Clique em cada passo — ou deixe a demonstração avançar sozinha.</p>
+            </div>
+            <div data-reveal style={delay(120)} className="mt-12">
+              <FlowStepper />
+            </div>
+          </div>
+        </section>
+
+        {/* ---------------------------------------------------------- Modules */}
+        <section className="bg-white">
+          <div className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
+            <div data-reveal className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
+              <div className="max-w-2xl">
+                <p className="text-xs font-semibold tracking-[0.18em] text-brass-600 uppercase">Módulos</p>
+                <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Tudo o que o departamento acompanha</h2>
+              </div>
+              <Link href={cta.href} className="group inline-flex items-center gap-1.5 text-sm font-semibold text-[#2f5282] hover:text-[#1f3a5f]">
+                {cta.label}
+                <ArrowRight aria-hidden="true" className="size-4 transition-transform group-hover:translate-x-0.5" />
+              </Link>
+            </div>
+            <ul className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {MODULES.map(({ icon: Icon, title, text }, i) => (
+                <li key={title} data-reveal style={delay((i % 3) * 90)} className={i === MODULES.length - 1 ? "lg:col-start-2" : undefined}>
+                  <Spotlight className="h-full rounded-2xl" color="rgba(212, 176, 98, 0.16)" size={300}>
+                    <div className="group relative h-full rounded-2xl border border-slate-200 bg-white p-6 transition duration-300 hover:-translate-y-1 hover:border-brass-400/50">
+                      <span className="inline-flex size-10 items-center justify-center rounded-lg bg-slate-100 text-[#1f3a5f] transition-colors group-hover:bg-[#1f3a5f] group-hover:text-white">
+                        <Icon aria-hidden="true" className="size-5" />
+                      </span>
+                      <h3 className="mt-4 text-lg font-semibold">{title}</h3>
+                      <p className="mt-2 text-sm leading-relaxed text-slate-600">{text}</p>
+                    </div>
+                  </Spotlight>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        {/* ------------------------------------------------------ Responsible AI */}
+        <section id="ia" className="relative scroll-mt-16 overflow-hidden bg-[#0f1a33] text-white">
+          <div aria-hidden="true" className="pointer-events-none absolute top-0 left-1/2 size-[40rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-violet-500/20 blur-3xl" />
+          <div className="relative mx-auto max-w-6xl px-4 py-24 sm:px-6">
+            <div data-reveal className="max-w-2xl">
+              <p className="inline-flex items-center gap-2 text-xs font-semibold tracking-[0.18em] text-violet-300 uppercase">
+                <Sparkles aria-hidden="true" className="size-4" />
+                IA responsável
               </p>
-              <p className="mt-3 leading-relaxed text-sidebar-muted">
-                Prevenir e conduzir: as duas frentes desta plataforma. A palavra vem de <em>prae-ire</em>, “ir à
-                frente” — antecipar-se aos riscos.
+              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Uma camada contínua de análise — com limites claros</h2>
+              <p className="mt-4 text-lg text-slate-300">
+                A IA analisa novos documentos, mudanças relevantes e rotinas agendadas. E deixa explícito o que fez, com
+                base em quê e o que ainda precisa ser conferido.
+              </p>
+            </div>
+            <div className="mt-12 grid gap-6 lg:grid-cols-2">
+              <div data-reveal className="rounded-2xl border border-white/10 bg-white/5 p-8 backdrop-blur">
+                <h3 className="text-lg font-semibold text-white">O que a IA faz</h3>
+                <ul className="mt-5 space-y-3.5">
+                  {AI_DOES.map((t) => (
+                    <li key={t} className="flex gap-3 text-slate-200">
+                      <ShieldCheck aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-emerald-300" />
+                      {t}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div data-reveal style={delay(120)} className="rounded-2xl border border-white/10 bg-white/5 p-8 backdrop-blur">
+                <h3 className="text-lg font-semibold text-white">O que a IA não faz</h3>
+                <ul className="mt-5 space-y-3.5">
+                  {AI_DOESNT.map((t) => (
+                    <li key={t} className="flex gap-3 text-slate-200">
+                      <Ban aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-rose-300" />
+                      {t}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* -------------------------------------------------------- Governance */}
+        <section id="seguranca" className="scroll-mt-16 bg-white">
+          <div className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
+            <div data-reveal className="max-w-2xl">
+              <p className="text-xs font-semibold tracking-[0.18em] text-brass-600 uppercase">Segurança e governança</p>
+              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Controle de acesso desde a primeira linha</h2>
+            </div>
+            <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {GOVERNANCE.map(({ icon: Icon, title, text }, i) => (
+                <div key={title} data-reveal style={delay(i * 90)} className="rounded-2xl border border-slate-200 p-6">
+                  <Icon aria-hidden="true" className="size-6 text-[#2f5282]" />
+                  <h3 className="mt-4 font-semibold">{title}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-600">{text}</p>
+                </div>
+              ))}
+            </div>
+            <p data-reveal className="mt-6 text-xs text-slate-500">
+              Esses controles não equivalem a uma declaração de conformidade legal ou de segurança completa. Pontos ainda
+              em avaliação estão documentados para a equipe técnica.
+            </p>
+          </div>
+        </section>
+
+        {/* -------------------------------------------------------------- Name */}
+        <section className="relative overflow-hidden bg-[#f7f3ea]">
+          <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 py-24 sm:px-6 lg:grid-cols-[0.8fr_1.2fr]">
+            <div data-reveal className="flex justify-center">
+              <div className="relative">
+                <div aria-hidden="true" className="absolute inset-0 rounded-full bg-brass-400/20 blur-2xl" />
+                <LogoMark animated className="relative size-48 text-[#1f3a5f] sm:size-56" title="Símbolo do Praetor" />
+              </div>
+            </div>
+            <div data-reveal style={delay(120)}>
+              <p className="text-xs font-semibold tracking-[0.18em] text-brass-600 uppercase">O nome</p>
+              <h2 className="mt-3 font-display text-5xl font-semibold text-[#1f3a5f]">Por que “Praetor”?</h2>
+              <p className="mt-5 text-lg leading-relaxed text-slate-700">
+                <em className="font-display text-2xl not-italic">Praetor</em> é a palavra latina para <strong>pretor</strong>, o
+                magistrado que administrava a justiça na Roma Antiga. Ao assumir o cargo, publicava o seu <em>edito</em> — as
+                regras que aplicaria —, orientando as pessoas antes do conflito, e conduzia os litígios quando surgiam.
+              </p>
+              <blockquote className="mt-6 border-l-2 border-brass-500 pl-5 font-display text-2xl text-slate-800 italic">
+                <em>prae-ire</em> — “ir à frente”.
+              </blockquote>
+              <p className="mt-4 text-slate-600">
+                Prevenir e conduzir: as duas frentes desta plataforma. O símbolo une o frontão do templo, onde o edito era
+                publicado, à coluna que forma a letra P.
               </p>
             </div>
           </div>
         </section>
 
-        {/* Final CTA */}
-        <section className="mx-auto max-w-6xl px-4 py-16 text-center sm:px-6">
-          <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Pronto para começar?</h2>
-          <p className="mx-auto mt-2 max-w-xl text-muted-foreground">
-            Acesse com seu e-mail corporativo. No ambiente demonstrativo, use uma das contas fictícias listadas na tela
-            de login.
-          </p>
-          <div className="mt-6 flex justify-center">
-            <ButtonLink href={cta.href} size="lg">
-              {cta.label}
-              <ArrowRight aria-hidden="true" />
-            </ButtonLink>
+        {/* --------------------------------------------------------------- FAQ */}
+        <section id="perguntas" className="scroll-mt-16 bg-white">
+          <div className="mx-auto max-w-3xl px-4 py-24 sm:px-6">
+            <div data-reveal className="text-center">
+              <p className="text-xs font-semibold tracking-[0.18em] text-brass-600 uppercase">Perguntas frequentes</p>
+              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Antes de começar</h2>
+            </div>
+            <div className="mt-10 divide-y divide-slate-200 rounded-2xl border border-slate-200">
+              {FAQ.map((f, i) => (
+                <details key={f.q} data-reveal style={delay(i * 60)} className="group px-6 [&_summary::-webkit-details-marker]:hidden">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-4 py-5 font-semibold text-slate-900">
+                    {f.q}
+                    <span
+                      aria-hidden="true"
+                      className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition-transform duration-300 group-open:rotate-45 group-open:border-brass-400 group-open:text-brass-600"
+                    >
+                      +
+                    </span>
+                  </summary>
+                  <p className="pb-5 leading-relaxed text-slate-600">{f.a}</p>
+                </details>
+              ))}
+            </div>
           </div>
         </section>
+
+        {/* --------------------------------------------------------------- CTA */}
+        <Spotlight className="overflow-hidden bg-[#0b1a2c]" color="rgba(212, 176, 98, 0.16)" size={500}>
+          <div className="relative mx-auto max-w-4xl px-4 py-24 text-center sm:px-6">
+            <div data-reveal>
+              <LogoMark className="mx-auto size-14 text-white" />
+              <h2 className="mt-6 font-display text-4xl font-semibold text-white sm:text-5xl">O jurídico um passo à frente</h2>
+              <p className="mx-auto mt-4 max-w-xl text-lg text-slate-300">
+                Acesse com seu e-mail corporativo. No ambiente demonstrativo, use uma das contas fictícias listadas na tela
+                de login.
+              </p>
+              <Link
+                href={cta.href}
+                className="group mt-9 inline-flex items-center gap-2 rounded-full bg-brass-400 px-7 py-3.5 text-sm font-semibold text-[#0b1a2c] shadow-lg shadow-brass-500/20 transition hover:bg-brass-300"
+              >
+                {user ? "Ir para o painel" : "Acessar a plataforma"}
+                <ArrowRight aria-hidden="true" className="size-4 transition-transform group-hover:translate-x-0.5" />
+              </Link>
+            </div>
+          </div>
+        </Spotlight>
       </main>
 
-      <footer className="border-t border-border bg-surface">
-        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-subtle-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <p>Praetor · versão inicial em desenvolvimento</p>
-          <p>As análises por IA são apoio à decisão e não substituem a avaliação profissional.</p>
+      <footer className="bg-[#081422] text-slate-400">
+        <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-10 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+          <Logo size="sm" />
+          <div className="space-y-1 text-xs sm:text-right">
+            <p>Praetor · versão inicial em desenvolvimento</p>
+            <p>As análises por IA são apoio à decisão e não substituem a avaliação profissional.</p>
+          </div>
         </div>
       </footer>
-    </div>
+    </RevealRoot>
   );
 }

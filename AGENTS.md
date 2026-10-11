@@ -117,6 +117,8 @@ Documentation (README, `docs/**`) is written in Brazilian Portuguese; code ident
 - **React 19 reseta formulários** após uma server action. Para manter o que foi digitado em erro de validação,
   use os padrões existentes: `usePreservingSubmit` (contracts/occurrences), `useFormAction` (work),
   `useAdminForm` (admin), ou devolva `values` no estado da ação (processes).
+- **Cache do Turbopack e `globals.css`**: após mudar tokens/keyframes em `src/app/globals.css`, um `next build` incremental
+  pode reaproveitar o CSS antigo (classes novas somem do bundle). Se isso acontecer, apague `.next/` e reconstrua.
 - **`redirect()` lança exceção**: chame fora do `try/catch` da ação.
 - **Mensagens de erro do Drizzle/driver contêm os parâmetros da consulta** (títulos, fatos, texto extraído).
   Nunca logue `error.message` de erro de banco. Logue nome e código (`errorSummary` em

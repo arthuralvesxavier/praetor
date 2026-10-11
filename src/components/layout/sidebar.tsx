@@ -1,6 +1,6 @@
-import { Scale } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { LogoBadge } from "@/components/brand/logo";
 import { cn } from "@/lib/utils";
 import { NavLink } from "./nav-link";
 
@@ -16,14 +16,9 @@ export function Brand({ className }: { className?: string }) {
         className,
       )}
     >
-      <span
-        aria-hidden="true"
-        className="inline-flex size-8 items-center justify-center rounded-md bg-primary-600 text-white ring-1 ring-white/10"
-      >
-        <Scale className="size-4" />
-      </span>
+      <LogoBadge className="size-8" />
       <span className="flex flex-col leading-tight">
-        <span className="text-[15px] font-semibold tracking-tight">Praetor</span>
+        <span className="font-display text-xl leading-none font-semibold tracking-[0.04em]">Praetor</span>
         <span className="text-[11px] font-normal text-sidebar-muted">Gestão jurídica</span>
       </span>
     </Link>
