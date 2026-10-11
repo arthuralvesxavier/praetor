@@ -13,6 +13,7 @@ Primeira versão funcional (outubro de 2026). Esta página separa o que **funcio
 
 **Base**
 
+- Página de apresentação pública em `/` (`src/app/page.tsx`): frentes preventiva e contenciosa, módulos, princípios de IA, governança e origem do nome. Não lê dados de organizações; com sessão ativa, o botão leva ao painel.
 - Login com e-mail e senha (argon2id), sessões opacas no banco, logout, limite de tentativas (em memória), redirecionamento seguro `?next=`.
 - Permissões por perfil (admin, gestor jurídico, advogado, analista, executivo) e visibilidade por linha (unidade, confidencialidade, responsável) em todas as consultas. Isolamento entre organizações.
 - Auditoria das mudanças relevantes, com diff por campo e campos sensíveis protegidos. Histórico por registro e tela de auditoria.

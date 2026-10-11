@@ -9,7 +9,10 @@ const PUBLIC_PATHS = ["/login", "/api/health"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return NextResponse.next();
+  // "/" is the public presentation page (no tenant data).
+  if (pathname === "/" || PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+    return NextResponse.next();
+  }
   if (!request.cookies.has("praetor_session")) {
     if (pathname.startsWith("/api/")) return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
     const url = request.nextUrl.clone();
