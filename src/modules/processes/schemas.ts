@@ -6,8 +6,10 @@
 import { z } from "zod";
 import type { FormState } from "@/lib/form";
 import {
+  CLOSURE_REASONS,
   LEGAL_AREAS,
   LOSS_PROBABILITIES,
+  PROCESS_INSTANCES,
   PARTY_ROLES,
   PROCESS_EVENT_TYPES,
   PROCESS_PHASES,
@@ -114,6 +116,30 @@ const processFields = {
   description: optionalText(20000),
   /** Only honored for admin / legal manager (ignored for other roles). */
   isConfidential: z.boolean().optional(),
+  // v2 (persisted by the portfolio package; ids are tenant-checked in the service)
+  companyId: optionalId("Empresa inválida."),
+  lawFirmId: optionalId("Escritório inválido."),
+  instance: z
+    .union([z.enum(PROCESS_INSTANCES, { error: "Instância inválida." }), z.literal("")])
+    .transform((v) => (v === "" ? null : v))
+    .nullable()
+    .optional(),
+  processClass: optionalText(40),
+  city: optionalText(120),
+  state: z
+    .union([z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, "Informe a UF com 2 letras."), z.literal("")])
+    .transform((v) => (v === "" ? null : v))
+    .nullable()
+    .optional(),
+  phaseDetail: optionalText(500),
+  closureReason: z
+    .union([z.enum(CLOSURE_REASONS, { error: "Motivo de encerramento inválido." }), z.literal("")])
+    .transform((v) => (v === "" ? null : v))
+    .nullable()
+    .optional(),
+  needsVerification: z.boolean().optional(),
+  verificationNote: optionalText(2000),
+  lastMovementAt: optionalDate,
 };
 
 function checkDates(v: { filedAt?: string | null; closedAt?: string | null }, ctx: z.RefinementCtx) {

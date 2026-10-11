@@ -415,3 +415,38 @@ Fase is a composite string (e.g. "Execução — ARQUIVADO def. …", "PAGO/EXTI
 ("Cejusc Digital", "Secretaria de Cálculos Judiciais"). The client party is
 "EMPRESA MODELO TESTE LTDA (e outros)". Values diverge across sheets for some CNJs.
 Read it with `read-excel-file/node` (v9: default export returns `[{ sheet, data: rows[][] }]`).
+
+## Alert producers (entity conventions)
+
+`upsertAlert` (`@/modules/alerts/service`) with a stable `dedupeKey`; resolve with
+`resolveStaleAlerts`/`resolveAlertsByDedupeKeys` when the condition disappears.
+
+| Alert type | entityType / entityId | Producer |
+|---|---|---|
+| `hearing_upcoming` | `hearing` / hearing id | hearings routine |
+| `settlement_installment_due` | `settlement` / settlement id | contingency routine |
+| `valuation_pending_review` | `legal_process` / process id (one per process) | contingency routine |
+| `enforcement_without_value` | `legal_process` | contingency routine |
+| `guarantee_idle` | `guarantee` / guarantee id | contingency routine |
+| `process_needs_verification` | `legal_process` | contingency routine |
+| `brief_pending_review` | `case_brief` / brief id | briefs service (on generation; resolved on approve/reject) |
+| `intake_unassigned`, `new_process_received` | `intake` / intake id | intake service |
+
+The alerts package resolves links for every entity type (hearing/settlement/guarantee/valuation
+alerts link to their process tab; `case_brief` → `/analises-preliminares/<id>`; `intake` →
+`/entrada/<id>`).
+
+## Contracts added before the build
+
+- `CreateProcessInput` / `UpdateProcessInput` (`@/modules/processes/schemas`) already accept the v2
+  optional fields (`companyId`, `lawFirmId`, `instance`, `processClass`, `city`, `state`,
+  `phaseDetail`, `closureReason`, `needsVerification`, `verificationNote`, `lastMovementAt`);
+  the portfolio package persists them (with tenant checks).
+- Case-brief provenance `reviewer` ("Incluído/editado pelo advogado") is used for items written or
+  changed during review; providers never emit it.
+- XLSX export: `write-excel-file@4.1.1` is installed (`write-excel-file/node`). CSV exports use
+  UTF-8 with BOM, `;` separator and decimal comma; null money cells stay empty (RN-03).
+- The portfolio service may insert `claim` valuations (official, source `manual`, reviewer = the
+  editing user) when the valor da causa is set/changed, so the value history (RF-09) is complete.
+  The imports commit may insert instances/valuations/mirrors directly for the bulk load.
+  Every other valuation write goes through the contingency service.

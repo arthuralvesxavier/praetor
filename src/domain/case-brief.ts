@@ -13,6 +13,8 @@ import { z } from "zod";
  *   illustrative — content produced by the simulation as an example (theses,
  *                  next steps...). It is NOT a fact of the case.
  *   missing      — a gap: information that was looked for and not found
+ *   reviewer     — written or changed by the reviewing lawyer (never by a provider;
+ *                  providers must not emit it — the service rejects it on generation)
  *
  * Citations use the refs of the sources sent to the provider: "REG" for the
  * process record and "D1", "D2"... for document versions. Refs that do not
@@ -21,7 +23,7 @@ import { z } from "zod";
  * only become deadlines through an explicit user action (pending validation).
  */
 
-export const PROVENANCES = ["extracted", "record", "illustrative", "missing"] as const;
+export const PROVENANCES = ["extracted", "record", "illustrative", "missing", "reviewer"] as const;
 export type Provenance = (typeof PROVENANCES)[number];
 
 export const PROVENANCE_LABELS: Record<Provenance, string> = {
@@ -29,6 +31,7 @@ export const PROVENANCE_LABELS: Record<Provenance, string> = {
   record: "Dado do cadastro / planilha",
   illustrative: "Ilustrativo (simulação)",
   missing: "Lacuna",
+  reviewer: "Incluído/editado pelo advogado",
 };
 
 export const PROVENANCE_DESCRIPTIONS: Record<Provenance, string> = {
@@ -36,6 +39,7 @@ export const PROVENANCE_DESCRIPTIONS: Record<Provenance, string> = {
   record: "Informação que já estava no cadastro do processo ou na planilha importada.",
   illustrative: "Exemplo gerado pela simulação para demonstrar o recurso. Não é fato do processo.",
   missing: "Informação procurada e não encontrada nos documentos — precisa ser obtida.",
+  reviewer: "Conteúdo escrito ou alterado pelo advogado na revisão (registrado no histórico de revisões).",
 };
 
 export const briefCitationSchema = z.object({
