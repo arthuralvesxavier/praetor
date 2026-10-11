@@ -1,0 +1,140 @@
+import { sql } from "drizzle-orm";
+import { date, index, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import type {
+  AlertSeverity,
+  AlertType,
+  DataOrigin,
+  DeadlineKind,
+  DeadlineStatus,
+  EntityType,
+  Priority,
+  TaskKind,
+  TaskStatus,
+  ValidationStatus,
+} from "@/domain/enums";
+import { createdAt, deletedAt, id, ts, updatedAt } from "./_columns";
+import { organizations, units, users } from "./core";
+import { documents } from "./documents";
+import { contracts, legalProcesses, occurrences } from "./legal";
+
+/**
+ * Prazos. A deadline with `origin = ai_suggested` is created with
+ * `validationStatus = pending_validation` and is NOT counted as a real deadline
+ * (dashboard, alerts) until a user with `deadline:validate` validates it.
+ * The system never computes legal deadlines from rules; dates are informed by
+ * a person or quoted from a document by the AI (see `sourceExcerpt`).
+ */
+export const deadlines = pgTable(
+  "deadlines",
+  {
+    id: id(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    title: text("title").notNull(),
+    description: text("description"),
+    dueDate: date("due_date", { mode: "string" }).notNull(),
+    kind: text("kind").$type<DeadlineKind>().notNull(),
+    status: text("status").$type<DeadlineStatus>().notNull().default("open"),
+    priority: text("priority").$type<Priority>().notNull().default("medium"),
+    origin: text("origin").$type<DataOrigin>().notNull().default("manual"),
+    validationStatus: text("validation_status").$type<ValidationStatus>().notNull().default("not_required"),
+    validatedById: uuid("validated_by_id").references(() => users.id),
+    validatedAt: ts("validated_at"),
+    validationNote: text("validation_note"),
+    responsibleId: uuid("responsible_id").references(() => users.id),
+    unitId: uuid("unit_id").references(() => units.id),
+    processId: uuid("process_id").references(() => legalProcesses.id),
+    occurrenceId: uuid("occurrence_id").references(() => occurrences.id),
+    contractId: uuid("contract_id").references(() => contracts.id),
+    sourceAnalysisId: uuid("source_analysis_id"),
+    /** For AI suggestions: the literal passage of the source that mentions the date. */
+    sourceExcerpt: text("source_excerpt"),
+    completedAt: ts("completed_at"),
+    createdById: uuid("created_by_id").references(() => users.id),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [
+    index("deadlines_org_due_idx").on(t.organizationId, t.dueDate),
+    index("deadlines_process_idx").on(t.processId),
+    index("deadlines_responsible_idx").on(t.responsibleId),
+  ],
+);
+
+/** Tarefas. Tasks with `kind = action_plan` linked to an occurrence form its action plan. */
+export const tasks = pgTable(
+  "tasks",
+  {
+    id: id(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    title: text("title").notNull(),
+    description: text("description"),
+    kind: text("kind").$type<TaskKind>().notNull().default("general"),
+    status: text("status").$type<TaskStatus>().notNull().default("todo"),
+    priority: text("priority").$type<Priority>().notNull().default("medium"),
+    dueDate: date("due_date", { mode: "string" }),
+    assigneeId: uuid("assignee_id").references(() => users.id),
+    unitId: uuid("unit_id").references(() => units.id),
+    origin: text("origin").$type<DataOrigin>().notNull().default("manual"),
+    processId: uuid("process_id").references(() => legalProcesses.id),
+    occurrenceId: uuid("occurrence_id").references(() => occurrences.id),
+    contractId: uuid("contract_id").references(() => contracts.id),
+    documentId: uuid("document_id").references(() => documents.id),
+    sourceAnalysisId: uuid("source_analysis_id"),
+    completedAt: ts("completed_at"),
+    createdById: uuid("created_by_id").references(() => users.id),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [
+    index("tasks_org_status_idx").on(t.organizationId, t.status),
+    index("tasks_assignee_idx").on(t.assigneeId),
+    index("tasks_process_idx").on(t.processId),
+    index("tasks_occurrence_idx").on(t.occurrenceId),
+  ],
+);
+
+/** Comments on any entity. Visibility follows the parent entity. */
+export const comments = pgTable(
+  "comments",
+  {
+    id: id(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    entityType: text("entity_type").$type<EntityType>().notNull(),
+    entityId: uuid("entity_id").notNull(),
+    authorId: uuid("author_id").notNull().references(() => users.id),
+    body: text("body").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    deletedAt: deletedAt(),
+  },
+  (t) => [index("comments_entity_idx").on(t.entityType, t.entityId, t.createdAt)],
+);
+
+/**
+ * Preventive alerts. Generated by routines (deadlines, contracts) and by
+ * analyses (risk signals, staleness). `dedupeKey` prevents the same alert from
+ * being created twice while open. Visibility follows the referenced entity.
+ */
+export const alerts = pgTable(
+  "alerts",
+  {
+    id: id(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    type: text("type").$type<AlertType>().notNull(),
+    severity: text("severity").$type<AlertSeverity>().notNull(),
+    title: text("title").notNull(),
+    message: text("message").notNull(),
+    entityType: text("entity_type").$type<EntityType>().notNull(),
+    entityId: uuid("entity_id").notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+    resolvedAt: ts("resolved_at"),
+    resolvedById: uuid("resolved_by_id").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("alerts_open_dedupe_uq").on(t.organizationId, t.dedupeKey).where(sql`${t.resolvedAt} is null`),
+    index("alerts_org_created_idx").on(t.organizationId, t.createdAt),
+  ],
+);

@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+/*
+ * Praetor design tokens (Tailwind v4 @theme).
+ * Light theme only — dark mode is pending (see src/components/ui/README.md).
+ *
+ * Usage examples: bg-canvas, bg-surface, border-border, text-foreground,
+ * text-muted-foreground, bg-primary hover:bg-primary-hover, bg-primary-50,
+ * bg-sidebar, text-sidebar-foreground, bg-ai-50 text-ai-800 (AI content only),
+ * outline-ring.
+ */
+@theme {
+  /* Surfaces & text */
+  --color-canvas: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-foreground: #0f172a;
+  --color-muted-foreground: #475569;
+  --color-subtle-foreground: #64748b;
+  --color-ring: #2563eb;
+
+  /* Primary — deep navy */
+  --color-primary: #1f3a5f;
+  --color-primary-hover: #1a314f;
+  --color-primary-active: #152740;
+  --color-primary-foreground: #ffffff;
+  --color-primary-50: #f2f6fa;
+  --color-primary-100: #e3eaf3;
+  --color-primary-200: #c5d4e6;
+  --color-primary-300: #9bb4d2;
+  --color-primary-400: #6a8db8;
+  --color-primary-500: #46699a;
+  --color-primary-600: #2f5282;
+  --color-primary-700: #1f3a5f;
+  --color-primary-800: #1a314f;
+  --color-primary-900: #152740;
+  --color-primary-950: #0f1f33;
+
+  /* Sidebar — dark navy */
+  --color-sidebar: #0f1f33;
+  --color-sidebar-hover: #182c45;
+  --color-sidebar-active: #1f3a5f;
+  --color-sidebar-border: #1d3049;
+  --color-sidebar-foreground: #e2e8f0;
+  --color-sidebar-muted: #9fb0c6;
+  --color-sidebar-indicator: #7cb4f0;
+
+  /* AI accent — violet, reserved for AI-generated content */
+  --color-ai-50: #f5f3ff;
+  --color-ai-100: #ede9fe;
+  --color-ai-200: #ddd6fe;
+  --color-ai-300: #c4b5fd;
+  --color-ai-400: #a78bfa;
+  --color-ai-500: #8b5cf6;
+  --color-ai-600: #7c3aed;
+  --color-ai-700: #6d28d9;
+  --color-ai-800: #5b21b6;
+  --color-ai-900: #4c1d95;
+
+  /* Motion */
+  --animate-fade-in: fade-in 150ms ease-out;
+  --animate-dialog-in: dialog-in 160ms ease-out;
+  --animate-drawer-in: drawer-in 200ms ease-out;
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes dialog-in {
+    /* Tailwind v4 positions with the `translate` property, so only scale here. */
+    from {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes drawer-in {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+}
+
+@theme inline {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    /* Dense data screens: 14px base with comfortable line height. */
+    font-size: 0.875rem;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-border);
+  }
+
+  /* Visible keyboard focus everywhere (components may refine the color). */
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+
+  /* <main tabindex="-1"> receives focus from the skip link; no ring needed there. */
+  main:focus {
+    outline: none;
+  }
+
+  ::selection {
+    background-color: var(--color-primary-100);
+  }
+}
+
+/* Amber striped banner for demo environments. */
+.demo-stripes {
+  background-color: #fef3c7;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgb(251 191 36 / 0.28) 0 12px,
+    transparent 12px 24px
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
