@@ -71,14 +71,13 @@ const ANALYSIS_TYPE_NAMES: Record<AnalysisType, string> = {
 /** Tag names used as delimiters in the user content. Any occurrence in untrusted text is defused. */
 const DELIMITER_TAGS = ["source", "sources", "question", "task", "instructions", "system", "user", "assistant", "document"];
 
-// Zero-width and bidi control characters that could hide a delimiter ("<​source").
-const INVISIBLE_CHARS = /[​-‏‪-‮⁠-⁤﻿]/g;
+// Zero-width and bidi control characters that could hide a delimiter (e.g. "<" + U+200B + "source").
+const INVISIBLE_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g;
 // Other C0 control characters except tab/newline/carriage return.
-// eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 const DELIMITER_RE = new RegExp(`<(\\s*\\/?\\s*)(${DELIMITER_TAGS.join("|")})(?=[\\s>/="']|$)`, "gi");
 // Fullwidth / small-form less-than signs that some models read as "<".
-const LOOKALIKE_LT = /[＜﹤‹〈⟨]/g;
+const LOOKALIKE_LT = /[\uFF1C\uFE64\u2039\u3008\u27E8]/g;
 
 /**
  * Makes untrusted text safe to embed inside a <source> block: removes

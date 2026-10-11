@@ -1,0 +1,10 @@
+COMUNICADO INTERNO — OUTRA EMPRESA LTDA.
+(documento fictício — organização usada para demonstrar o isolamento entre clientes)
+
+Data: {{d:-8}}
+
+Este documento pertence exclusivamente à organização "Outra Empresa Ltda. (teste de isolamento)". Usuários do Grupo Aurora Exemplo não devem conseguir ver, buscar ou baixar este arquivo, nem receber seu conteúdo em análises de IA.
+
+Assunto: revisão do contrato de manutenção predial, com reunião marcada para {{d:+14}}.
+
+Dados fictícios — documento criado apenas para demonstração.

@@ -315,6 +315,13 @@ export async function renderOccurrenceRecord(
         eq(tasks.organizationId, organizationId),
         eq(tasks.kind, "action_plan"),
         isNull(tasks.deletedAt),
+        // This renderer has no AuthContext (the job re-renders it to compare
+        // hashes). Tasks also linked to another record could be hidden from
+        // the requester by that record's scope (e.g. a confidential process),
+        // so only tasks linked to this occurrence alone are included.
+        isNull(tasks.processId),
+        isNull(tasks.contractId),
+        isNull(tasks.documentId),
       ),
     )
     .orderBy(asc(tasks.createdAt), asc(tasks.id));
@@ -558,7 +565,13 @@ async function retrieveForQuestion(ctx: AuthContext, question: string, notes: st
     notes.push("A pergunta não contém termos suficientes para a busca nas fontes.");
     return [];
   }
-  const q = terms.join(" or ");
+  // Postgres' portuguese config does not unaccent: search both the original (accented) and folded forms.
+  const original = question
+    .toLowerCase()
+    .normalize("NFC")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length >= 3 && !QUERY_STOPWORDS.has(foldText(t)));
+  const q = Array.from(new Set([...original, ...terms])).slice(0, 32).join(" or ");
   const tsq = sql`websearch_to_tsquery('portuguese', ${q})`;
   const hits: RankedHit[] = [];
 

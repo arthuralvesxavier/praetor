@@ -1,0 +1,43 @@
+CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE TRANSPORTE E LOGÍSTICA
+(documento fictício — ambiente de demonstração do Praetor)
+
+Contratante: Grupo Aurora Exemplo S.A.
+Contraparte: TransLog Exemplo Transportes Ltda.
+Início da vigência: {{d:-300}}
+Fim da vigência: {{d:+45}}
+Valor do contrato: R$ 576.000,00
+Valor mensal: R$ 48.000,00
+
+CLÁUSULA 1 — OBJETO
+1.1. A CONTRATADA obriga-se a prestar serviços de transporte rodoviário de mercadorias entre o Centro de Distribuição de Curitiba e as lojas da CONTRATANTE nas regiões Sul e Sudeste, conforme o Anexo I (rotas e janelas de entrega).
+
+CLÁUSULA 2 — PRAZOS DE ENTREGA E NÍVEL DE SERVIÇO
+2.1. A CONTRATADA deverá cumprir os prazos de entrega do Anexo I em pelo menos 95% das remessas de cada mês.
+2.2. A CONTRATADA deverá enviar até o quinto dia útil de cada mês o relatório de entregas do mês anterior, com indicadores de pontualidade e avarias.
+
+CLÁUSULA 3 — PREÇO E PAGAMENTO
+3.1. Pelos serviços, a CONTRATANTE pagará o valor mensal de R$ 48.000,00, mediante nota fiscal, em até 30 dias do recebimento.
+3.2. O valor será reajustado anualmente pelo índice previsto no Anexo II.
+
+CLÁUSULA 4 — MULTA
+4.1. O descumprimento do nível de serviço da cláusula 2.1 por dois meses consecutivos sujeitará a CONTRATADA à multa de 10% sobre o valor mensal.
+4.2. A multa não exclui a indenização por perdas e danos comprovados.
+
+CLÁUSULA 5 — VIGÊNCIA E RENOVAÇÃO
+5.1. O contrato vigorará de {{d:-300}} até {{d:+45}}.
+5.2. A renovação será automática por iguais períodos, salvo manifestação contrária de qualquer das partes com antecedência mínima de 30 (trinta) dias do término, ou seja, até {{d:+15}}.
+
+CLÁUSULA 6 — RESCISÃO
+6.1. Qualquer das partes poderá promover a rescisão mediante aviso prévio de 60 dias.
+6.2. Em caso de descumprimento reiterado das obrigações, a parte prejudicada poderá rescindir o contrato de imediato, sem prejuízo da multa da cláusula 4.
+
+CLÁUSULA 7 — SEGURO
+7.1. A CONTRATADA obriga-se a manter seguro de carga vigente durante todo o contrato e deverá apresentar a apólice renovada até {{d:+20}}.
+
+CLÁUSULA 8 — FORO
+8.1. Fica eleito o foro da comarca de Curitiba/PR.
+
+Curitiba, {{e:-300}}.
+
+Assinaturas: representantes fictícios das partes.
+Dados fictícios — documento criado apenas para demonstração.

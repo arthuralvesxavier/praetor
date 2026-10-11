@@ -68,12 +68,23 @@ export async function enqueueJob(
 }
 
 /** Atomically claims up to `limit` due jobs (status -> running, attempts + 1). */
-export async function claimJobs(workerId: string, limit: number, db: DbOrTx = getDb()): Promise<JobRow[]> {
+export async function claimJobs(
+  workerId: string,
+  limit: number,
+  db: DbOrTx = getDb(),
+  opts: { organizationId?: string } = {},
+): Promise<JobRow[]> {
   const n = Math.max(1, Math.min(100, Math.floor(limit)));
   const due = db
     .select({ id: jobs.id })
     .from(jobs)
-    .where(and(eq(jobs.status, "queued"), lte(jobs.runAt, sql`now()`)))
+    .where(
+      and(
+        eq(jobs.status, "queued"),
+        lte(jobs.runAt, sql`now()`),
+        opts.organizationId ? eq(jobs.organizationId, opts.organizationId) : undefined,
+      ),
+    )
     .orderBy(asc(jobs.runAt), asc(jobs.createdAt))
     .limit(n)
     .for("update", { skipLocked: true });

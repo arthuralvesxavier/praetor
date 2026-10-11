@@ -29,9 +29,29 @@ const REDACT = new Set([
   "documentNumber",
 ]);
 
+/** PostgreSQL SQLSTATE of a driver error, or of the cause of a DrizzleQueryError. */
+function dbErrorCode(error: Error): string | null {
+  for (let e: unknown = error, i = 0; e && i < 4; e = (e as { cause?: unknown }).cause, i++) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)) return code;
+  }
+  return null;
+}
+
+/**
+ * Database errors embed the failed SQL and its bound parameters (titles, facts,
+ * extracted text…) in `message`, so only their name and SQLSTATE are logged.
+ */
+function isDatabaseError(error: Error): boolean {
+  return error.name === "DrizzleQueryError" || (dbErrorCode(error) !== null && "severity" in error);
+}
+
 function sanitize(value: unknown, depth = 0): unknown {
   if (depth > 4) return "[depth]";
-  if (value instanceof Error) return { name: value.name, message: value.message.slice(0, 500) };
+  if (value instanceof Error) {
+    if (isDatabaseError(value)) return { name: value.name, code: dbErrorCode(value), message: "[consulta ao banco omitida]" };
+    return { name: value.name, message: value.message.slice(0, 500) };
+  }
   if (Array.isArray(value)) return value.slice(0, 20).map((v) => sanitize(v, depth + 1));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};

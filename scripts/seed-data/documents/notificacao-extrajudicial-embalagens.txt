@@ -1,0 +1,24 @@
+NOTIFICAÇÃO EXTRAJUDICIAL
+(documento fictício — ambiente de demonstração do Praetor)
+
+Notificante: Embalagens Modelo Ltda.
+Notificada: Grupo Aurora Exemplo S.A.
+Data de recebimento: {{d:-12}}
+Contrato de referência: Contrato de Fornecimento de Embalagens (cópia em poder das partes)
+
+Prezados,
+
+Pela presente notificação extrajudicial, a NOTIFICANTE comunica que há faturas vencidas e não pagas referentes aos pedidos dos últimos dois meses, no valor total de R$ 186.400,00, o que caracteriza inadimplência nos termos do contrato de fornecimento.
+
+A NOTIFICANTE informa ainda que considera descumprimento contratual o cancelamento unilateral de pedidos já em produção, ocorrido em {{d:-25}}, e que pretende cobrar a multa contratual de 5% sobre o valor dos pedidos cancelados, além de indenização pelos custos de matéria-prima adquirida.
+
+Diante disso, a NOTIFICANTE requer:
+1. o pagamento das faturas em aberto até {{e:+5}};
+2. a apresentação, no mesmo prazo, de proposta formal para os pedidos cancelados.
+
+Não havendo resposta no prazo indicado, a NOTIFICANTE avaliará a rescisão do contrato e a adoção das medidas judiciais cabíveis, inclusive o protesto dos títulos.
+
+São Paulo, {{e:-13}}.
+
+Departamento Jurídico da Embalagens Modelo Ltda. (pessoa fictícia)
+Dados fictícios — documento criado apenas para demonstração.

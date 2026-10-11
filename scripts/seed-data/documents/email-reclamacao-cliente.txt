@@ -1,0 +1,19 @@
+De: cliente.exemplo@email-ficticio.example
+Para: atendimento@aurora-exemplo.example
+Data: {{d:-6}}
+Assunto: Pedido atrasado há 20 dias — vou registrar reclamação no Procon
+
+(mensagem fictícia — ambiente de demonstração do Praetor)
+
+Boa tarde,
+
+Comprei uma geladeira no site de vocês (pedido nº EX-000000, número fictício) com entrega prometida para 15 dias e até hoje nada. Já liguei quatro vezes e cada atendente me dá uma previsão diferente.
+
+Publiquei o caso nas redes sociais e muitas pessoas comentaram que passaram pela mesma situação. Se o produto não for entregue até {{d:+3}} vou registrar reclamação no Procon e pedir indenização pelos transtornos, porque precisei comprar comida pronta durante todo esse período.
+
+Peço também o reembolso do frete de R$ 189,90, já que o prazo não foi cumprido.
+
+Atenciosamente,
+Cliente Exemplo (pessoa fictícia)
+
+Dados fictícios — mensagem criada apenas para demonstração.

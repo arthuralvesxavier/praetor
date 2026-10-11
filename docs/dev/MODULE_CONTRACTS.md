@@ -89,6 +89,17 @@ Values are the English enum ids from `@/domain/enums`.
 | `/ia` | `status`, `tipo`, `desatualizadas=1`, `pagina` |
 | `/admin/auditoria` | `acao`, `entidade`, `usuario`, `de`, `ate`, `pagina` |
 
+Additional params implemented by the modules (additive; the table above still holds):
+
+| Route | Extra params |
+|---|---|
+| `/preventivo` | `risco` may repeat (`?risco=high&risco=critical`) |
+| `/contratos` | `vencidos=1` (status expired, or active with end date before today) |
+| `/prazos` | `q` (Prazos and Tarefas tabs); Tarefas tab: `status`, `tipo`, `situacao=vencidos`; `prazo=<id>` / `tarefa=<id>` highlight an item |
+| `/ia` | `aba=analises\|perguntas\|solicitar\|uso` |
+| `/admin/usuarios`, `/admin/equipes`, `/admin/unidades` | `q`, `perfil`, `unidade`, `situacao=ativos\|inativos`, `pagina` |
+| Detail pages | `aba=<tab>` (e.g. `/processos/[id]?aba=partes`); `/processos/[id]?vinculo=falhou` shows the occurrence-link warning |
+
 ## Cross-module service APIs
 
 ### documents — `@/modules/documents/service`

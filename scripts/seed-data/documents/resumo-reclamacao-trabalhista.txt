@@ -1,0 +1,31 @@
+RESUMO INTERNO — RECLAMAÇÃO TRABALHISTA (HORAS EXTRAS E ADICIONAL NOTURNO)
+(documento fictício — ambiente de demonstração do Praetor)
+
+Processo: 0001001-00.2025.5.02.0000 (número fictício)
+Reclamante: Fulano Exemplo da Silva (pessoa fictícia)
+Cargo: Operador de logística — Matriz São Paulo
+Período contratual: {{d:-1400}} a {{d:-260}}
+Valor atribuído à causa: R$ 185.000,00
+
+Pedidos principais
+- Horas extras além da 8ª diária e da 44ª semanal, com reflexos.
+- Adicional noturno e hora noturna reduzida.
+- Indenização por danos morais alegados em razão de jornada exaustiva.
+
+Pontos de defesa levantados pela equipe
+- Os cartões de ponto do período foram localizados apenas parcialmente (faltam os meses de dezembro e janeiro do último ano trabalhado).
+- Acordo de compensação de jornada: não informado.
+- Testemunhas indicadas pela empresa: a definir.
+
+Andamento
+- Contestação apresentada dentro do prazo.
+- Audiência de instrução designada para {{d:+12}}, às 13h30.
+- Perícia contábil não determinada até o momento.
+
+Próximos passos definidos pela equipe
+1. Reunir os cartões de ponto faltantes com o RH até {{d:+5}}.
+2. Confirmar as testemunhas e orientar sobre a audiência.
+3. Revisar a provisão após a audiência.
+
+Elaborado pela equipe de Contencioso Trabalhista (pessoas fictícias).
+Dados fictícios — documento criado apenas para demonstração.

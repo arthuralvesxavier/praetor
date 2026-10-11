@@ -1,0 +1,25 @@
+MEMORANDO INTERNO — INCIDENTE COM DADOS PESSOAIS
+(documento fictício — ambiente de demonstração do Praetor)
+
+Para: Jurídico, Compliance e Privacidade
+De: Tecnologia da Informação — Matriz São Paulo
+Data: {{d:-9}}
+Classificação: confidencial
+
+1. Descrição do evento
+Em {{d:-10}}, um colaborador da área comercial enviou por e-mail, por engano, uma planilha com dados cadastrais de aproximadamente 1.200 clientes (nome, e-mail, telefone e cidade) para um destinatário externo de empresa parceira. Não havia dados financeiros nem documentos de identificação na planilha.
+
+2. Medidas já adotadas
+- Solicitação formal ao destinatário para exclusão do arquivo, com pedido de confirmação por escrito.
+- Bloqueio temporário de envio de anexos externos pela equipe comercial.
+
+3. Pontos em aberto
+- Confirmação de exclusão pelo destinatário: pendente de informação.
+- Número exato de titulares afetados: não informado.
+- Avaliação sobre a necessidade de comunicação à autoridade nacional e aos titulares: a definir.
+
+4. Avaliação preliminar da TI
+O evento caracteriza possível vazamento de dados pessoais de baixo volume. Recomenda-se registrar o incidente e concluir, com o encarregado de dados (DPO), a avaliação de risco aos titulares até {{d:+2}}.
+
+Equipe de TI (pessoas fictícias).
+Dados fictícios — documento criado apenas para demonstração.

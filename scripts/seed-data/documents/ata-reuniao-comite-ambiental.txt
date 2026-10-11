@@ -1,0 +1,24 @@
+ATA DE REUNIÃO — COMITÊ DE MEIO AMBIENTE E SEGURANÇA
+(documento fictício — ambiente de demonstração do Praetor)
+
+Data: {{d:-4}}
+Local: Centro de Distribuição — Curitiba (sala de reuniões)
+Participantes: Gerência do CD, Segurança do Trabalho, Jurídico (Ricardo Menezes) e consultoria ambiental (pessoas fictícias)
+
+Pauta
+1. Autuação ambiental preliminar recebida pelo CD.
+2. Situação das licenças e do plano de gerenciamento de resíduos.
+
+Deliberações
+1. A fiscalização municipal lavrou termo de constatação preliminar apontando armazenamento irregular de resíduos de embalagens no pátio externo. O documento menciona possível multa e prazo para apresentação de defesa contado do recebimento em {{d:-6}}; a contagem deve ser conferida pelo Jurídico no próprio termo.
+2. A gerência informou que o contrato com a empresa de coleta venceu e não foi renovado a tempo, o que gerou o acúmulo de material.
+3. O Jurídico orientou reunir fotos, comprovantes de coleta e as licenças vigentes, e contratar laudo técnico independente.
+4. A consultoria deverá entregar o laudo até {{d:+7}}.
+5. Licença de operação do CD: válida até {{d:+150}} (cópia arquivada pela gerência).
+
+Encaminhamentos
+- Jurídico: preparar a defesa administrativa até {{d:+9}}.
+- Gerência do CD: regularizar a coleta e enviar comprovantes até {{d:+3}}.
+
+Ata lavrada pela secretaria do comitê (pessoa fictícia).
+Dados fictícios — documento criado apenas para demonstração.

@@ -15,6 +15,8 @@ export function proxy(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.search = "";
+    // The login page validates `next` with safeNextPath before using it.
+    if (request.method === "GET" && pathname !== "/") url.searchParams.set("next", pathname + request.nextUrl.search);
     return NextResponse.redirect(url);
   }
   return NextResponse.next();

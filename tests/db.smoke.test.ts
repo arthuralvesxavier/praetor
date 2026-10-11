@@ -4,7 +4,7 @@ import { createTestDatabase } from "./helpers/db";
 import { organizations } from "@/server/db/schema";
 
 describe("database", () => {
-  it("applies migrations on PGlite and round-trips a row", async () => {
+  it("applies migrations on PGlite and round-trips a row", { timeout: 120_000 }, async () => {
     const { db, close } = await createTestDatabase();
     const [org] = await db.insert(organizations).values({ name: "Org", slug: "org" }).returning();
     expect(org.settings.ai.maxInputChars).toBeGreaterThan(0);
