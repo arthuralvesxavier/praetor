@@ -6,16 +6,21 @@ import { bool, int, moneyCents, str, strOrNull } from "@/lib/form";
 import { requireActionContext } from "@/server/auth/session";
 import { AppError, toActionError, type ActionResult } from "@/server/lib/errors";
 import { logger } from "@/server/lib/logger";
+import { KEEP_RECURRENCE } from "./obligations";
 import type { ContractInput, ObligationInput, ObligationPatch } from "./schemas";
 import {
   addObligation,
   createContract,
   deleteContract,
+  fulfillObligation,
   getObligationContractId,
   removeObligation,
+  renewContract,
+  terminateContract,
   updateContract,
   updateObligation,
 } from "./service";
+
 
 function fail(action: string, err: unknown) {
   if (!(err instanceof AppError)) logger.error("action_failed", { action, error: err });
@@ -53,7 +58,8 @@ function obligationFromForm(fd: FormData): ObligationInput {
     description: str(fd, "description") ?? "",
     responsibleId: strOrNull(fd, "responsibleId"),
     dueDate: strOrNull(fd, "dueDate"),
-    recurrence: strOrNull(fd, "recurrence"),
+    // Legacy free text is kept when the user does not pick a recurrence (patch semantics).
+    recurrence: str(fd, "recurrence") === KEEP_RECURRENCE ? undefined : strOrNull(fd, "recurrence"),
     status: (str(fd, "status") ?? "pending") as ObligationInput["status"],
   };
 }
@@ -149,6 +155,25 @@ export async function setObligationStatusAction(_prev: ActionResult | null, form
   }
 }
 
+/**
+ * "Cumprir" / "Cumprir e gerar próxima". Expects `id` and the checkbox
+ * `generateNext` (recurring obligations).
+ */
+export async function fulfillObligationAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  try {
+    const ctx = await requireActionContext("contract:write");
+    const result = await fulfillObligation(ctx, idFrom(formData), { generateNext: bool(formData, "generateNext") });
+    revalidatePath(`/contratos/${result.contractId}`);
+    revalidatePath("/contratos");
+    return {
+      ok: true,
+      message: result.nextDueDate ? "Obrigação cumprida e próxima ocorrência gerada." : "Obrigação marcada como cumprida.",
+    };
+  } catch (err) {
+    return fail("fulfillObligation", err);
+  }
+}
+
 export async function removeObligationAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   try {
     const ctx = await requireActionContext("contract:write");
@@ -158,5 +183,45 @@ export async function removeObligationAction(_prev: ActionResult | null, formDat
     return { ok: true, message: "Obrigação removida." };
   } catch (err) {
     return fail("removeObligation", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Renewal / termination
+// ---------------------------------------------------------------------------
+
+/** "Registrar renovação". Expects `id`, `newEndDate`, optional `amendmentDocumentId` and `note`. */
+export async function renewContractAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  try {
+    const ctx = await requireActionContext("contract:write");
+    const id = idFrom(formData);
+    await renewContract(ctx, id, {
+      newEndDate: str(formData, "newEndDate") ?? "",
+      amendmentDocumentId: strOrNull(formData, "amendmentDocumentId"),
+      note: strOrNull(formData, "note"),
+    });
+    revalidatePath(`/contratos/${id}`);
+    revalidatePath("/contratos");
+    return { ok: true, message: "Renovação registrada." };
+  } catch (err) {
+    return fail("renewContract", err);
+  }
+}
+
+/** "Registrar rescisão". Expects `id`, `terminationDate`, optional `documentId` and `note`. */
+export async function terminateContractAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  try {
+    const ctx = await requireActionContext("contract:write");
+    const id = idFrom(formData);
+    await terminateContract(ctx, id, {
+      terminationDate: str(formData, "terminationDate") ?? "",
+      documentId: strOrNull(formData, "documentId"),
+      note: strOrNull(formData, "note"),
+    });
+    revalidatePath(`/contratos/${id}`);
+    revalidatePath("/contratos");
+    return { ok: true, message: "Rescisão registrada." };
+  } catch (err) {
+    return fail("terminateContract", err);
   }
 }

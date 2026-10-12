@@ -1,5 +1,4 @@
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { OriginBadge } from "@/components/ui/origin-badge";
 import { PriorityBadge } from "@/components/ui/priority-badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -9,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { deleteTaskAction } from "../actions";
 import type { TaskListItem } from "../service";
 import { TaskStatusForm } from "./task-status-form";
-import { TaskStatusBadge, WorkLinks } from "./work-badges";
+import { TaskStatusBadge, WorkLinks, WorkOriginBadge } from "./work-badges";
 
 export function DeleteTaskButton({ task }: { task: TaskListItem }) {
   if (!task.canDelete) return null;
@@ -109,7 +108,7 @@ export function TaskTable({
                   {t.assigneeName ?? <span className="text-muted-foreground">Sem responsável</span>}
                 </TableCell>
                 <TableCell>
-                  <OriginBadge origin={t.origin} />
+                  <WorkOriginBadge origin={t.origin} sourceKind={t.sourceKind} />
                 </TableCell>
                 <TableCell>
                   {canWrite ? (

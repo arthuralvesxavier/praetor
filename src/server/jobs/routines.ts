@@ -175,7 +175,7 @@ async function runDeadlineAlerts(rc: RoutineContext): Promise<string> {
       severity: "info",
       title: `Prazo sugerido pela IA aguardando validação: ${title}`,
       message:
-        `A data ${formatDate(d.dueDate)} foi sugerida a partir de uma análise de IA e só passará a contar como prazo ` +
+        `A data ${formatDate(d.dueDate)} foi sugerida por uma análise de IA ou pela análise preliminar (simulação) e só passará a contar como prazo ` +
         "depois de validada por uma pessoa com permissão.",
       entityType: "deadline",
       entityId: d.id,

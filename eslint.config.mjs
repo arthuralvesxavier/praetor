@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local scratch data, backups and storage (gitignored).
+    ".data/**",
+    "storage/**",
   ]),
 ]);
 

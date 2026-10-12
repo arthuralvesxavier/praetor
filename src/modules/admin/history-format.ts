@@ -1,4 +1,8 @@
+import { formatBp } from "@/domain/contingency";
 import {
+  ASSIGNMENT_METHOD_LABELS,
+  CASE_BRIEF_STATUS_LABELS,
+  CLOSURE_REASON_LABELS,
   CONFIDENTIALITY_LABELS,
   CONTRACT_STATUS_LABELS,
   CONTRACT_TYPE_LABELS,
@@ -6,21 +10,39 @@ import {
   DEADLINE_KIND_LABELS,
   DEADLINE_STATUS_LABELS,
   DOCUMENT_CATEGORY_LABELS,
+  EMAIL_STATUS_LABELS,
+  EMAIL_TEMPLATE_LABELS,
   ENTITY_TYPE_LABELS,
+  GUARANTEE_KIND_LABELS,
+  GUARANTEE_STATUS_LABELS,
+  HEARING_KIND_LABELS,
+  HEARING_MODE_LABELS,
+  HEARING_STATUS_LABELS,
+  IMPORT_BATCH_STATUS_LABELS,
+  INSTALLMENT_STATUS_LABELS,
+  INTAKE_SOURCE_LABELS,
+  INTAKE_STATUS_LABELS,
   LEGAL_AREA_LABELS,
+  LIABILITY_NATURE_LABELS,
   LOSS_PROBABILITY_LABELS,
   OCCURRENCE_CATEGORY_LABELS,
   OCCURRENCE_STATUS_LABELS,
   PRIORITY_LABELS,
+  PROCESS_INSTANCE_LABELS,
   PROCESS_PHASE_LABELS,
   PROCESS_STATUS_LABELS,
   RENEWAL_TYPE_LABELS,
   RISK_LEVEL_LABELS,
   ROLE_LABELS,
   ROUTINE_TYPE_LABELS,
+  SETTLEMENT_STATUS_LABELS,
+  SNAPSHOT_STATUS_LABELS,
   TASK_KIND_LABELS,
   TASK_STATUS_LABELS,
   VALIDATION_STATUS_LABELS,
+  VALUATION_KIND_LABELS,
+  VALUATION_SOURCE_LABELS,
+  VALUATION_STATUS_LABELS,
   ANALYSIS_REVIEW_STATUS_LABELS,
   type EntityType,
 } from "@/domain/enums";
@@ -125,6 +147,72 @@ const FIELD_LABELS: Record<string, string> = {
   contractExpirationDays: "Alerta de vencimento de contratos (dias)",
   closedRecordRetentionDays: "Retenção de registros encerrados (dias)",
   auditLogRetentionDays: "Retenção da auditoria (dias)",
+  upcomingHearingDays: "Alerta de audiências (dias)",
+  installmentDueDays: "Alerta de parcelas de acordo (dias)",
+  // v2 — carteira (processos)
+  companyId: "Empresa",
+  lawFirmId: "Escritório externo",
+  instance: "Instância",
+  processClass: "Classe processual",
+  city: "Cidade",
+  state: "UF",
+  phaseDetail: "Fase (como na fonte)",
+  liquidatedAmountCents: "Valor liquidado / apurado",
+  riskPercentageBp: "Percentual de risco",
+  closureReason: "Motivo de saída da carteira",
+  needsVerification: "Marcado para verificação",
+  verificationNote: "Nota de verificação",
+  lastMovementAt: "Última movimentação",
+  liabilityNature: "Natureza da responsabilidade",
+  // v2 — empresas e escritórios
+  document: "CNPJ",
+  contactName: "Contato",
+  contactEmail: "E-mail do contato",
+  // v2 — parâmetros
+  riskPercentRemote: "Percentual de provisão — remota",
+  riskPercentPossible: "Percentual de provisão — possível",
+  riskPercentProbable: "Percentual de provisão — provável",
+  confidenceThreshold: "Confiança mínima para conferência em lote",
+  idleGuaranteeDays: "Garantia parada após (dias)",
+  rulesVersion: "Versão das regras de risco",
+  senderName: "Nome do remetente (e-mail simulado)",
+  senderAddress: "Endereço do remetente (fictício)",
+  notifyOnBriefReady: "Avisar quando a análise preliminar ficar pronta",
+  notifyOnAssignment: "Avisar quando um processo for atribuído",
+  autoAssign: "Distribuição automática na entrada",
+  autoGenerateBrief: "Análise preliminar automática (simulada)",
+  autoNotify: "Notificação automática ao advogado (simulada)",
+  // v2 — contingências, acordos, audiências, entrada
+  amountCents: "Valor",
+  totalAmountCents: "Valor total",
+  baseDate: "Data-base",
+  classification: "Classificação de risco",
+  percentageBp: "Percentual aplicado",
+  opinion: "Parecer",
+  effectiveFrom: "Vigente desde",
+  source: "Fonte",
+  reason: "Motivo",
+  confidence: "Confiança",
+  isEstimate: "Estimativa",
+  installmentsCount: "Número de parcelas",
+  proposedAt: "Proposto em",
+  signedAt: "Firmado em",
+  homologatedAt: "Homologado em",
+  paidAt: "Pago em",
+  depositedAt: "Depositado em",
+  statusChangedAt: "Situação alterada em",
+  notes: "Observações",
+  scheduledAt: "Data e hora",
+  mode: "Formato",
+  location: "Local",
+  meetingUrl: "Link da sala virtual",
+  outcome: "Resultado",
+  assignedToId: "Responsável atribuído",
+  assignmentMethod: "Forma de atribuição",
+  period: "Competência",
+  template: "Modelo de e-mail",
+  approvalNote: "Nota da aprovação",
+  rejectionReason: "Motivo da rejeição",
 };
 
 export function fieldLabel(key: string): string {
@@ -140,6 +228,15 @@ function enumLabels(entityType: EntityType | null, key: string): Record<string, 
       if (entityType === "contract") return CONTRACT_STATUS_LABELS;
       if (entityType === "deadline") return DEADLINE_STATUS_LABELS;
       if (entityType === "task") return TASK_STATUS_LABELS;
+      if (entityType === "valuation" || entityType === "risk_assessment") return VALUATION_STATUS_LABELS;
+      if (entityType === "guarantee") return GUARANTEE_STATUS_LABELS;
+      if (entityType === "settlement") return SETTLEMENT_STATUS_LABELS;
+      if (entityType === "hearing") return HEARING_STATUS_LABELS;
+      if (entityType === "case_brief") return CASE_BRIEF_STATUS_LABELS;
+      if (entityType === "intake") return INTAKE_STATUS_LABELS;
+      if (entityType === "snapshot") return SNAPSHOT_STATUS_LABELS;
+      if (entityType === "import_batch") return IMPORT_BATCH_STATUS_LABELS;
+      if (entityType === "email") return EMAIL_STATUS_LABELS;
       return null;
     case "category":
       if (entityType === "occurrence") return OCCURRENCE_CATEGORY_LABELS;
@@ -148,7 +245,31 @@ function enumLabels(entityType: EntityType | null, key: string): Record<string, 
     case "kind":
       if (entityType === "deadline") return DEADLINE_KIND_LABELS;
       if (entityType === "task") return TASK_KIND_LABELS;
+      if (entityType === "valuation") return VALUATION_KIND_LABELS;
+      if (entityType === "guarantee") return GUARANTEE_KIND_LABELS;
+      if (entityType === "hearing") return HEARING_KIND_LABELS;
       return null;
+    case "source":
+      if (entityType === "valuation") return VALUATION_SOURCE_LABELS;
+      if (entityType === "intake") return INTAKE_SOURCE_LABELS;
+      return null;
+    case "mode":
+      if (entityType === "hearing") return HEARING_MODE_LABELS;
+      return null;
+    case "instance":
+      return PROCESS_INSTANCE_LABELS;
+    case "closureReason":
+      return CLOSURE_REASON_LABELS;
+    case "classification":
+      return LOSS_PROBABILITY_LABELS;
+    case "assignmentMethod":
+      return ASSIGNMENT_METHOD_LABELS;
+    case "liabilityNature":
+      return LIABILITY_NATURE_LABELS;
+    case "template":
+      return EMAIL_TEMPLATE_LABELS;
+    case "installmentStatus":
+      return INSTALLMENT_STATUS_LABELS;
     case "type":
       if (entityType === "contract") return CONTRACT_TYPE_LABELS;
       if (entityType === "organization") return ROUTINE_TYPE_LABELS;
@@ -199,6 +320,8 @@ export function formatChangeValue(
   if (typeof value === "boolean") return value ? "Sim" : "Não";
   if (typeof value === "number") {
     if (key.endsWith("Cents")) return formatMoneyCents(value);
+    if (key.endsWith("Bp")) return formatBp(value);
+    if (key.startsWith("riskPercent") || key === "confidenceThreshold") return `${formatNumber(value)}%`;
     return formatNumber(value);
   }
   if (Array.isArray(value)) {
@@ -269,6 +392,80 @@ const ACTION_LABELS: Record<string, string> = {
   "comment.create": "Comentário publicado",
   "comment.delete": "Comentário excluído",
   "alert.resolve": "Alerta resolvido",
+  // v2
+  "legal_process.view_confidential": "Acesso a processo sigiloso",
+  "audit.export": "Exportação da trilha de auditoria",
+  "company.create": "Empresa cadastrada",
+  "company.update": "Empresa alterada",
+  "company.delete": "Empresa excluída",
+  "company.deactivate": "Empresa desativada",
+  "law_firm.create": "Escritório externo cadastrado",
+  "law_firm.update": "Escritório externo alterado",
+  "law_firm.delete": "Escritório externo excluído",
+  "law_firm.deactivate": "Escritório externo desativado",
+  "organization.contingency_settings_update": "Parâmetros de contingência alterados",
+  "organization.email_intake_settings_update": "Configurações de e-mail (simulado) e de entrada alteradas",
+  // v2 — carteira
+  "legal_process.close": "Processo retirado da carteira ativa",
+  "legal_process.reactivate": "Processo reativado na carteira ativa",
+  "legal_process.verification_flag": "Processo marcado para verificação",
+  "legal_process.verification_resolve": "Verificação do processo concluída",
+  "legal_process.export": "Exportação da carteira de processos",
+  "legal_process.instance_add": "Instância incluída no processo",
+  "legal_process.instance_update": "Instância do processo alterada",
+  "legal_process.instance_remove": "Instância removida do processo",
+  "legal_process.assign": "Responsável do processo definido",
+  // v2 — contingências
+  "valuation.propose": "Valor proposto para conferência",
+  "valuation.create": "Valor registrado como oficial",
+  "valuation.approve": "Valor conferido e oficializado",
+  "valuation.correct": "Valor proposto corrigido na conferência",
+  "valuation.reject": "Valor proposto rejeitado",
+  "valuation.extinction": "Quitação registrada (RN-06)",
+  "guarantee.create": "Garantia vinculada",
+  "guarantee.update": "Garantia alterada",
+  "guarantee.status_change": "Situação de garantia alterada",
+  "guarantee.delete": "Garantia excluída",
+  "risk_assessment.create": "Classificação de risco registrada",
+  "risk_assessment.suggest": "Classificação sugerida por regra (não oficial)",
+  "risk_assessment.approve": "Sugestão de classificação aprovada",
+  "risk_assessment.reject": "Sugestão de classificação rejeitada",
+  "settlement.create": "Acordo registrado",
+  "settlement.update_terms": "Termos do acordo alterados",
+  "settlement.status_change": "Situação do acordo alterada",
+  "settlement.update_notes": "Observações do acordo alteradas",
+  "settlement.installment_paid": "Parcela de acordo paga",
+  "settlement.installment_unpaid": "Pagamento de parcela desfeito",
+  "snapshot.generate": "Prévia do fechamento mensal calculada",
+  "snapshot.close": "Competência mensal fechada",
+  "snapshot.export": "Fechamento mensal exportado (CSV)",
+  // v2 — audiências
+  "hearing.create": "Audiência cadastrada",
+  "hearing.update": "Audiência alterada",
+  "hearing.status_change": "Situação de audiência alterada",
+  // v2 — importação
+  "import_batch.analyze": "Planilha analisada para importação",
+  "import_batch.commit": "Importação de planilha confirmada",
+  "import_batch.rollback": "Importação de planilha desfeita",
+  "import_batch.distribute": "Distribuição após importação de planilha",
+  "import_batch.download": "Download da planilha original da importação",
+  // v2 — entrada, distribuição, e-mails
+  "intake.create": "Entrada de processo registrada",
+  "intake.process_start": "Processamento da entrada iniciado",
+  "intake.reprocess": "Reprocessamento da entrada solicitado",
+  "intake.brief_request": "Análise preliminar solicitada na entrada",
+  "intake.email_resend": "E-mail (simulado) reenviado na entrada",
+  "distribution_rule.create": "Regra de distribuição criada",
+  "distribution_rule.update": "Regra de distribuição alterada",
+  "distribution_rule.delete": "Regra de distribuição excluída",
+  "distribution_rule.reorder": "Ordem das regras de distribuição alterada",
+  "email.simulated_send": "Envio de e-mail simulado registrado",
+  "email.resend": "Reenvio de e-mail simulado registrado",
+  // v2 — contratos e relatórios
+  "contract.renew": "Renovação de contrato registrada",
+  "contract.terminate": "Rescisão de contrato registrada",
+  "contract_obligation.fulfill": "Obrigação contratual cumprida",
+  "report.export": "Exportação de relatório",
 };
 
 const VERB_LABELS: Record<string, string> = {
@@ -291,6 +488,35 @@ const VERB_LABELS: Record<string, string> = {
   status_change: "Mudança de situação",
   comment: "Comentário",
   apply: "Aplicação de sugestão",
+  // v2
+  approve: "Aprovação",
+  propose: "Proposta",
+  supersede: "Substituição",
+  commit: "Confirmação",
+  rollback: "Desfazimento",
+  analyze: "Análise",
+  send: "Envio",
+  simulate: "Simulação",
+  assign: "Atribuição",
+  reassign: "Redistribuição",
+  generate: "Geração",
+  regenerate: "Nova geração",
+  edit: "Edição",
+  export: "Exportação",
+  import: "Importação",
+  view_confidential: "Acesso a registro sigiloso",
+  activate: "Ativação",
+  deactivate: "Desativação",
+  release: "Liberação",
+  pay: "Pagamento",
+  cancel: "Cancelamento",
+  reschedule: "Redesignação",
+  notify: "Notificação",
+  receive: "Recebimento",
+  fulfill: "Cumprimento",
+  breach: "Descumprimento",
+  reopen: "Reabertura",
+  submit: "Envio",
 };
 
 const ACTION_PREFIX_ENTITY: Record<string, EntityType> = {
@@ -306,6 +532,23 @@ const ACTION_PREFIX_ENTITY: Record<string, EntityType> = {
   team: "team",
   unit: "unit",
   organization: "organization",
+  // v2
+  company: "company",
+  law_firm: "law_firm",
+  hearing: "hearing",
+  settlement: "settlement",
+  valuation: "valuation",
+  guarantee: "guarantee",
+  risk_assessment: "risk_assessment",
+  case_brief: "case_brief",
+  brief: "case_brief",
+  intake: "intake",
+  email: "email",
+  import_batch: "import_batch",
+  import: "import_batch",
+  snapshot: "snapshot",
+  distribution_rule: "distribution_rule",
+  distribution: "distribution_rule",
 };
 
 /** pt-BR label for a dotted action id such as `legal_process.update`. */

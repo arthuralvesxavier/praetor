@@ -5,18 +5,23 @@ import type {
   DataOrigin,
   DeadlineKind,
   DeadlineStatus,
+  HearingKind,
+  HearingMode,
+  HearingStatus,
   Priority,
   TaskKind,
   TaskStatus,
   ValidationStatus,
 } from "@/domain/enums";
 import { entityHref, normalizePage, type LinkableEntityType, type Page, type Paginated } from "@/domain/entities";
-import { addDaysISO, todayISO } from "@/lib/format";
+import { addDaysISO, toISODate, todayISO } from "@/lib/format";
 import {
   analysisWhere,
+  caseBriefWhere,
   contractWhere,
   deadlineWhere,
   documentWhere,
+  hearingWhere,
   occurrenceWhere,
   processWhere,
   seesConfidential,
@@ -27,10 +32,12 @@ import { assertCan, can } from "@/server/auth/permissions";
 import { getDb, type DbOrTx } from "@/server/db/client";
 import {
   aiAnalyses,
+  caseBriefs,
   contracts,
   deadlines,
   DEFAULT_ORGANIZATION_SETTINGS,
   documents,
+  hearings,
   legalProcesses,
   occurrences,
   organizations,
@@ -40,6 +47,7 @@ import {
 } from "@/server/db/schema";
 import { diffChanges, recordAudit } from "@/server/services/audit";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/lib/errors";
+import { endOfZonedDayExclusive, formatTime, startOfZonedDay } from "@/modules/hearings/time";
 import { monthRange } from "./calendar";
 import {
   CLOSED_TASK_STATUSES,
@@ -73,6 +81,10 @@ import type { WorkLinkOptions, WorkUserOption } from "./types";
  *   filters (overdue / upcoming / open) only consider `not_required | validated`.
  * - The system never computes legal deadlines: dates are typed by a person or
  *   quoted from a source by the AI and then validated by a person.
+ * - Suggestion sources: `sourceAnalysisId` holds either an AI analysis id
+ *   (`ai_analyses`, /ia) or a preliminary case analysis id (`case_briefs`,
+ *   simulated in this version). Both must be visible to ctx; the UI labels
+ *   brief-sourced items "Sugerido pela análise preliminar (simulação)".
  */
 
 export type { DeadlineInput, TaskInput } from "./schemas";
@@ -107,6 +119,8 @@ export type DeadlineListItem = {
   contractId: string | null;
   links: WorkLink[];
   sourceAnalysisId: string | null;
+  /** Kind of record `sourceAnalysisId` points to (AI analysis or preliminary case analysis). */
+  sourceKind: SuggestionSourceKind | null;
   /** Whether the current user can open the source analysis. */
   sourceAnalysisVisible: boolean;
   /** Literal passage quoted by the AI; null when the source analysis is not visible to ctx. */
@@ -143,6 +157,8 @@ export type TaskListItem = {
   documentId: string | null;
   links: WorkLink[];
   sourceAnalysisId: string | null;
+  /** Kind of record `sourceAnalysisId` points to (AI analysis or preliminary case analysis). */
+  sourceKind: SuggestionSourceKind | null;
   completedAt: Date | null;
   createdById: string | null;
   createdAt: Date;
@@ -213,7 +229,33 @@ export type CalendarTask = {
   isOverdue: boolean;
 };
 
-export type CalendarData = { month: string; today: string; deadlines: CalendarDeadline[]; tasks: CalendarTask[] };
+/** Scheduled or held hearing of a visible process (shown on the calendar with its own visual). */
+export type CalendarHearing = {
+  id: string;
+  processId: string;
+  processNumber: string;
+  kind: HearingKind;
+  mode: HearingMode;
+  status: HearingStatus;
+  scheduledAt: Date;
+  /** Calendar day ("YYYY-MM-DD") in America/Sao_Paulo. */
+  date: string;
+  /** "HH:MM" in America/Sao_Paulo. */
+  time: string;
+  location: string | null;
+};
+
+export type CalendarData = {
+  month: string;
+  today: string;
+  deadlines: CalendarDeadline[];
+  tasks: CalendarTask[];
+  /** Empty when the user cannot read processes. */
+  hearings: CalendarHearing[];
+};
+
+/** What a suggestion's `sourceAnalysisId` points to. */
+export type SuggestionSourceKind = "analysis" | "case_brief";
 
 export type { FixedWorkLink, WorkLinkOptions, WorkUserOption } from "./types";
 
@@ -348,28 +390,53 @@ async function resolveUnitId(
   return person?.unitId ?? ctx.unitId ?? null;
 }
 
-/** Source analysis of an AI suggestion must exist in the org and be visible to ctx. */
-async function assertAnalysisVisible(ctx: AuthContext, db: DbOrTx, analysisId: string): Promise<void> {
+/**
+ * Source of an AI suggestion: an AI analysis or a preliminary case analysis
+ * (case brief) of the org, visible to ctx. Returns which kind it is.
+ */
+async function assertSuggestionSourceVisible(ctx: AuthContext, db: DbOrTx, sourceId: string): Promise<SuggestionSourceKind> {
   const [a] = await db
     .select({ id: aiAnalyses.id })
     .from(aiAnalyses)
-    .where(and(eq(aiAnalyses.id, analysisId), analysisWhere(ctx)))
+    .where(and(eq(aiAnalyses.id, sourceId), analysisWhere(ctx)))
     .limit(1);
-  if (!a) {
-    throw new ValidationError("Análise de origem não encontrada.", {
-      sourceAnalysisId: ["Análise de origem não encontrada ou sem permissão de acesso."],
-    });
-  }
+  if (a) return "analysis";
+  const [b] = await db
+    .select({ id: caseBriefs.id })
+    .from(caseBriefs)
+    .where(and(eq(caseBriefs.id, sourceId), caseBriefWhere(ctx)))
+    .limit(1);
+  if (b) return "case_brief";
+  throw new ValidationError("Análise de origem não encontrada.", {
+    sourceAnalysisId: ["Análise de origem não encontrada ou sem permissão de acesso."],
+  });
 }
 
-async function visibleAnalysisIdSet(ctx: AuthContext, ids: string[]): Promise<Set<string>> {
+type SourceInfo = { kind: SuggestionSourceKind; visible: boolean };
+
+/** Kind and visibility of suggestion sources (one query per kind and scope, within the organization). */
+async function resolveSuggestionSources(ctx: AuthContext, ids: string[]): Promise<Map<string, SourceInfo>> {
   const unique = [...new Set(ids)];
-  if (unique.length === 0) return new Set();
-  const rows = await getDb()
-    .select({ id: aiAnalyses.id })
-    .from(aiAnalyses)
-    .where(and(inArray(aiAnalyses.id, unique), analysisWhere(ctx)));
-  return new Set(rows.map((r) => r.id));
+  const out = new Map<string, SourceInfo>();
+  if (unique.length === 0) return out;
+  const db = getDb();
+  const [analysesInOrg, visibleAnalyses, briefsInOrg, visibleBriefs] = await Promise.all([
+    db
+      .select({ id: aiAnalyses.id })
+      .from(aiAnalyses)
+      .where(and(inArray(aiAnalyses.id, unique), eq(aiAnalyses.organizationId, ctx.organizationId))),
+    db.select({ id: aiAnalyses.id }).from(aiAnalyses).where(and(inArray(aiAnalyses.id, unique), analysisWhere(ctx))),
+    db
+      .select({ id: caseBriefs.id })
+      .from(caseBriefs)
+      .where(and(inArray(caseBriefs.id, unique), eq(caseBriefs.organizationId, ctx.organizationId))),
+    db.select({ id: caseBriefs.id }).from(caseBriefs).where(and(inArray(caseBriefs.id, unique), caseBriefWhere(ctx))),
+  ]);
+  const visibleA = new Set(visibleAnalyses.map((r) => r.id));
+  const visibleB = new Set(visibleBriefs.map((r) => r.id));
+  for (const r of analysesInOrg) out.set(r.id, { kind: "analysis", visible: visibleA.has(r.id) });
+  for (const r of briefsInOrg) out.set(r.id, { kind: "case_brief", visible: visibleB.has(r.id) });
+  return out;
 }
 
 type LinkColumnsRow = {
@@ -483,14 +550,15 @@ function selectDeadlineRows(ctx: AuthContext, where: SQL | undefined) {
 type DeadlineRow = Awaited<ReturnType<typeof selectDeadlineRows>>[number];
 
 async function mapDeadlineRows(ctx: AuthContext, rows: DeadlineRow[], today: string): Promise<DeadlineListItem[]> {
-  const visibleAnalyses = await visibleAnalysisIdSet(
+  const sources = await resolveSuggestionSources(
     ctx,
     rows.map((r) => r.d.sourceAnalysisId).filter((id): id is string => Boolean(id)),
   );
   return rows.map((r) => {
     const d = r.d;
     const real = countsAsDeadline(d.validationStatus);
-    const analysisVisible = d.sourceAnalysisId ? visibleAnalyses.has(d.sourceAnalysisId) : false;
+    const source = d.sourceAnalysisId ? sources.get(d.sourceAnalysisId) : undefined;
+    const analysisVisible = source?.visible ?? false;
     return {
       id: d.id,
       title: d.title,
@@ -509,6 +577,7 @@ async function mapDeadlineRows(ctx: AuthContext, rows: DeadlineRow[], today: str
       contractId: d.contractId,
       links: buildLinks({ ...r, processId: d.processId, occurrenceId: d.occurrenceId, contractId: d.contractId }),
       sourceAnalysisId: d.sourceAnalysisId,
+      sourceKind: source?.kind ?? null,
       sourceAnalysisVisible: analysisVisible,
       // The excerpt quotes a source document: only shown when ctx can see the whole analysis (and so its sources).
       sourceExcerpt: d.sourceAnalysisId ? (analysisVisible ? d.sourceExcerpt : null) : d.sourceExcerpt,
@@ -691,7 +760,7 @@ export async function createSuggestedDeadline(ctx: AuthContext, input: Suggested
   assertCan(ctx, "deadline:write");
   const v = parseOrThrow(suggestedDeadlineInputSchema, input);
   return getDb().transaction(async (tx) => {
-    await assertAnalysisVisible(ctx, tx, v.sourceAnalysisId);
+    const sourceKind = await assertSuggestionSourceVisible(ctx, tx, v.sourceAnalysisId);
     await assertLinksVisible(ctx, tx, v);
     const values = {
       organizationId: ctx.organizationId,
@@ -719,14 +788,17 @@ export async function createSuggestedDeadline(ctx: AuthContext, input: Suggested
         action: "deadline.suggest",
         entityType: "deadline",
         entityId: row.id,
-        summary: "Prazo sugerido pela IA registrado para validação humana",
+        summary:
+          sourceKind === "case_brief"
+            ? "Prazo sugerido pela análise preliminar (simulação) registrado para validação humana"
+            : "Prazo sugerido pela IA registrado para validação humana",
         // Title, description and excerpt come from the AI answer / source document: never audited.
         changes: diffChanges(
           null,
           values,
           DEADLINE_AUDIT_FIELDS.filter((f) => f !== "title"),
         ),
-        metadata: { sourceAnalysisId: v.sourceAnalysisId },
+        metadata: { sourceAnalysisId: v.sourceAnalysisId, sourceKind },
       },
       tx,
     );
@@ -886,7 +958,11 @@ function canDeleteTask(ctx: AuthContext, t: { createdById: string | null }): boo
   return seesConfidential(ctx) || (ctx.userId !== null && t.createdById === ctx.userId);
 }
 
-function mapTaskRows(ctx: AuthContext, rows: TaskRow[], today: string): TaskListItem[] {
+async function mapTaskRows(ctx: AuthContext, rows: TaskRow[], today: string): Promise<TaskListItem[]> {
+  const sources = await resolveSuggestionSources(
+    ctx,
+    rows.map((r) => r.t.sourceAnalysisId).filter((id): id is string => Boolean(id)),
+  );
   return rows.map((r) => {
     const t = r.t;
     return {
@@ -913,6 +989,7 @@ function mapTaskRows(ctx: AuthContext, rows: TaskRow[], today: string): TaskList
         documentId: t.documentId,
       }),
       sourceAnalysisId: t.sourceAnalysisId,
+      sourceKind: t.sourceAnalysisId ? (sources.get(t.sourceAnalysisId)?.kind ?? null) : null,
       completedAt: t.completedAt,
       createdById: t.createdById,
       createdAt: t.createdAt,
@@ -953,7 +1030,7 @@ export async function listTasks(ctx: AuthContext, filters: TaskFilters = {}): Pr
     .limit(pageSize)
     .offset(offset);
 
-  return { items: mapTaskRows(ctx, rows, today), total, page, pageSize };
+  return { items: await mapTaskRows(ctx, rows, today), total, page, pageSize };
 }
 
 export async function getTask(ctx: AuthContext, id: string): Promise<TaskListItem> {
@@ -961,7 +1038,7 @@ export async function getTask(ctx: AuthContext, id: string): Promise<TaskListIte
   const taskId = parseIdOrNotFound(id);
   const rows = await selectTaskRows(ctx, and(eq(tasks.id, taskId), taskWhere(ctx))).limit(1);
   if (rows.length === 0) throw new NotFoundError("Tarefa não encontrada ou sem permissão de acesso.");
-  return mapTaskRows(ctx, rows, todayISO())[0];
+  return (await mapTaskRows(ctx, rows, todayISO()))[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -1008,7 +1085,7 @@ export async function createTask(
     throw new ValidationError(undefined, { sourceAnalysisId: ["Informe a análise de origem da sugestão."] });
   }
   return getDb().transaction(async (tx) => {
-    if (v.sourceAnalysisId) await assertAnalysisVisible(ctx, tx, v.sourceAnalysisId);
+    if (v.sourceAnalysisId) await assertSuggestionSourceVisible(ctx, tx, v.sourceAnalysisId);
     await assertLinksVisible(ctx, tx, v);
     const assignee = v.assigneeId ? await assertActiveUser(ctx, tx, v.assigneeId, "assigneeId") : null;
     const unitId = await resolveUnitId(ctx, tx, v.unitId, assignee);
@@ -1126,7 +1203,10 @@ export async function deleteTask(ctx: AuthContext, id: string): Promise<void> {
 // Calendar
 // ---------------------------------------------------------------------------
 
-/** Deadlines (incl. pending AI suggestions, flagged) and tasks due in the month. Cancelled items are omitted. */
+/**
+ * Deadlines (incl. pending AI suggestions, flagged), tasks due in the month and
+ * hearings (scheduled / held) of visible processes. Cancelled items are omitted.
+ */
 export async function listCalendarItems(ctx: AuthContext, month: string): Promise<CalendarData> {
   assertCan(ctx, "deadline:read");
   const m = parseOrThrow(monthSchema, month);
@@ -1175,9 +1255,36 @@ export async function listCalendarItems(ctx: AuthContext, month: string): Promis
         .limit(LIST_HARD_LIMIT)
     : [];
 
+  const hearingRows = can(ctx, "process:read")
+    ? await db
+        .select({
+          id: hearings.id,
+          processId: hearings.processId,
+          processNumber: legalProcesses.number,
+          kind: hearings.kind,
+          mode: hearings.mode,
+          status: hearings.status,
+          scheduledAt: hearings.scheduledAt,
+          location: hearings.location,
+        })
+        .from(hearings)
+        .innerJoin(legalProcesses, eq(legalProcesses.id, hearings.processId))
+        .where(
+          and(
+            hearingWhere(ctx),
+            inArray(hearings.status, ["scheduled", "held"]),
+            gte(hearings.scheduledAt, startOfZonedDay(from)),
+            lt(hearings.scheduledAt, endOfZonedDayExclusive(to)),
+          ),
+        )
+        .orderBy(asc(hearings.scheduledAt), asc(hearings.id))
+        .limit(LIST_HARD_LIMIT)
+    : [];
+
   return {
     month: m,
     today,
+    hearings: hearingRows.map((h) => ({ ...h, date: toISODate(h.scheduledAt), time: formatTime(h.scheduledAt) })),
     deadlines: deadlineRows.map((d) => {
       const real = countsAsDeadline(d.validationStatus);
       return {

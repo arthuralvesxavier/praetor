@@ -4,14 +4,23 @@
  * Praetor design tokens (Tailwind v4 @theme).
  * Light theme only — dark mode is pending (see src/components/ui/README.md).
  *
+ * Identity (client logo, public/brand/): navy #0B1A2C (navy-900) and gold
+ * #D4B062 (gold-400). Gold is a brand accent — never a status or data color.
+ *
  * Usage examples: bg-canvas, bg-surface, border-border, text-foreground,
  * text-muted-foreground, bg-primary hover:bg-primary-hover, bg-primary-50,
- * bg-sidebar, text-sidebar-foreground, bg-ai-50 text-ai-800 (AI content only),
- * outline-ring.
+ * bg-navy-900, text-gold-700, bg-sidebar, text-sidebar-foreground,
+ * bg-ai-50 text-ai-800 (AI content only), outline-ring.
+ *
+ * Contrast (WCAG AA, 4.5:1 for text) — checked pairs:
+ *   foreground / muted-foreground / subtle-foreground on surface and canvas;
+ *   primary-600..950 text on white; gold-700/800 text on white and gold-50;
+ *   sidebar-foreground, sidebar-muted, sidebar-heading and gold-400 on sidebar.
+ *   gold-400/500 on white is decorative only (≈2:1) — never for text.
  */
 @theme {
   /* Surfaces & text */
-  --color-canvas: #f6f7f9;
+  --color-canvas: #f5f6f8;
   --color-surface: #ffffff;
   --color-surface-muted: #f8fafc;
   --color-border: #e2e8f0;
@@ -21,31 +30,57 @@
   --color-subtle-foreground: #64748b;
   --color-ring: #2563eb;
 
-  /* Primary — deep navy */
-  --color-primary: #1f3a5f;
-  --color-primary-hover: #1a314f;
-  --color-primary-active: #152740;
-  --color-primary-foreground: #ffffff;
-  --color-primary-50: #f2f6fa;
-  --color-primary-100: #e3eaf3;
-  --color-primary-200: #c5d4e6;
-  --color-primary-300: #9bb4d2;
-  --color-primary-400: #6a8db8;
-  --color-primary-500: #46699a;
-  --color-primary-600: #2f5282;
-  --color-primary-700: #1f3a5f;
-  --color-primary-800: #1a314f;
-  --color-primary-900: #152740;
-  --color-primary-950: #0f1f33;
+  /* Brand navy (logo arch). 900 is the brand color. */
+  --color-navy-50: #f2f5f9;
+  --color-navy-100: #e3e9f1;
+  --color-navy-200: #c6d2e1;
+  --color-navy-300: #9cb0c9;
+  --color-navy-400: #6b86a8;
+  --color-navy-500: #48658b;
+  --color-navy-600: #324e72;
+  --color-navy-700: #223c5c;
+  --color-navy-800: #152b45;
+  --color-navy-900: #0b1a2c;
+  --color-navy-950: #07111e;
 
-  /* Sidebar — dark navy */
-  --color-sidebar: #0f1f33;
-  --color-sidebar-hover: #182c45;
-  --color-sidebar-active: #1f3a5f;
-  --color-sidebar-border: #1d3049;
-  --color-sidebar-foreground: #e2e8f0;
-  --color-sidebar-muted: #9fb0c6;
-  --color-sidebar-indicator: #7cb4f0;
+  /* Brand gold (logo square). 400 is the brand color; 700+ are the text-safe shades. */
+  --color-gold-50: #fbf8f0;
+  --color-gold-100: #f6eedb;
+  --color-gold-200: #ecdcb3;
+  --color-gold-300: #e2c98a;
+  --color-gold-400: #d4b062;
+  --color-gold-500: #c29a45;
+  --color-gold-600: #a07d32;
+  --color-gold-700: #7f6227;
+  --color-gold-800: #5f4a1f;
+  --color-gold-900: #403216;
+
+  /* Primary — brand navy (buttons, links, selected states) */
+  --color-primary: #0b1a2c;
+  --color-primary-hover: #152b45;
+  --color-primary-active: #07111e;
+  --color-primary-foreground: #ffffff;
+  --color-primary-50: #f2f5f9;
+  --color-primary-100: #e3e9f1;
+  --color-primary-200: #c6d2e1;
+  --color-primary-300: #9cb0c9;
+  --color-primary-400: #6b86a8;
+  --color-primary-500: #48658b;
+  --color-primary-600: #324e72;
+  --color-primary-700: #223c5c;
+  --color-primary-800: #152b45;
+  --color-primary-900: #0b1a2c;
+  --color-primary-950: #07111e;
+
+  /* Sidebar — brand navy with a gold active indicator */
+  --color-sidebar: #0b1a2c;
+  --color-sidebar-hover: #13263d;
+  --color-sidebar-active: #1a3150;
+  --color-sidebar-border: #1b2f48;
+  --color-sidebar-foreground: #e8edf3;
+  --color-sidebar-muted: #a9b8cb;
+  --color-sidebar-heading: #8d9fb7;
+  --color-sidebar-indicator: #d4b062;
 
   /* AI accent — violet, reserved for AI-generated content */
   --color-ai-50: #f5f3ff;
@@ -59,11 +94,11 @@
   --color-ai-800: #5b21b6;
   --color-ai-900: #4c1d95;
 
-  /* Brand accent (logo pediment, editorial details). Never used for status or data. */
+  /* Legacy aliases of the gold scale (kept for existing classes). brass-600 is text-safe (= gold-700). */
   --color-brass-300: #e2c98a;
   --color-brass-400: #d4b062;
-  --color-brass-500: #c8a24a;
-  --color-brass-600: #a8842f;
+  --color-brass-500: #c29a45;
+  --color-brass-600: #7f6227;
 
   /* Motion */
   --animate-fade-in: fade-in 150ms ease-out;
@@ -74,6 +109,9 @@
   --animate-caret: caret 1s steps(1) infinite;
   --animate-draw: draw 1.6s ease-out both;
   --animate-progress: progress linear both;
+  --animate-mark-trace: mark-trace 1.8s cubic-bezier(0.45, 0, 0.2, 1) both;
+  --animate-mark-fill: mark-fill 1.8s ease-out both;
+  --animate-mark-square: mark-square 2s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 
   @keyframes fade-in {
     from {
@@ -140,6 +178,41 @@
     }
     to {
       transform: translateX(0);
+    }
+  }
+  /* LogoMark `animated`: trace the arch outline, fill it, then land the gold square. */
+  @keyframes mark-trace {
+    0% {
+      stroke-dashoffset: 1;
+      opacity: 1;
+    }
+    60% {
+      stroke-dashoffset: 0;
+      opacity: 1;
+    }
+    100% {
+      stroke-dashoffset: 0;
+      opacity: 0;
+    }
+  }
+  @keyframes mark-fill {
+    0%,
+    40% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+  @keyframes mark-square {
+    0%,
+    55% {
+      opacity: 0;
+      transform: translateY(-60%) scale(0.6);
+    }
+    100% {
+      opacity: 1;
+      transform: none;
     }
   }
 }

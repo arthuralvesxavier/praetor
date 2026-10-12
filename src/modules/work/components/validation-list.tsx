@@ -4,13 +4,12 @@ import { Callout } from "@/components/ui/callout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DescriptionList } from "@/components/ui/description-list";
 import { EmptyState } from "@/components/ui/empty-state";
-import { OriginBadge } from "@/components/ui/origin-badge";
 import { formatDate, formatDateTime, formatRelativeDays } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { DeadlineListItem } from "../service";
 import type { WorkUserOption } from "../types";
 import { ValidationForm } from "./validation-form";
-import { DeadlineKindBadge, WorkLinks } from "./work-badges";
+import { DeadlineKindBadge, WorkLinks, WorkOriginBadge } from "./work-badges";
 
 /** Quoted passage of the source (plain text, whitespace preserved). */
 export function SourceExcerpt({ item }: { item: DeadlineListItem }) {
@@ -20,7 +19,11 @@ export function SourceExcerpt({ item }: { item: DeadlineListItem }) {
         <blockquote className="rounded-md border-l-4 border-ai-400 bg-ai-50 px-3 py-2 text-sm whitespace-pre-wrap text-slate-800">
           {item.sourceExcerpt}
         </blockquote>
-        <figcaption className="text-xs text-muted-foreground">Trecho da fonte citado pela IA (texto literal do documento).</figcaption>
+        <figcaption className="text-xs text-muted-foreground">
+          {item.sourceKind === "case_brief"
+            ? "Trecho do documento citado pela análise preliminar (simulação). Confira no documento antes de validar."
+            : "Trecho da fonte citado pela IA (texto literal do documento)."}
+        </figcaption>
       </figure>
     );
   }
@@ -37,12 +40,13 @@ export function SourceExcerpt({ item }: { item: DeadlineListItem }) {
 export function SourceAnalysisLink({ item }: { item: DeadlineListItem }) {
   if (!item.sourceAnalysisId) return null;
   if (!item.sourceAnalysisVisible) return <span className="text-muted-foreground">Análise de origem sem acesso</span>;
+  const isBrief = item.sourceKind === "case_brief";
   return (
     <Link
-      href={`/ia/analises/${item.sourceAnalysisId}`}
+      href={isBrief ? `/analises-preliminares/${item.sourceAnalysisId}` : `/ia/analises/${item.sourceAnalysisId}`}
       className="inline-flex items-center gap-1 font-medium text-ai-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
     >
-      Abrir análise de origem
+      {isBrief ? "Abrir análise preliminar (simulação)" : "Abrir análise de origem"}
       <ExternalLink aria-hidden="true" className="size-3.5" />
     </Link>
   );
@@ -80,7 +84,7 @@ export function ValidationList({
         <EmptyState
           icon={<ShieldCheck />}
           title="Nenhum prazo aguardando validação"
-          description="Quando uma análise de IA identificar uma data em um documento e alguém registrá-la como sugestão, ela aparecerá aqui."
+          description="Quando uma análise de IA ou uma análise preliminar (simulação) indicar uma data em um documento e alguém registrá-la como sugestão, ela aparecerá aqui."
         />
       ) : (
         <ul className="flex flex-col gap-4" aria-label="Prazos sugeridos pela IA aguardando validação">
@@ -98,7 +102,7 @@ export function ValidationList({
                       {d.title}
                     </CardTitle>
                     <div className="flex flex-wrap items-center gap-2">
-                      <OriginBadge origin={d.origin} validationStatus={d.validationStatus} />
+                      <WorkOriginBadge origin={d.origin} validationStatus={d.validationStatus} sourceKind={d.sourceKind} />
                       <DeadlineKindBadge kind={d.kind} />
                     </div>
                   </CardHeader>

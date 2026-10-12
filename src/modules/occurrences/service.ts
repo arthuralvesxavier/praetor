@@ -26,6 +26,13 @@ import {
   type CreateOccurrenceInput,
   type UpdateOccurrenceInput,
 } from "./schemas";
+import {
+  isPreventiveIndicatorKey,
+  parsePreventiveOrigin,
+  PREVENTIVE_MARKER_PREFIX,
+  preventiveOriginMarker,
+  type PreventiveOrigin,
+} from "./preventive-origin";
 
 /**
  * Preventive legal work (jurídico preventivo): occurrences that are not
@@ -64,6 +71,8 @@ export type OccurrenceListItem = {
   reportedOn: string;
   isConfidential: boolean;
   linkedProcess: LinkedProcessSummary | null;
+  /** Set when the occurrence was created from a preventive-intelligence indicator. */
+  preventiveOrigin: PreventiveOrigin | null;
 };
 
 export type OccurrenceDetail = OccurrenceListItem & {
@@ -90,6 +99,8 @@ export type OccurrenceFilters = {
   riskLevel?: RiskLevel | RiskLevel[];
   unitId?: string;
   responsibleId?: string;
+  /** Only occurrences created from a preventive-intelligence indicator. */
+  origin?: "preventive_intel";
 } & Page;
 
 export type OccurrenceStats = {
@@ -98,6 +109,16 @@ export type OccurrenceStats = {
   highRisk: number;
   converted: number;
   total: number;
+  /** Created from a preventive-intelligence indicator. */
+  fromPreventiveIntel: number;
+};
+
+/** Latest visible occurrence created from an indicator (see `findPreventiveIntelOccurrences`). */
+export type PreventiveIntelOccurrence = {
+  id: string;
+  title: string;
+  status: OccurrenceStatus;
+  createdAt: Date;
 };
 
 export type ActionPlanProgress = {
@@ -236,8 +257,12 @@ function toListItem(r: SelectedRow): OccurrenceListItem {
           status: r.processStatus,
         }
       : null,
+    preventiveOrigin: parsePreventiveOrigin(o.facts),
   };
 }
+
+/** ILIKE pattern matching the origin marker of indicator-created occurrences (no user input involved). */
+const PREVENTIVE_MARKER_PATTERN = `%${escapeLike(PREVENTIVE_MARKER_PREFIX)}%`;
 
 type OccurrenceRow = typeof occurrences.$inferSelect;
 
@@ -302,6 +327,7 @@ export async function listOccurrences(ctx: AuthContext, filters: OccurrenceFilte
     risk && risk.length > 0 ? inArray(occurrences.riskLevel, risk) : undefined,
     f.unitId ? eq(occurrences.unitId, f.unitId) : undefined,
     f.responsibleId ? eq(occurrences.responsibleId, f.responsibleId) : undefined,
+    f.origin === "preventive_intel" ? ilike(occurrences.facts, PREVENTIVE_MARKER_PATTERN) : undefined,
     pattern
       ? or(
           ilike(occurrences.title, pattern),
@@ -334,6 +360,9 @@ export async function getOccurrenceStats(ctx: AuthContext): Promise<OccurrenceSt
       actionPlan: sql<number>`count(*) filter (where ${s} = 'action_plan')`.mapWith(Number),
       highRisk: sql<number>`count(*) filter (where ${occurrences.riskLevel} in ('high', 'critical'))`.mapWith(Number),
       converted: sql<number>`count(*) filter (where ${s} = 'converted_to_process')`.mapWith(Number),
+      fromPreventiveIntel: sql<number>`count(*) filter (where ${occurrences.facts} ilike ${PREVENTIVE_MARKER_PATTERN})`.mapWith(
+        Number,
+      ),
     })
     .from(occurrences)
     .where(occurrenceWhere(ctx));
@@ -343,7 +372,49 @@ export async function getOccurrenceStats(ctx: AuthContext): Promise<OccurrenceSt
     actionPlan: row?.actionPlan ?? 0,
     highRisk: row?.highRisk ?? 0,
     converted: row?.converted ?? 0,
+    fromPreventiveIntel: row?.fromPreventiveIntel ?? 0,
   };
+}
+
+/**
+ * Latest occurrence visible to ctx created from each preventive-intelligence
+ * indicator key (keys without an occurrence are absent from the map). When
+ * `openOnly`, resolved occurrences are ignored.
+ */
+export async function findPreventiveIntelOccurrences(
+  ctx: AuthContext,
+  keys: readonly string[],
+  opts: { openOnly?: boolean } = {},
+): Promise<Map<string, PreventiveIntelOccurrence>> {
+  assertCan(ctx, "occurrence:read");
+  const valid = [...new Set(keys)].filter(isPreventiveIndicatorKey);
+  const found = new Map<string, PreventiveIntelOccurrence>();
+  if (valid.length === 0) return found;
+
+  const rows = await getDb()
+    .select({
+      id: occurrences.id,
+      title: occurrences.title,
+      status: occurrences.status,
+      facts: occurrences.facts,
+      createdAt: occurrences.createdAt,
+    })
+    .from(occurrences)
+    .where(
+      and(
+        occurrenceWhere(ctx),
+        opts.openOnly ? notInArray(occurrences.status, ["resolved"]) : undefined,
+        or(...valid.map((k) => ilike(occurrences.facts, `%${escapeLike(preventiveOriginMarker(k))}%`))),
+      ),
+    )
+    .orderBy(desc(occurrences.createdAt), desc(occurrences.id));
+
+  for (const r of rows) {
+    const origin = parsePreventiveOrigin(r.facts);
+    if (!origin || !valid.includes(origin.key) || found.has(origin.key)) continue;
+    found.set(origin.key, { id: r.id, title: r.title, status: r.status, createdAt: r.createdAt });
+  }
+  return found;
 }
 
 export async function getOccurrence(ctx: AuthContext, id: string): Promise<OccurrenceDetail> {

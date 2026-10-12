@@ -1,4 +1,16 @@
-import { Building2, ChevronRight, KeyRound, ScrollText, Settings, Sparkles, Users, UsersRound } from "lucide-react";
+import {
+  Briefcase,
+  Building2,
+  Cable,
+  ChevronRight,
+  Factory,
+  KeyRound,
+  ScrollText,
+  Settings,
+  Sparkles,
+  Users,
+  UsersRound,
+} from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -23,9 +35,12 @@ const SECTION_ICONS: Partial<Record<AdminSectionKey, ReactNode>> = {
   usuarios: <Users aria-hidden="true" />,
   equipes: <UsersRound aria-hidden="true" />,
   unidades: <Building2 aria-hidden="true" />,
+  empresas: <Factory aria-hidden="true" />,
+  escritorios: <Briefcase aria-hidden="true" />,
   permissoes: <KeyRound aria-hidden="true" />,
   auditoria: <ScrollText aria-hidden="true" />,
   configuracoes: <Settings aria-hidden="true" />,
+  integracoes: <Cable aria-hidden="true" />,
 };
 
 export default async function AdminOverviewPage() {
@@ -50,11 +65,11 @@ export default async function AdminOverviewPage() {
     <>
       <PageHeader
         title="Administração"
-        description="Usuários, equipes, unidades, permissões, auditoria e configurações da organização."
+        description="Usuários, equipes, unidades, empresas, escritórios externos, permissões, auditoria, configurações e integrações da organização."
       />
       <AdminNav ctx={ctx} active="visao-geral" />
 
-      {overview.users || ai ? (
+      {overview.users || overview.companies || ai ? (
         <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {overview.users ? (
             <StatCard
@@ -81,6 +96,24 @@ export default async function AdminOverviewPage() {
               hint={`${formatNumber(overview.units.total)} cadastradas`}
               href="/admin/unidades"
               icon={<Building2 aria-hidden="true" />}
+            />
+          ) : null}
+          {overview.companies ? (
+            <StatCard
+              label="Empresas ativas"
+              value={formatNumber(overview.companies.active)}
+              hint={`${formatNumber(overview.companies.total)} cadastradas`}
+              href="/admin/empresas"
+              icon={<Factory aria-hidden="true" />}
+            />
+          ) : null}
+          {overview.lawFirms ? (
+            <StatCard
+              label="Escritórios externos ativos"
+              value={formatNumber(overview.lawFirms.active)}
+              hint={`${formatNumber(overview.lawFirms.total)} cadastrados`}
+              href="/admin/escritorios"
+              icon={<Briefcase aria-hidden="true" />}
             />
           ) : null}
           {ai ? (

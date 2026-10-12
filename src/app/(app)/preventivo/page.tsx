@@ -1,6 +1,7 @@
-import { CircleDot, ClipboardList, Lock, Plus, Scale, TriangleAlert } from "lucide-react";
+import { ArrowRight, CircleDot, ClipboardList, Lightbulb, Lock, Plus, Scale, TriangleAlert } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -29,19 +30,22 @@ import {
   RISK_LEVELS,
   type RiskLevel,
 } from "@/domain/enums";
-import { formatDate, formatMoneyCents, formatNumber, truncate } from "@/lib/format";
+import { formatDate, formatMoneyCents, formatNumber, pluralize, truncate } from "@/lib/format";
 import { optionsFromLabels } from "@/lib/options";
 import { enumParam, hasAnyParam, idParam, pageParam, param, paramList } from "@/lib/search-params";
 import { OCCURRENCE_STATUS_TONES } from "@/lib/tones";
 import { can } from "@/server/auth/permissions";
 import { requirePageContext } from "@/server/auth/session";
 import { listUnitOptions, listUserOptions } from "@/modules/admin/service";
+import { PREVENTIVE_ORIGIN_LABEL } from "@/modules/occurrences/preventive-origin";
 import { getOccurrenceStats, listOccurrences, type OccurrenceListItem } from "@/modules/occurrences/service";
 
 export const metadata: Metadata = { title: "Jurídico preventivo" };
 
 const BASE_PATH = "/preventivo";
-const FILTER_KEYS = ["q", "status", "categoria", "risco", "unidade", "responsavel"] as const;
+const FILTER_KEYS = ["q", "status", "categoria", "risco", "unidade", "responsavel", "origem"] as const;
+/** `origem=inteligencia-preventiva`: occurrences created from a preventive-intelligence indicator. */
+const ORIGIN_PARAM_VALUE = "inteligencia-preventiva";
 
 function LinkedProcessCell({ linked }: { linked: OccurrenceListItem["linkedProcess"] }) {
   if (!linked) return <span className="text-muted-foreground">—</span>;
@@ -71,6 +75,7 @@ export default async function PreventivoPage(props: PageProps<"/preventivo">) {
     riskLevel: risk.length > 0 ? risk : undefined,
     unitId: idParam(sp, "unidade"),
     responsibleId: idParam(sp, "responsavel"),
+    origin: param(sp, "origem") === ORIGIN_PARAM_VALUE ? ("preventive_intel" as const) : undefined,
     page: pageParam(sp),
   };
 
@@ -82,6 +87,7 @@ export default async function PreventivoPage(props: PageProps<"/preventivo">) {
   ]);
   const filtered = hasAnyParam(sp, FILTER_KEYS);
   const canWrite = can(ctx, "occurrence:write");
+  const canSeeIntel = can(ctx, "preventive_intel:read");
 
   return (
     <div className="space-y-6">
@@ -131,6 +137,43 @@ export default async function PreventivoPage(props: PageProps<"/preventivo">) {
         />
       </section>
 
+      {canSeeIntel ? (
+        <section
+          aria-label="Inteligência preventiva"
+          className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="flex min-w-0 gap-3">
+            <span
+              aria-hidden="true"
+              className="inline-flex size-9 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary [&_svg]:size-4"
+            >
+              <Lightbulb />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-slate-900">Inteligência preventiva</p>
+              <p className="text-sm text-muted-foreground">
+                Indicadores calculados a partir da carteira de processos (recorrência, concentração, fases) e sugestões
+                ilustrativas que podem virar ocorrências e planos de ação.
+                {stats.fromPreventiveIntel > 0
+                  ? ` ${pluralize(stats.fromPreventiveIntel, "ocorrência originada", "ocorrências originadas")} de indicadores.`
+                  : ""}
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {stats.fromPreventiveIntel > 0 ? (
+              <ButtonLink href={`/preventivo?origem=${ORIGIN_PARAM_VALUE}`} variant="ghost">
+                Ver originadas
+              </ButtonLink>
+            ) : null}
+            <ButtonLink href="/inteligencia-preventiva" variant="outline">
+              Abrir indicadores
+              <ArrowRight aria-hidden="true" />
+            </ButtonLink>
+          </div>
+        </section>
+      ) : null}
+
       <FilterBar
         basePath={BASE_PATH}
         defaultQuery={param(sp, "q")}
@@ -167,6 +210,13 @@ export default async function PreventivoPage(props: PageProps<"/preventivo">) {
           label="Responsável"
           options={userOptions.map((u) => ({ value: u.id, label: u.name }))}
           defaultValue={filters.responsibleId}
+        />
+        <FilterSelect
+          name="origem"
+          label="Origem"
+          options={[{ value: ORIGIN_PARAM_VALUE, label: "Inteligência preventiva" }]}
+          defaultValue={filters.origin ? ORIGIN_PARAM_VALUE : undefined}
+          placeholder="Todas"
         />
       </FilterBar>
 
@@ -224,6 +274,13 @@ export default async function PreventivoPage(props: PageProps<"/preventivo">) {
                         {o.title}
                       </Link>
                       {o.unitName ? <span className="block text-xs text-muted-foreground">{o.unitName}</span> : null}
+                      {o.preventiveOrigin ? (
+                        <span className="mt-1 block">
+                          <Badge tone="primary" icon={<Lightbulb />}>
+                            {PREVENTIVE_ORIGIN_LABEL}
+                          </Badge>
+                        </span>
+                      ) : null}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">{OCCURRENCE_CATEGORY_LABELS[o.category]}</TableCell>
                     <TableCell>

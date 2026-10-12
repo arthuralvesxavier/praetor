@@ -11,11 +11,13 @@ import {
   createUnit,
   createUser,
   deleteUnit,
+  getUnit,
   getUser,
   listAuditLogs,
   listEntityHistory,
   listRoutines,
   listUnitOptions,
+  listUnits,
   listUserOptions,
   listUsers,
   resetUserPassword,
@@ -203,6 +205,17 @@ describe("teams and units", () => {
     const { id: empty } = await createUnit(adminA(), { name: "Unidade Vazia" });
     expect(await deleteUnit(adminA(), empty)).toEqual({ outcome: "deleted" });
     await expect(deleteUnit(adminA(), ids.unitB)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("counts the users and teams of each unit", async () => {
+    await createTeam(adminA(), { name: "Equipe SP", unitId: ids.re });
+    const list = await listUnits(adminA(), {});
+    const sp = list.items.find((u) => u.id === ids.sp)!;
+    const re = list.items.find((u) => u.id === ids.re)!;
+    expect(sp).toMatchObject({ userCount: 2, teamCount: 0 }); // lawyer + Ana
+    expect(re).toMatchObject({ userCount: 0, teamCount: 1 });
+    const detail = await getUnit(adminA(), ids.sp);
+    expect(detail.references).toMatchObject({ users: 2, teams: 0 });
   });
 });
 

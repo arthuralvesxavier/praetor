@@ -30,7 +30,8 @@ const RISK_KEYWORDS: { term: string; severity: Severity; action: string }[] = [
   { term: "reclamação", severity: "medium", action: "Registrar a reclamação, responder ao reclamante e avaliar a causa raiz." },
 ];
 
-const INJECTION_PHRASES = [
+/** Accent-folded phrases that indicate instructions aimed at an AI inside a source (shared with the case-brief simulation). */
+export const INJECTION_PHRASES: readonly string[] = [
   "ignore as instrucoes",
   "ignore todas as instrucoes",
   "ignore as orientacoes",

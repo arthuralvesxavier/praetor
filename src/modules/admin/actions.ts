@@ -19,6 +19,8 @@ import {
   runRoutineNow,
   setUnitActive,
   setUserActive,
+  updateContingencySettings,
+  updateEmailIntakeSettings,
   updateOrganizationSettings,
   updateRoutine,
   updateTeam,
@@ -72,6 +74,7 @@ export async function createUserAction(_prev: Result<{ id: string }> | null, fd:
       email: str(fd, "email") ?? "",
       role: (str(fd, "role") ?? "") as Role,
       unitId: str(fd, "unitId") ?? null,
+      lawFirmId: str(fd, "lawFirmId") ?? null,
       jobTitle: str(fd, "jobTitle") ?? null,
       password: (fd.get("password") as string | null) ?? "",
       teamIds: strings(fd, "teamIds"),
@@ -90,6 +93,7 @@ export async function updateUserAction(_prev: Result | null, fd: FormData): Prom
       name: str(fd, "name") ?? "",
       role: (str(fd, "role") ?? "") as Role,
       unitId: str(fd, "unitId") ?? null,
+      lawFirmId: str(fd, "lawFirmId") ?? null,
       jobTitle: str(fd, "jobTitle") ?? null,
       isActive: bool(fd, "isActive"),
       teamIds: strings(fd, "teamIds"),
@@ -226,11 +230,48 @@ export async function updateOrganizationSettingsAction(_prev: Result | null, fd:
       autoAnalyzeOnUpload: bool(fd, "autoAnalyzeOnUpload"),
       upcomingDeadlineDays: num(fd, "upcomingDeadlineDays"),
       contractExpirationDays: num(fd, "contractExpirationDays"),
+      upcomingHearingDays: num(fd, "upcomingHearingDays"),
+      installmentDueDays: num(fd, "installmentDueDays"),
       closedRecordRetentionDays: num(fd, "closedRecordRetentionDays"),
       auditLogRetentionDays: num(fd, "auditLogRetentionDays"),
     });
     // The organization name and alert thresholds appear across the app.
     revalidatePath("/", "layout");
+    return { ok: true, message: "Configurações salvas." };
+  });
+}
+
+export async function updateContingencySettingsAction(_prev: Result | null, fd: FormData): Promise<Result> {
+  return run("updateContingencySettings", "admin:organization", async (ctx) => {
+    const { rulesVersion, rulesVersionChanged } = await updateContingencySettings(ctx, {
+      riskRemote: num(fd, "riskRemote"),
+      riskPossible: num(fd, "riskPossible"),
+      riskProbable: num(fd, "riskProbable"),
+      confidenceThreshold: num(fd, "confidenceThreshold"),
+      idleGuaranteeDays: num(fd, "idleGuaranteeDays"),
+    });
+    revalidatePath("/", "layout");
+    return {
+      ok: true,
+      message: rulesVersionChanged
+        ? `Parâmetros salvos. Os percentuais de risco passaram para a versão ${rulesVersion} das regras.`
+        : "Parâmetros salvos.",
+    };
+  });
+}
+
+export async function updateEmailIntakeSettingsAction(_prev: Result | null, fd: FormData): Promise<Result> {
+  return run("updateEmailIntakeSettings", "admin:organization", async (ctx) => {
+    await updateEmailIntakeSettings(ctx, {
+      senderName: str(fd, "senderName") ?? "",
+      senderAddress: str(fd, "senderAddress") ?? "",
+      notifyOnBriefReady: bool(fd, "notifyOnBriefReady"),
+      notifyOnAssignment: bool(fd, "notifyOnAssignment"),
+      autoAssign: bool(fd, "autoAssign"),
+      autoGenerateBrief: bool(fd, "autoGenerateBrief"),
+      autoNotify: bool(fd, "autoNotify"),
+    });
+    revalidatePath("/admin/configuracoes");
     return { ok: true, message: "Configurações salvas." };
   });
 }

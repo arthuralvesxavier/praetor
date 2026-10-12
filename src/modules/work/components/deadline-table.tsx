@@ -1,12 +1,11 @@
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { OriginBadge } from "@/components/ui/origin-badge";
 import { PriorityBadge } from "@/components/ui/priority-badge";
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDate, formatRelativeDays } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { setDeadlineStatusAction } from "../actions";
 import type { DeadlineListItem } from "../service";
-import { DeadlineKindBadge, DeadlineSituationBadge, WorkLinks } from "./work-badges";
+import { DeadlineKindBadge, DeadlineSituationBadge, WorkLinks, WorkOriginBadge } from "./work-badges";
 
 /** Concluir / Cancelar (open) or Reabrir (done/cancelled). Only for real deadlines. */
 export function DeadlineStatusActions({ item, size = "sm" }: { item: DeadlineListItem; size?: "sm" | "md" }) {
@@ -129,7 +128,7 @@ export function DeadlineTable({
                   {d.responsibleName ?? <span className="text-muted-foreground">Sem responsável</span>}
                 </TableCell>
                 <TableCell>
-                  <OriginBadge origin={d.origin} validationStatus={d.validationStatus} />
+                  <WorkOriginBadge origin={d.origin} validationStatus={d.validationStatus} sourceKind={d.sourceKind} />
                 </TableCell>
                 <TableCell>
                   <DeadlineSituationBadge status={d.status} validationStatus={d.validationStatus} isOverdue={d.isOverdue} />

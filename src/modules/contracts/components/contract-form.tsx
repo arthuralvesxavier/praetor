@@ -171,7 +171,7 @@ export function ContractForm({
         <FormField
           label="Antecedência de aviso (dias)"
           htmlFor="renewalNoticeDays"
-          hint="Dias antes do término para notificar renovação ou rescisão."
+          hint="Conforme a cláusula do contrato. A data-limite para aviso de renovação ou rescisão é o término menos estes dias."
           error={err("renewalNoticeDays")}
         >
           <Input

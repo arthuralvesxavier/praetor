@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CONFIDENTIALITY_LABELS, DOCUMENT_CATEGORY_LABELS, type TextExtractionStatus } from "@/domain/enums";
-import { formatDate, formatDateTime, formatFileSize, formatNumber } from "@/lib/format";
+import { formatDate, formatDateTime, formatFileSize, formatNumber, pluralize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { EntityHistory } from "@/modules/admin/components/entity-history";
 import { AnalysisPanel } from "@/modules/analyses/components/analysis-panel";
@@ -111,9 +111,23 @@ export default async function DocumentPage(props: PageProps<"/documentos/[id]">)
                 columns={2}
                 items={[
                   { label: "Categoria", value: DOCUMENT_CATEGORY_LABELS[doc.category] },
-                  { label: "Confidencialidade", value: CONFIDENTIALITY_LABELS[doc.confidentiality] },
+                  {
+                    label: "Confidencialidade",
+                    value:
+                      doc.category === "sensitive_health"
+                        ? `${CONFIDENTIALITY_LABELS[doc.confidentiality]} — dado sensível de saúde, sempre restrito`
+                        : CONFIDENTIALITY_LABELS[doc.confidentiality],
+                  },
                   { label: "Vínculos", value: <DocumentLinks links={doc.links} />, full: true },
                   { label: "Versão atual", value: doc.currentVersionNumber > 0 ? `v${doc.currentVersionNumber}` : null },
+                  {
+                    label: "Páginas (versão atual)",
+                    value: current?.pageCount
+                      ? pluralize(current.pageCount, "página", "páginas")
+                      : current?.extractionStatus === "pending"
+                        ? "Aguardando extração"
+                        : "Não se aplica ao formato",
+                  },
                   { label: "Enviado por", value: doc.uploadedByName },
                   { label: "Criado em", value: formatDateTime(doc.createdAt) },
                   { label: "Atualizado em", value: formatDateTime(doc.updatedAt) },
@@ -142,6 +156,7 @@ export default async function DocumentPage(props: PageProps<"/documentos/[id]">)
                     <TableHead>Versão</TableHead>
                     <TableHead>Arquivo</TableHead>
                     <TableHead>Tamanho</TableHead>
+                    <TableHead className="text-right">Páginas</TableHead>
                     <TableHead>SHA-256</TableHead>
                     <TableHead>Enviada por</TableHead>
                     <TableHead>Extração</TableHead>
@@ -166,6 +181,7 @@ export default async function DocumentPage(props: PageProps<"/documentos/[id]">)
                         </div>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">{formatFileSize(v.sizeBytes)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{v.pageCount ?? "—"}</TableCell>
                       <TableCell>
                         <code className="text-xs" title={`SHA-256 completo: ${v.sha256}`}>
                           {v.sha256.slice(0, 12)}…

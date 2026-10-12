@@ -1,7 +1,6 @@
 import { CalendarClock, ListChecks } from "lucide-react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { OriginBadge } from "@/components/ui/origin-badge";
 import { PriorityBadge } from "@/components/ui/priority-badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { DEADLINE_KIND_LABELS, TASK_KIND_LABELS, type DeadlineKind, type TaskKind } from "@/domain/enums";
@@ -16,7 +15,7 @@ import { DeadlineStatusActions } from "./deadline-table";
 import { DeleteTaskButton } from "./task-table";
 import { TaskStatusForm } from "./task-status-form";
 import { NewDeadlineDialog, NewTaskDialog } from "./work-dialogs";
-import { DeadlineSituationBadge, TaskStatusBadge } from "./work-badges";
+import { DeadlineSituationBadge, TaskStatusBadge, WorkOriginBadge } from "./work-badges";
 
 export type EntityWorkItemsProps = {
   ctx: AuthContext;
@@ -77,7 +76,7 @@ function DeadlineRow({ d, today, canWrite }: { d: DeadlineListItem; today: strin
         </p>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           <DeadlineSituationBadge status={d.status} validationStatus={d.validationStatus} isOverdue={d.isOverdue} />
-          <OriginBadge origin={d.origin} validationStatus={d.validationStatus} />
+          <WorkOriginBadge origin={d.origin} validationStatus={d.validationStatus} sourceKind={d.sourceKind} />
           <PriorityBadge priority={d.priority} />
         </div>
       </div>
@@ -143,7 +142,7 @@ function TaskRow({ t, today, canWrite }: { t: TaskListItem; today: string; canWr
           ) : (
             <TaskStatusBadge status={t.status} isOverdue={t.isOverdue} />
           )}
-          <OriginBadge origin={t.origin} />
+          <WorkOriginBadge origin={t.origin} sourceKind={t.sourceKind} />
           <PriorityBadge priority={t.priority} />
         </div>
       </div>

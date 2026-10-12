@@ -87,6 +87,45 @@ export function noticeDeadline(endDate: string | null | undefined, renewalNotice
   return addDaysISO(endDate, -Math.trunc(renewalNoticeDays));
 }
 
+/** How the notice date is labeled everywhere (contractual term arithmetic, not a legal opinion). */
+export const NOTICE_DATE_LABEL = "Data-limite para aviso";
+export const NOTICE_DATE_HINT = "data-limite para aviso conforme cláusula informada (término − antecedência de aviso)";
+
+export type NoticeState = "none" | "later" | "soon" | "passed";
+export type NoticeInfo = { date: string | null; days: number | null; state: NoticeState };
+
+/**
+ * Renewal/termination notice of a contract on `today`:
+ * - `date` = end date − notice days, when the notice days are informed (> 0);
+ * - `state` only applies to ACTIVE contracts still in force (end date today or later):
+ *   `soon` when the notice date is within `windowDays` (today included), `passed`
+ *   when it is already behind (the contract keeps running), `later` otherwise;
+ *   every other case is `none`.
+ */
+export function contractNoticeInfo(
+  contract: VigencyInput & { renewalNoticeDays: number | null },
+  today: string,
+  windowDays: number = DEFAULT_CONTRACT_EXPIRATION_DAYS,
+): NoticeInfo {
+  const days = contract.renewalNoticeDays;
+  const date = days !== null && days > 0 ? noticeDeadline(contract.endDate, days) : null;
+  if (!date || contract.status !== "active" || !isIsoDate(contract.endDate) || contract.endDate < today) {
+    return { date, days: date ? daysUntil(date, today) : null, state: "none" };
+  }
+  const remaining = daysUntil(date, today);
+  const state: NoticeState = remaining < 0 ? "passed" : remaining <= Math.max(0, windowDays) ? "soon" : "later";
+  return { date, days: remaining, state };
+}
+
+/** "aviso hoje", "aviso em 12 dias", "prazo de aviso encerrado há 3 dias". */
+export function noticeRelativeText(days: number | null): string | null {
+  if (days === null) return null;
+  if (days === 0) return "aviso hoje";
+  if (days === 1) return "aviso amanhã";
+  if (days > 1) return `aviso em ${days} dias`;
+  return days === -1 ? "prazo de aviso encerrado há 1 dia" : `prazo de aviso encerrado há ${-days} dias`;
+}
+
 /** Short relative text for a vigency badge: "vence hoje", "vence em 12 dias", "venceu há 3 dias". */
 export function vigencyRelativeText(days: number | null): string | null {
   if (days === null) return null;

@@ -12,8 +12,17 @@ import { PageHeader } from "@/components/ui/page-header";
 import { RiskBadge } from "@/components/ui/risk-badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { LinkTabs } from "@/components/ui/tabs";
-import { CONTRACT_STATUS_LABELS, CONTRACT_TYPE_LABELS } from "@/domain/enums";
-import { formatDate, formatDateTime, formatDocument, formatMoneyCents, todayISO } from "@/lib/format";
+import { CONTRACT_STATUS_LABELS, CONTRACT_TYPE_LABELS, DOCUMENT_CATEGORY_LABELS } from "@/domain/enums";
+import {
+  formatDate,
+  formatDateTime,
+  formatDocument,
+  formatMoneyCents,
+  formatRelativeDays,
+  pluralize,
+  todayISO,
+  truncate,
+} from "@/lib/format";
 import { buildHref, param } from "@/lib/search-params";
 import { CONTRACT_STATUS_TONES } from "@/lib/tones";
 import { EntityHistory } from "@/modules/admin/components/entity-history";
@@ -21,11 +30,22 @@ import { listUserOptions } from "@/modules/admin/service";
 import { AnalysisPanel } from "@/modules/analyses/components/analysis-panel";
 import { CommentThread } from "@/modules/comments/components/comment-thread";
 import { deleteContractAction } from "@/modules/contracts/actions";
+import { ContractLifecycleCard } from "@/modules/contracts/components/lifecycle-card";
+import { RenewContractDialog, TerminateContractDialog } from "@/modules/contracts/components/lifecycle-dialogs";
+import { NoticeBadge } from "@/modules/contracts/components/notice-badge";
 import { ObligationDialog } from "@/modules/contracts/components/obligation-dialog";
 import { ObligationsTable } from "@/modules/contracts/components/obligations-table";
 import { VigencyBadge } from "@/modules/contracts/components/vigency-badge";
 import { VigencyCard } from "@/modules/contracts/components/vigency-card";
-import { getContract, type ContractDetail, type LinkedRecordSummary } from "@/modules/contracts/service";
+import {
+  getContract,
+  listContractDocumentOptions,
+  listContractLifecycle,
+  type ContractDetail,
+  type ContractDocumentOption,
+  type ContractLifecycleEvent,
+  type LinkedRecordSummary,
+} from "@/modules/contracts/service";
 import { EntityDocuments } from "@/modules/documents/components/entity-documents";
 import { EntityWorkItems } from "@/modules/work/components/entity-work-items";
 import type { UserContext } from "@/server/auth/context";
@@ -52,7 +72,7 @@ export default async function ContractDetailPage(props: PageProps<"/contratos/[i
 
   const tabs: { key: TabKey; label: string; count?: number | null; visible: boolean }[] = [
     { key: "visao-geral", label: "Visão geral", visible: true },
-    { key: "obrigacoes", label: "Obrigações", count: contract.obligations.length, visible: true },
+    { key: "obrigacoes", label: "Obrigações", count: contract.pendingObligations, visible: true },
     { key: "documentos", label: "Documentos e versões", visible: can(ctx, "document:read") },
     { key: "analises", label: "Análises de IA", visible: can(ctx, "analysis:read") },
     { key: "prazos", label: "Prazos e tarefas", visible: can(ctx, "deadline:read") || can(ctx, "task:read") },
@@ -81,6 +101,13 @@ export default async function ContractDetailPage(props: PageProps<"/contratos/[i
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge label={CONTRACT_STATUS_LABELS[contract.status]} tone={CONTRACT_STATUS_TONES[contract.status]} />
             <VigencyBadge vigency={contract.vigency} daysToEnd={contract.daysToEnd} />
+            <NoticeBadge notice={contract.notice} />
+            {contract.overdueObligations > 0 ? (
+              <StatusBadge
+                tone="danger"
+                label={pluralize(contract.overdueObligations, "obrigação em atraso", "obrigações em atraso", { withCount: true })}
+              />
+            ) : null}
             <RiskBadge level={contract.riskLevel} withPrefix />
             {contract.isConfidential ? (
               <Badge tone="primary" icon={<Lock />}>
@@ -151,8 +178,24 @@ async function TabContent({
   const today = todayISO();
 
   switch (active) {
-    case "visao-geral":
-      return <Overview contract={contract} today={today} />;
+    case "visao-geral": {
+      const canRenew = canWrite && (contract.status === "active" || contract.status === "expired") && contract.endDate !== null;
+      const canTerminate = canWrite && contract.status === "active";
+      const [lifecycle, documents] = await Promise.all([
+        listContractLifecycle(ctx, contract.id),
+        canRenew || canTerminate ? listContractDocumentOptions(ctx, contract.id) : Promise.resolve([]),
+      ]);
+      return (
+        <Overview
+          contract={contract}
+          today={today}
+          lifecycle={lifecycle}
+          documents={documents}
+          canRenew={canRenew}
+          canTerminate={canTerminate}
+        />
+      );
+    }
 
     case "obrigacoes": {
       const users = canWrite ? (await listUserOptions(ctx)).map((u) => ({ value: u.id, label: u.name })) : [];
@@ -163,7 +206,8 @@ async function TabContent({
           >
             <CardTitle>Obrigações contratuais</CardTitle>
             <CardDescription>
-              Entregas, pagamentos e demais compromissos assumidos. A situação é atualizada manualmente pela equipe.
+              Entregas, pagamentos e demais compromissos assumidos. “Em atraso” é calculado pelo vencimento; nas obrigações
+              recorrentes, “Cumprir e gerar próxima” cria a ocorrência seguinte.
             </CardDescription>
           </CardHeader>
           <CardContent className="px-0">
@@ -222,10 +266,26 @@ function LinkedRecord({ record, hrefBase }: { record: LinkedRecordSummary; hrefB
   );
 }
 
-function Overview({ contract, today }: { contract: ContractDetail; today: string }) {
+function Overview({
+  contract,
+  today,
+  lifecycle,
+  documents,
+  canRenew,
+  canTerminate,
+}: {
+  contract: ContractDetail;
+  today: string;
+  lifecycle: ContractLifecycleEvent[];
+  documents: ContractDocumentOption[];
+  canRenew: boolean;
+  canTerminate: boolean;
+}) {
+  const documentOptions = documents.map((d) => ({ value: d.id, label: `${d.title} (${DOCUMENT_CATEGORY_LABELS[d.category]})` }));
+  const next = contract.nextObligation;
   return (
     <div className="grid gap-6 lg:grid-cols-3">
-      <div className="flex flex-col gap-6 lg:col-span-2">
+      <div className="flex min-w-0 flex-col gap-6 lg:col-span-2">
         <VigencyCard
           startDate={contract.startDate}
           endDate={contract.endDate}
@@ -236,6 +296,23 @@ function Overview({ contract, today }: { contract: ContractDetail; today: string
           daysToEnd={contract.daysToEnd}
           expirationDays={contract.expirationDays}
           today={today}
+          actions={
+            canRenew || canTerminate ? (
+              <>
+                {canRenew && contract.endDate ? (
+                  <RenewContractDialog contractId={contract.id} currentEndDate={contract.endDate} documents={documentOptions} />
+                ) : null}
+                {canTerminate ? (
+                  <TerminateContractDialog
+                    contractId={contract.id}
+                    today={today}
+                    openObligations={contract.pendingObligations}
+                    documents={documentOptions}
+                  />
+                ) : null}
+              </>
+            ) : null
+          }
         />
         <Card>
           <CardHeader>
@@ -261,10 +338,10 @@ function Overview({ contract, today }: { contract: ContractDetail; today: string
         </Card>
       </div>
 
-      <div className="flex flex-col gap-6">
+      <div className="flex min-w-0 flex-col gap-6">
         <Card>
           <CardHeader>
-            <CardTitle as="h3">Responsabilidade</CardTitle>
+            <CardTitle as="h3">Responsabilidade e obrigações</CardTitle>
           </CardHeader>
           <CardContent>
             <DescriptionList
@@ -272,11 +349,32 @@ function Overview({ contract, today }: { contract: ContractDetail; today: string
               items={[
                 { label: "Responsável", value: contract.responsibleName },
                 { label: "Unidade", value: contract.unitName },
-                { label: "Obrigações pendentes", value: String(contract.pendingObligations) },
+                {
+                  label: "Obrigações em aberto",
+                  value:
+                    contract.pendingObligations === 0
+                      ? "Nenhuma"
+                      : `${contract.pendingObligations}${contract.overdueObligations > 0 ? ` (${contract.overdueObligations} em atraso)` : ""}`,
+                },
+                {
+                  label: "Próxima obrigação",
+                  value: next ? (
+                    <Link
+                      href={`/contratos/${contract.id}?aba=obrigacoes`}
+                      className="font-medium text-primary-700 underline-offset-2 hover:underline"
+                    >
+                      {truncate(next.description, 80)}
+                      <span className={next.status === "overdue" ? "block text-xs text-red-700" : "block text-xs text-muted-foreground"}>
+                        {next.dueDate ? `${formatDate(next.dueDate)} · ${formatRelativeDays(next.dueDate, today)}` : "Sem data"}
+                      </span>
+                    </Link>
+                  ) : null,
+                },
               ]}
             />
           </CardContent>
         </Card>
+        <ContractLifecycleCard events={lifecycle} />
         <Card>
           <CardHeader>
             <CardTitle as="h3">Vínculos</CardTitle>

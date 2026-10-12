@@ -52,7 +52,7 @@ type Tab = (typeof TABS)[number];
 const SITUATION_KEYS = ["vencidos", "proximos", "abertos"] as const;
 
 const DEADLINE_COUNTING_NOTICE =
-  "Prazos sugeridos pela IA dependem de validação humana. O sistema não calcula prazos processuais: confirme as regras de contagem aplicáveis (dias úteis, feriados, suspensões de expediente, forma de intimação).";
+  "Prazos sugeridos pela IA ou pela análise preliminar (simulação) dependem de validação humana. O sistema não calcula prazos processuais: confirme as regras de contagem aplicáveis (dias úteis, feriados, suspensões de expediente, forma de intimação).";
 
 async function loadOrNull<T>(fn: () => Promise<T>): Promise<T | null> {
   try {
@@ -91,7 +91,7 @@ export default async function PrazosPage(props: PageProps<"/prazos">) {
     <>
       <PageHeader
         title="Prazos e tarefas"
-        description="Calendário, controle de prazos, tarefas da equipe e validação humana de prazos sugeridos pela IA."
+        description="Calendário com audiências, prazos e tarefas, controle de prazos e validação humana de prazos sugeridos pela IA ou pela análise preliminar (simulação)."
         breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Prazos e tarefas" }]}
         actions={
           <>

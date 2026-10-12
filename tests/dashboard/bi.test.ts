@@ -1,9 +1,11 @@
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildBuckets, mondayOf, parseBiFilters, periodRange, processesHref, type BiFilters } from "@/modules/dashboard/bi-filters";
 import { getBiData } from "@/modules/dashboard/bi-service";
+import { legalProcesses } from "@/server/db/schema";
 import { daysFromToday, makeDeadline, makeOccurrence, makeProcess, setupFixture, today, type Fixture } from "../helpers/fixtures";
 
-const ALL: BiFilters = { period: "12m", unitId: null, area: null, responsibleId: null };
+const ALL: BiFilters = { period: "12m", unitId: null, area: null, responsibleId: null, companyId: null };
 
 describe("BI filters (pure)", () => {
   it("parses URL params and falls back to 12 months", () => {
@@ -31,7 +33,7 @@ describe("BI filters (pure)", () => {
   });
 
   it("builds drill-down links that keep the dimension filters", () => {
-    const f: BiFilters = { period: "90d", unitId: "11111111-1111-1111-1111-111111111111", area: "labor", responsibleId: null };
+    const f: BiFilters = { period: "90d", unitId: "11111111-1111-1111-1111-111111111111", area: "labor", responsibleId: null, companyId: null };
     expect(processesHref(f, { status: "active", risco: "high" })).toBe(
       "/processos?status=active&area=labor&risco=high&unidade=11111111-1111-1111-1111-111111111111",
     );
@@ -114,5 +116,24 @@ describe("getBiData", () => {
     const all = await getBiData(fx.ctx.manager, { ...ALL, period: "all" });
     expect(all.kpis.newProcesses).toBe(4);
     expect(d.kpis.newProcesses).toBe(3);
+  });
+
+  it("narrows by company: processes and the deadlines linked to them, never occurrences", async () => {
+    const before = await getBiData(fx.ctx.manager, ALL);
+    const [labor] = await fx.db
+      .select({ id: legalProcesses.id })
+      .from(legalProcesses)
+      .where(and(eq(legalProcesses.organizationId, fx.orgA), eq(legalProcesses.unitId, fx.unitRe)));
+    await fx.db.update(legalProcesses).set({ companyId: fx.companyA }).where(eq(legalProcesses.id, labor.id));
+
+    const byCompany = await getBiData(fx.ctx.manager, { ...ALL, companyId: fx.companyA });
+    expect(byCompany.kpis.activeProcesses).toBe(1);
+    expect(byCompany.kpis.upcomingDeadlines).toBe(0); // deadlines are not linked to that process
+    expect(byCompany.kpis.openOccurrences).toBe(before.kpis.openOccurrences);
+    expect(processesHref(byCompany.filters, { tribunal: "TRT10" })).toBe(`/processos?empresa=${fx.companyA}&tribunal=TRT10`);
+    expect(parseBiFilters({ empresa: fx.companyA }).companyId).toBe(fx.companyA);
+    // Another organization's company id never widens the scope.
+    const fromB = await getBiData(fx.ctx.adminB, { ...ALL, companyId: fx.companyA });
+    expect(fromB.kpis.activeProcesses).toBe(0);
   });
 });

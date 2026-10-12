@@ -15,7 +15,16 @@ export type ExtractionResult = {
   status: "succeeded" | "unsupported" | "failed";
   text?: string;
   pageCount?: number;
+  /**
+   * PDF only: offset in `text` where each page starts (index 0 = page 1).
+   * Pages are normalized one by one and joined with PAGE_SEPARATOR, so the
+   * offsets are exact positions in the stored text (see `pageForOffset`).
+   */
+  pageOffsets?: number[];
 };
+
+/** Separator between pages of a PDF in the extracted text. */
+export const PAGE_SEPARATOR = "\n\n";
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
@@ -49,16 +58,36 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * Joins already-normalized page texts with PAGE_SEPARATOR and records where
+ * each page starts. Respects MAX_EXTRACTED_TEXT_CHARS: text beyond the cap is
+ * cut and pages that would start after it get no offset.
+ */
+export function joinPages(pages: string[]): { text: string; pageOffsets: number[] } {
+  let text = "";
+  const pageOffsets: number[] = [];
+  for (let i = 0; i < pages.length; i += 1) {
+    if (text.length >= MAX_EXTRACTED_TEXT_CHARS) break;
+    pageOffsets.push(text.length);
+    text += pages[i];
+    if (i < pages.length - 1) text += PAGE_SEPARATOR;
+  }
+  if (text.length > MAX_EXTRACTED_TEXT_CHARS) text = text.slice(0, MAX_EXTRACTED_TEXT_CHARS);
+  return { text, pageOffsets };
+}
+
 async function extractPdf(bytes: Uint8Array): Promise<ExtractionResult> {
   const { getDocumentProxy, extractText: extractPdfText } = await import("unpdf");
   // pdf.js may transfer (detach) the buffer it receives: give it a copy.
   const pdf = await getDocumentProxy(new Uint8Array(bytes));
   try {
-    const { totalPages, text } = await extractPdfText(pdf, { mergePages: true });
-    const normalized = normalizeExtractedText(text);
+    const { totalPages, text } = await extractPdfText(pdf, { mergePages: false });
+    // Normalize page by page, then join: offsets stay exact in the final text.
+    const pages = text.map((page) => normalizeExtractedText(page));
     // No text layer (scanned document): needs OCR, which is not available yet.
-    if (!normalized) return { status: "unsupported", pageCount: totalPages };
-    return { status: "succeeded", text: normalized, pageCount: totalPages };
+    if (pages.every((p) => !p)) return { status: "unsupported", pageCount: totalPages };
+    const joined = joinPages(pages);
+    return { status: "succeeded", text: joined.text, pageCount: totalPages, pageOffsets: joined.pageOffsets };
   } finally {
     // Free pdf.js resources (method not present in the bundled typings).
     await (pdf as unknown as { destroy?: () => Promise<void> }).destroy?.().catch(() => undefined);

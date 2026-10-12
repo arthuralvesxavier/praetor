@@ -2,7 +2,14 @@
  * BI dashboard filters (client-safe): URL parsing, period ranges, time buckets
  * and drill-down links to the lists that originate each figure.
  */
-import { LEGAL_AREAS, type LegalArea, type OccurrenceCategory, type ProcessPhase, type RiskLevel } from "@/domain/enums";
+import {
+  LEGAL_AREAS,
+  type LegalArea,
+  type OccurrenceCategory,
+  type ProcessInstance,
+  type ProcessPhase,
+  type RiskLevel,
+} from "@/domain/enums";
 import { addDaysISO, APP_LOCALE, todayISO } from "@/lib/format";
 import { enumParam, idParam, type SearchParams } from "@/lib/search-params";
 
@@ -23,20 +30,23 @@ export type BiFilters = {
   unitId: string | null;
   area: LegalArea | null;
   responsibleId: string | null;
+  /** Empresa do grupo (processes only; occurrences and contracts have no company). */
+  companyId: string | null;
 };
 
-/** URL params: periodo, unidade, area, responsavel (same names as the list pages). */
+/** URL params: periodo, empresa, unidade, area, responsavel (same names as the list pages). */
 export function parseBiFilters(sp: SearchParams | null | undefined): BiFilters {
   return {
     period: enumParam(sp, "periodo", BI_PERIODS) ?? DEFAULT_BI_PERIOD,
     unitId: idParam(sp, "unidade") ?? null,
     area: enumParam(sp, "area", LEGAL_AREAS) ?? null,
     responsibleId: idParam(sp, "responsavel") ?? null,
+    companyId: idParam(sp, "empresa") ?? null,
   };
 }
 
 export function hasDimensionFilter(f: BiFilters): boolean {
-  return Boolean(f.unitId || f.area || f.responsibleId);
+  return Boolean(f.unitId || f.area || f.responsibleId || f.companyId);
 }
 
 // ---------------------------------------------------------------------------
@@ -165,17 +175,39 @@ function qs(params: Record<string, string | null | undefined>): string {
   return s ? `?${s}` : "";
 }
 
-export function processesHref(
-  f: BiFilters,
-  extra: { status?: string; risco?: RiskLevel; area?: LegalArea; phase?: ProcessPhase } = {},
-): string {
+export type ProcessLinkExtra = {
+  status?: string;
+  risco?: RiskLevel;
+  area?: LegalArea;
+  phase?: ProcessPhase;
+  tribunal?: string;
+  instancia?: ProcessInstance;
+  cidade?: string;
+  /** Overrides the company filter (e.g. a bar of the "por empresa" chart). */
+  empresa?: string;
+  /** Overrides the unit filter (e.g. a bar of the "por unidade" chart). */
+  unidade?: string;
+  /** `/processos` shows only the active portfolio by default; closed lists need `encerrada`/`todas`. */
+  carteira?: "ativa" | "encerrada" | "todas";
+  /** With (`com`) or without (`sem`, "não apurado") an official liquidated value. */
+  liquidado?: "com" | "sem";
+};
+
+/** Link to /processos with the dashboard filters (params documented in docs/dev/MODULE_CONTRACTS.md). */
+export function processesHref(f: BiFilters, extra: ProcessLinkExtra = {}): string {
   return `/processos${qs({
     status: extra.status,
     area: extra.area ?? f.area,
     phase: extra.phase,
     risco: extra.risco,
-    unidade: f.unitId,
+    unidade: extra.unidade ?? f.unitId,
     responsavel: f.responsibleId,
+    empresa: extra.empresa ?? f.companyId,
+    tribunal: extra.tribunal,
+    instancia: extra.instancia,
+    cidade: extra.cidade,
+    carteira: extra.carteira,
+    liquidado: extra.liquidado,
   })}`;
 }
 

@@ -13,6 +13,7 @@ import { CONFIDENTIALITY_LABELS, DOCUMENT_CATEGORY_LABELS } from "@/domain/enums
 import { fieldError, type FormState } from "@/lib/form";
 import { optionsFromLabels, type Option } from "@/lib/options";
 import { cn } from "@/lib/utils";
+import { SENSITIVE_HEALTH_HINT } from "../confidentiality";
 import { ALLOWED_FORMATS_LABEL, isAllowedExtension, maxUploadBytes, UPLOAD_ACCEPT } from "../file-types";
 
 export type UploadLinkField = "processId" | "occurrenceId" | "contractId";
@@ -75,6 +76,8 @@ export function DocumentUploadForm({
   const formRef = useRef<HTMLFormElement>(null);
   const [pending, setPending] = useState(false);
   const [state, setState] = useState<FormState | null>(null);
+  const [category, setCategory] = useState("other");
+  const healthDocument = category === "sensitive_health";
   const maxBytes = maxUploadBytes(maxUploadMb);
   const limitLabel = `${maxUploadMb.toLocaleString("pt-BR")} MB`;
 
@@ -129,6 +132,7 @@ export function DocumentUploadForm({
         return;
       }
       formRef.current?.reset();
+      setCategory("other");
       setState({
         ok: true,
         message:
@@ -194,16 +198,32 @@ export function DocumentUploadForm({
             <Input name="title" required maxLength={300} disabled={pending} autoComplete="off" />
           </FormField>
           <FormField label="Categoria" htmlFor={fid("category")} required error={fieldError(state, "category")}>
-            <NativeSelect name="category" options={CATEGORY_OPTIONS} defaultValue="other" required disabled={pending} />
+            <NativeSelect
+              name="category"
+              options={CATEGORY_OPTIONS}
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              required
+              disabled={pending}
+            />
           </FormField>
           <FormField
             label="Confidencialidade"
             htmlFor={fid("confidentiality")}
-            hint="Confidencial: gestores e advogados. Restrito: gestores, quem enviou e o responsável pelo registro vinculado."
+            hint={
+              healthDocument
+                ? SENSITIVE_HEALTH_HINT
+                : "Confidencial: gestores e advogados. Restrito: gestores, quem enviou e o responsável pelo registro vinculado."
+            }
             error={fieldError(state, "confidentiality")}
           >
-            <NativeSelect name="confidentiality" options={CONFIDENTIALITY_OPTIONS} defaultValue="internal" disabled={pending} />
+            {healthDocument ? (
+              <NativeSelect options={CONFIDENTIALITY_OPTIONS} value="restricted" disabled aria-readonly="true" onChange={() => undefined} />
+            ) : (
+              <NativeSelect name="confidentiality" options={CONFIDENTIALITY_OPTIONS} defaultValue="internal" disabled={pending} />
+            )}
           </FormField>
+          {healthDocument ? <input type="hidden" name="confidentiality" value="restricted" /> : null}
           {!fixedLink ? (
             <>
               {linkSelect("processId", "Processo vinculado", processOptions)}

@@ -19,7 +19,7 @@ import { FormMessage } from "@/components/ui/form-message";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { SubmitButton } from "@/components/ui/submit-button";
-import { PARTY_ROLE_LABELS } from "@/domain/enums";
+import { LIABILITY_NATURE_LABELS, PARTY_ROLE_LABELS } from "@/domain/enums";
 import { fieldError } from "@/lib/form";
 import { formatDocument } from "@/lib/format";
 import { optionsFromLabels } from "@/lib/options";
@@ -30,6 +30,7 @@ export type PartyDefaults = {
   role: string;
   documentNumber: string | null;
   isClient: boolean;
+  liabilityNature: string | null;
   counselName: string | null;
 };
 
@@ -44,6 +45,7 @@ export type PartyDialogProps<S extends ValuesFormState> = {
 };
 
 const roleOptions = optionsFromLabels(PARTY_ROLE_LABELS);
+const liabilityOptions = optionsFromLabels(LIABILITY_NATURE_LABELS);
 
 export function PartyDialog<S extends ValuesFormState>({ mode, partyName, ...rest }: PartyDialogProps<S>) {
   const [open, setOpen] = useState(false);
@@ -82,7 +84,7 @@ function PartyForm<S extends ValuesFormState>({
     return result;
   }, null);
   const sent = state && !state.ok ? state.values : undefined;
-  const val = (key: "name" | "role" | "documentNumber" | "counselName", fallback: string) =>
+  const val = (key: "name" | "role" | "documentNumber" | "counselName" | "liabilityNature", fallback: string) =>
     sent ? (sent[key] ?? "") : fallback;
   const err = (field: string) => fieldError(state, field);
 
@@ -91,7 +93,7 @@ function PartyForm<S extends ValuesFormState>({
       <DialogHeader>
         <DialogTitle>{mode === "add" ? "Adicionar parte" : "Editar parte"}</DialogTitle>
         <DialogDescription>
-          CPF e CNPJ são dados pessoais/cadastrais: aparecem mascarados nas listagens.
+          CPF e CNPJ são dados pessoais/cadastrais: aparecem mascarados nas listagens e nas exportações.
         </DialogDescription>
       </DialogHeader>
       {Object.entries(hiddenFields).map(([name, value]) => (
@@ -120,7 +122,20 @@ function PartyForm<S extends ValuesFormState>({
             defaultValue={val("documentNumber", defaults?.documentNumber ? formatDocument(defaults.documentNumber) : "")}
           />
         </FormField>
-        <FormField label="Advogado(a) da parte" htmlFor="party-counsel" error={err("counselName")} className="sm:col-span-2">
+        <FormField
+          label="Natureza da responsabilidade"
+          htmlFor="party-liabilityNature"
+          error={err("liabilityNature")}
+          hint="Somente para o polo passivo (direta, solidária ou subsidiária). Análise jurídica, opcional."
+        >
+          <NativeSelect
+            name="liabilityNature"
+            options={liabilityOptions}
+            placeholder="Não informada"
+            defaultValue={val("liabilityNature", defaults?.liabilityNature ?? "")}
+          />
+        </FormField>
+        <FormField label="Advogado(a) da parte" htmlFor="party-counsel" error={err("counselName")}>
           <Input name="counselName" defaultValue={val("counselName", defaults?.counselName ?? "")} maxLength={200} />
         </FormField>
         <Checkbox

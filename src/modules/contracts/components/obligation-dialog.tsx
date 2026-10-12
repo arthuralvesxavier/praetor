@@ -23,7 +23,14 @@ import { OBLIGATION_STATUS_LABELS, type ObligationStatus } from "@/domain/enums"
 import { fieldError, type FormState } from "@/lib/form";
 import { optionsFromLabels, type Option } from "@/lib/options";
 import { addObligationAction, updateObligationAction } from "../actions";
+import { KEEP_RECURRENCE, OBLIGATION_RECURRENCE_LABELS, parseRecurrence } from "../obligations";
 import { usePreservingSubmit } from "./use-preserving-submit";
+
+/** "Em atraso" is computed from the due date, so it is not offered as a choice. */
+const STATUS_OPTIONS: Option[] = (["pending", "fulfilled", "waived"] as const).map((s) => ({
+  value: s,
+  label: OBLIGATION_STATUS_LABELS[s],
+}));
 
 export type ObligationFormValues = {
   id: string;
@@ -81,12 +88,21 @@ function ObligationForm({ contractId, users, obligation, onDone }: Omit<Props, "
   const onSubmit = usePreservingSubmit(formAction);
   const err = (field: string) => fieldError(state, field);
 
+  const parsed = parseRecurrence(obligation?.recurrence);
+  const recurrenceOptions: Option[] = [
+    ...(parsed.kind === "custom" ? [{ value: KEEP_RECURRENCE, label: `Manter texto atual: “${parsed.text}”` }] : []),
+    ...optionsFromLabels(OBLIGATION_RECURRENCE_LABELS),
+  ];
+  const recurrenceDefault = parsed.kind === "custom" ? KEEP_RECURRENCE : parsed.kind;
+  const statusDefault = !obligation || obligation.status === "overdue" ? "pending" : obligation.status;
+
   return (
     <form action={formAction} onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
       <DialogHeader>
         <DialogTitle>{isEdit ? "Editar obrigação" : "Nova obrigação contratual"}</DialogTitle>
         <DialogDescription>
-          Registre o que deve ser cumprido, por quem e até quando. A recorrência é apenas descritiva (ex.: &quot;mensal&quot;).
+          Registre o que deve ser cumprido, por quem e até quando. Em obrigações recorrentes, ao cumprir uma ocorrência
+          você pode gerar a próxima automaticamente.
         </DialogDescription>
       </DialogHeader>
       {obligation ? (
@@ -117,15 +133,21 @@ function ObligationForm({ contractId, users, obligation, onDone }: Omit<Props, "
         <FormField label="Vencimento" htmlFor="obligation-due" error={err("dueDate")}>
           <Input name="dueDate" type="date" defaultValue={obligation?.dueDate ?? ""} />
         </FormField>
-        <FormField label="Recorrência" htmlFor="obligation-recurrence" hint="Ex.: mensal, trimestral, anual." error={err("recurrence")}>
-          <Input name="recurrence" maxLength={120} defaultValue={obligation?.recurrence ?? ""} />
+        <FormField
+          label="Recorrência"
+          htmlFor="obligation-recurrence"
+          hint="Mesmo dia do mês a cada período; em meses mais curtos, o último dia do mês."
+          error={err("recurrence")}
+        >
+          <NativeSelect name="recurrence" options={recurrenceOptions} defaultValue={recurrenceDefault} />
         </FormField>
-        <FormField label="Situação" htmlFor="obligation-status" error={err("status")}>
-          <NativeSelect
-            name="status"
-            options={optionsFromLabels(OBLIGATION_STATUS_LABELS)}
-            defaultValue={obligation?.status ?? "pending"}
-          />
+        <FormField
+          label="Situação"
+          htmlFor="obligation-status"
+          hint="“Em atraso” é calculado automaticamente pelo vencimento."
+          error={err("status")}
+        >
+          <NativeSelect name="status" options={STATUS_OPTIONS} defaultValue={statusDefault} />
         </FormField>
       </div>
       <DialogFooter>

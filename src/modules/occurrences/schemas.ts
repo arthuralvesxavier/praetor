@@ -158,6 +158,8 @@ export const occurrenceFiltersSchema = z.object({
   riskLevel: z.union([z.enum(RISK_LEVELS), z.array(z.enum(RISK_LEVELS)).max(RISK_LEVELS.length)]).optional(),
   unitId: z.uuid().optional(),
   responsibleId: z.uuid().optional(),
+  /** Only occurrences created from a preventive-intelligence indicator. */
+  origin: z.enum(["preventive_intel"]).optional(),
   page: z.number().int().optional(),
   pageSize: z.number().int().optional(),
 });

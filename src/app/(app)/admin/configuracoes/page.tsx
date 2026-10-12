@@ -13,10 +13,14 @@ import { cn } from "@/lib/utils";
 import {
   processQueueNowAction,
   runRoutineNowAction,
+  updateContingencySettingsAction,
+  updateEmailIntakeSettingsAction,
   updateOrganizationSettingsAction,
   updateRoutineAction,
 } from "@/modules/admin/actions";
 import { AdminNav } from "@/modules/admin/components/admin-nav";
+import { ContingencySettingsForm } from "@/modules/admin/components/contingency-settings-form";
+import { EmailIntakeSettingsForm } from "@/modules/admin/components/email-intake-settings-form";
 import { ActionButtonForm } from "@/modules/admin/components/form-utils";
 import { OrganizationSettingsForm } from "@/modules/admin/components/org-settings-form";
 import { RoutineForm } from "@/modules/admin/components/routine-form";
@@ -70,10 +74,28 @@ export default async function SettingsPage() {
     <>
       <PageHeader
         title="Configurações"
-        description="Dados da organização, uso de IA, alertas, rotinas automáticas e retenção de dados."
+        description="Dados da organização, uso de IA, alertas, contingências, e-mail (simulado), entrada de processos, rotinas automáticas e retenção de dados."
         breadcrumbs={[{ label: "Administração", href: "/admin" }, { label: "Configurações" }]}
       />
       <AdminNav ctx={ctx} active="configuracoes" />
+
+      <nav aria-label="Seções desta página" className="mb-6 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+        {[
+          { href: "#ia", label: "Inteligência artificial" },
+          { href: "#organizacao", label: "Organização, alertas e retenção" },
+          { href: "#contingencias", label: "Contingências" },
+          { href: "#email", label: "E-mail e entrada de processos" },
+          { href: "#rotinas", label: "Rotinas automáticas" },
+        ].map((l) => (
+          <a
+            key={l.href}
+            href={l.href}
+            className="font-medium text-primary-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            {l.label}
+          </a>
+        ))}
+      </nav>
 
       <div className="flex flex-col gap-8">
         {/* AI runtime & usage */}
@@ -163,7 +185,7 @@ export default async function SettingsPage() {
         </section>
 
         {/* Organization, AI limits, alerts, retention */}
-        <section aria-label="Configurações da organização">
+        <section aria-label="Configurações da organização" id="organizacao" className="scroll-mt-24">
           <OrganizationSettingsForm
             action={updateOrganizationSettingsAction}
             defaults={{
@@ -173,8 +195,41 @@ export default async function SettingsPage() {
               autoAnalyzeOnUpload: s.ai.autoAnalyzeOnUpload,
               upcomingDeadlineDays: s.alerts.upcomingDeadlineDays,
               contractExpirationDays: s.alerts.contractExpirationDays,
+              upcomingHearingDays: s.alerts.upcomingHearingDays,
+              installmentDueDays: s.alerts.installmentDueDays,
               closedRecordRetentionDays: s.retention.closedRecordRetentionDays,
               auditLogRetentionDays: s.retention.auditLogRetentionDays,
+            }}
+          />
+        </section>
+
+        {/* Contingency parameters (RN-04, RN-05, RN-11, RNF-14) */}
+        <section aria-labelledby="contingencias-titulo" id="contingencias" className="scroll-mt-24">
+          <ContingencySettingsForm
+            action={updateContingencySettingsAction}
+            rulesVersion={s.contingency.rulesVersion}
+            defaults={{
+              riskRemote: s.contingency.riskPercentages.remote,
+              riskPossible: s.contingency.riskPercentages.possible,
+              riskProbable: s.contingency.riskPercentages.probable,
+              confidenceThreshold: s.contingency.confidenceThreshold,
+              idleGuaranteeDays: s.contingency.idleGuaranteeDays,
+            }}
+          />
+        </section>
+
+        {/* Simulated e-mail + intake pipeline */}
+        <section aria-labelledby="email-titulo" id="email" className="scroll-mt-24">
+          <EmailIntakeSettingsForm
+            action={updateEmailIntakeSettingsAction}
+            defaults={{
+              senderName: s.email.senderName,
+              senderAddress: s.email.senderAddress,
+              notifyOnBriefReady: s.email.notifyOnBriefReady,
+              notifyOnAssignment: s.email.notifyOnAssignment,
+              autoAssign: s.intake.autoAssign,
+              autoGenerateBrief: s.intake.autoGenerateBrief,
+              autoNotify: s.intake.autoNotify,
             }}
           />
         </section>

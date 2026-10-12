@@ -2,7 +2,6 @@ import Link from "next/link";
 import { Callout } from "@/components/ui/callout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DescriptionList } from "@/components/ui/description-list";
-import { OriginBadge } from "@/components/ui/origin-badge";
 import { PriorityBadge } from "@/components/ui/priority-badge";
 import { TASK_KIND_LABELS } from "@/domain/enums";
 import { formatDate, formatDateTime, formatRelativeDays } from "@/lib/format";
@@ -14,7 +13,7 @@ import { DeadlineStatusActions } from "./deadline-table";
 import { DeleteTaskButton } from "./task-table";
 import { TaskStatusForm } from "./task-status-form";
 import { SourceAnalysisLink, SourceExcerpt } from "./validation-list";
-import { DeadlineKindBadge, DeadlineSituationBadge, TaskStatusBadge, WorkLinks } from "./work-badges";
+import { DeadlineKindBadge, DeadlineSituationBadge, TaskStatusBadge, WorkLinks, WorkOriginBadge } from "./work-badges";
 
 /** Detail of the deadline selected with `?prazo=<id>` (deep links from alerts, calendar, entity pages). */
 export function SelectedDeadline({ ctx, item, today }: { ctx: AuthContext; item: DeadlineListItem; today: string }) {
@@ -26,7 +25,7 @@ export function SelectedDeadline({ ctx, item, today }: { ctx: AuthContext; item:
         <CardTitle id="prazo-selecionado">{item.title}</CardTitle>
         <div className="flex flex-wrap gap-1.5">
           <DeadlineSituationBadge status={item.status} validationStatus={item.validationStatus} isOverdue={item.isOverdue} />
-          <OriginBadge origin={item.origin} validationStatus={item.validationStatus} />
+          <WorkOriginBadge origin={item.origin} validationStatus={item.validationStatus} sourceKind={item.sourceKind} />
           <DeadlineKindBadge kind={item.kind} />
           <PriorityBadge priority={item.priority} withPrefix />
         </div>
@@ -66,7 +65,14 @@ export function SelectedDeadline({ ctx, item, today }: { ctx: AuthContext; item:
         />
         <SourceExcerpt item={item} />
         {item.isPendingValidation ? (
-          <Callout tone="ai" title="Sugestão da IA aguardando validação">
+          <Callout
+            tone="ai"
+            title={
+              item.sourceKind === "case_brief"
+                ? "Sugestão da análise preliminar (simulação) aguardando validação"
+                : "Sugestão da IA aguardando validação"
+            }
+          >
             Este prazo ainda não conta nos indicadores e alertas.{" "}
             <Link href={`/prazos?aba=validacao&prazo=${item.id}`}>
               {can(ctx, "deadline:validate") ? "Validar ou rejeitar a sugestão" : "Ver na aba Validação"}
@@ -91,7 +97,7 @@ export function SelectedTask({ ctx, item, today }: { ctx: AuthContext; item: Tas
         <CardTitle id="tarefa-selecionada">{item.title}</CardTitle>
         <div className="flex flex-wrap gap-1.5">
           <TaskStatusBadge status={item.status} isOverdue={item.isOverdue} />
-          <OriginBadge origin={item.origin} />
+          <WorkOriginBadge origin={item.origin} sourceKind={item.sourceKind} />
           <PriorityBadge priority={item.priority} withPrefix />
         </div>
       </CardHeader>
@@ -121,7 +127,17 @@ export function SelectedTask({ ctx, item, today }: { ctx: AuthContext; item: Tas
             { label: "Vínculo", value: <WorkLinks links={item.links} /> },
             item.completedAt ? { label: "Concluída em", value: formatDateTime(item.completedAt) } : null,
             item.sourceAnalysisId && item.origin === "ai_suggested"
-              ? { label: "Origem", value: "Sugestão de análise de IA aplicada por um usuário" }
+              ? {
+                  label: "Origem",
+                  value:
+                    item.sourceKind === "case_brief" ? (
+                      <Link href={`/analises-preliminares/${item.sourceAnalysisId}`}>
+                        Sugestão da análise preliminar (simulação) aplicada por um usuário
+                      </Link>
+                    ) : (
+                      "Sugestão de análise de IA aplicada por um usuário"
+                    ),
+                }
               : null,
             item.description ? { label: "Descrição", value: item.description, full: true } : null,
           ]}

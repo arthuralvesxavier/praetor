@@ -1,14 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <!-- Praetor "Pórtico" mark — same geometry as src/components/brand/logo.tsx (LogoBadge). -->
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2f5282"/>
-      <stop offset="1" stop-color="#152740"/>
-    </linearGradient>
-  </defs>
-  <rect width="32" height="32" rx="8" fill="url(#g)"/>
-  <g transform="translate(4 4)" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M3.5 8.5 12 4l8.5 4.5Z" stroke="#d4b062"/>
-    <path d="M8 11.5v9M8 11.5h4.75a3.25 3.25 0 0 1 0 6.5H8M5 20.5h6" stroke="#ffffff"/>
+  <!-- PRAETOR symbol on a navy tile (same paths as public/brand/praetor-simbolo.svg and LogoBadge in src/components/brand/logo.tsx).
+       White arch + gold square: legible on light and dark browser tabs. Regenerate the rasters with `node scripts/generate-icons.mjs`. -->
+  <rect width="32" height="32" rx="7" fill="#0B1A2C"/>
+  <g transform="translate(1.6 1.6) scale(0.9)">
+    <path fill="#FFFFFF" d="M4 28V14A10 10 0 0 1 14 4H18A10 10 0 0 1 28 14V18H22V16A6 6 0 0 0 10 16V28Z"/>
+    <path fill="#D4B062" d="M22 22H28V28H22Z"/>
   </g>
 </svg>

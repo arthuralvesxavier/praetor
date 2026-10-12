@@ -124,7 +124,7 @@ export function CountUp({ value, suffix = "", duration = 1200 }: { value: number
     };
   }, [value, duration]);
   return (
-    <span ref={ref} className="tabular-nums">
+    <span ref={ref} className="lining-nums tabular-nums">
       {shown}
       {suffix}
     </span>

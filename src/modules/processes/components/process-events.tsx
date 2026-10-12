@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { OriginBadge } from "@/components/ui/origin-badge";
 import { Timeline } from "@/components/ui/timeline";
-import { PROCESS_EVENT_TYPE_LABELS } from "@/domain/enums";
+import { PROCESS_EVENT_TYPE_LABELS, PROCESS_INSTANCE_LABELS } from "@/domain/enums";
 import { formatDateTime, todayISO } from "@/lib/format";
 import { addProcessEventAction, removeProcessEventAction } from "../actions";
 import type { ProcessDetail } from "../service";
@@ -17,8 +17,8 @@ export function ProcessEvents({ process: p }: { process: ProcessDetail }) {
   return (
     <div className="flex flex-col gap-6">
       <Callout tone="info" title="Sem integração com tribunais">
-        As movimentações são cadastradas manualmente ou importadas de fonte informada. Esta versão não possui integração
-        com tribunais.
+        As movimentações são cadastradas manualmente ou importadas de fonte informada. Integrações com tribunais
+        (DataJud, MNI, PJe): não integrado nesta versão.
       </Callout>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -38,6 +38,12 @@ export function ProcessEvents({ process: p }: { process: ProcessDetail }) {
                 badge: (
                   <>
                     <Badge tone="neutral">{PROCESS_EVENT_TYPE_LABELS[e.type]}</Badge>
+                    {e.instance ? <Badge tone="info">{PROCESS_INSTANCE_LABELS[e.instance]}</Badge> : null}
+                    {e.cnjMovementCode !== null ? (
+                      <Badge tone="neutral" title="Código informado por uma pessoa ou pela fonte importada">
+                        Código CNJ {e.cnjMovementCode}
+                      </Badge>
+                    ) : null}
                     <OriginBadge origin={e.origin} />
                   </>
                 ),
@@ -78,7 +84,12 @@ export function ProcessEvents({ process: p }: { process: ProcessDetail }) {
               <CardDescription>Entrada manual na linha do tempo do processo.</CardDescription>
             </CardHeader>
             <CardContent>
-              <EventForm action={addProcessEventAction} processId={p.id} today={todayISO()} />
+              <EventForm
+                action={addProcessEventAction}
+                processId={p.id}
+                today={todayISO()}
+                defaultInstance={p.instance}
+              />
             </CardContent>
           </Card>
         ) : null}

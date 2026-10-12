@@ -27,7 +27,7 @@ export function MobileNav({ children }: { children: ReactNode }) {
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-slate-950/50 data-[state=open]:animate-fade-in lg:hidden" />
         <DialogPrimitive.Content
-          className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-sidebar shadow-xl data-[state=open]:animate-drawer-in focus-visible:outline-none lg:hidden"
+          className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] border-r border-sidebar-border bg-sidebar shadow-xl data-[state=open]:animate-drawer-in focus-visible:outline-none lg:hidden"
           aria-describedby={undefined}
         >
           <DialogPrimitive.Title className="sr-only">Menu de navegação</DialogPrimitive.Title>

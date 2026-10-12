@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Callout } from "@/components/ui/callout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,6 +7,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { DescriptionList } from "@/components/ui/description-list";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { tableLinkClasses } from "@/components/ui/table";
 import { ROLE_LABELS } from "@/domain/enums";
 import { formatDateTime } from "@/lib/format";
 import { param } from "@/lib/search-params";
@@ -15,6 +17,8 @@ import { RecordActivity } from "@/modules/admin/components/record-activity";
 import { ResetPasswordForm } from "@/modules/admin/components/reset-password-form";
 import { UserForm } from "@/modules/admin/components/user-form";
 import { getUser, listAllUnitOptions, listTeamOptions } from "@/modules/admin/service";
+import { listAllLawFirmOptions } from "@/modules/organization/service";
+import { can } from "@/server/auth/permissions";
 import { requirePageContext } from "@/server/auth/session";
 import { NotFoundError } from "@/server/lib/errors";
 
@@ -32,10 +36,14 @@ export default async function UserDetailPage(props: PageProps<"/admin/usuarios/[
     if (err instanceof NotFoundError) notFound();
     throw err;
   }
-  const [units, teams] = await Promise.all([listAllUnitOptions(ctx), listTeamOptions(ctx)]);
+  const [units, teams, lawFirms] = await Promise.all([listAllUnitOptions(ctx), listTeamOptions(ctx), listAllLawFirmOptions(ctx)]);
+  const canOrg = can(ctx, "admin:organization");
   const unitOptions = units
     .filter((u) => u.isActive || u.id === user.unitId)
     .map((u) => ({ value: u.id, label: u.isActive ? u.name : `${u.name} (desativada)` }));
+  const lawFirmOptions = lawFirms
+    .filter((f) => f.isActive || f.id === user.lawFirmId)
+    .map((f) => ({ value: f.id, label: f.isActive ? f.name : `${f.name} (desativado)` }));
 
   return (
     <>
@@ -91,6 +99,7 @@ export default async function UserDetailPage(props: PageProps<"/admin/usuarios/[
             mode="edit"
             action={updateUserAction}
             units={unitOptions}
+            lawFirms={lawFirmOptions}
             teams={teams.map((t) => ({ value: t.id, label: t.name }))}
             isSelf={user.isSelf}
             defaults={{
@@ -99,6 +108,7 @@ export default async function UserDetailPage(props: PageProps<"/admin/usuarios/[
               email: user.email,
               role: user.role,
               unitId: user.unitId,
+              lawFirmId: user.lawFirmId,
               jobTitle: user.jobTitle,
               isActive: user.isActive,
               teamIds: user.teamIds,
@@ -124,7 +134,22 @@ export default async function UserDetailPage(props: PageProps<"/admin/usuarios/[
                 columns={1}
                 items={[
                   { label: "E-mail", value: <span className="break-all">{user.email}</span> },
-                  { label: "Unidade", value: user.unitName ?? "Sem unidade" },
+                  user.role === "external_counsel"
+                    ? {
+                        label: "Escritório externo",
+                        value: user.lawFirmId ? (
+                          canOrg ? (
+                            <Link href={`/admin/escritorios/${user.lawFirmId}`} className={tableLinkClasses}>
+                              {user.lawFirmName}
+                            </Link>
+                          ) : (
+                            user.lawFirmName
+                          )
+                        ) : (
+                          "Não vinculado"
+                        ),
+                      }
+                    : { label: "Unidade", value: user.unitName ?? "Sem unidade" },
                   { label: "Equipes", value: user.teams.length ? user.teams.map((t) => t.name).join(", ") : "Nenhuma" },
                   { label: "Último acesso", value: user.lastLoginAt ? formatDateTime(user.lastLoginAt) : "Nunca acessou" },
                   { label: "Cadastrado em", value: formatDateTime(user.createdAt) },

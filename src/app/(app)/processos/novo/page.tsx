@@ -25,6 +25,7 @@ export default async function NewProcessPage(props: PageProps<"/processos/novo">
   ]);
   const canEditConfidential = canEditProcessConfidentiality(ctx);
   const defaults = occurrence ? occurrenceToFormDefaults(occurrence, options.users) : EMPTY_PROCESS_FORM;
+  const ownFirm = ctx.lawFirmId ? (options.lawFirms.find((f) => f.value === ctx.lawFirmId)?.label ?? null) : null;
 
   return (
     <>
@@ -66,7 +67,12 @@ export default async function NewProcessPage(props: PageProps<"/processos/novo">
             defaults={defaults}
             units={options.units}
             users={options.users}
+            companies={options.companies}
+            lawFirms={options.lawFirms}
+            canChangeLawFirm={options.canChangeLawFirm}
+            lawFirmLabel={ownFirm}
             canEditConfidential={canEditConfidential}
+            statusEditable
             fromOccurrence={occurrence ? { id: occurrence.occurrenceId, title: occurrence.title } : null}
             cancelHref={occurrence ? `/preventivo/${occurrence.occurrenceId}` : "/processos"}
           />

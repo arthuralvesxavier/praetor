@@ -281,7 +281,7 @@ export const contractObligations = pgTable(
     description: text("description").notNull(),
     responsibleId: uuid("responsible_id").references(() => users.id),
     dueDate: date("due_date", { mode: "string" }),
-    /** Free-text recurrence description (e.g. "mensal"). No automatic recurrence engine yet. */
+    /** Recurrence: canonical pt-BR words (mensal/trimestral/semestral/anual) written by the contracts module; other free text is kept as informed. "Cumprir e gerar próxima" creates the next occurrence (origin `system`). */
     recurrence: text("recurrence"),
     status: text("status").$type<ObligationStatus>().notNull().default("pending"),
     origin: text("origin").$type<DataOrigin>().notNull().default("manual"),

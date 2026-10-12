@@ -1,6 +1,7 @@
-import { ScrollText } from "lucide-react";
+import { Download, EyeOff, ScrollText } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ButtonLink } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -19,13 +20,13 @@ import {
 } from "@/components/ui/table";
 import { entityHref, type EntityRef } from "@/domain/entities";
 import { ENTITY_TYPE_LABELS, ENTITY_TYPES, type EntityType } from "@/domain/enums";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatNumber } from "@/lib/format";
 import { optionsFromLabels } from "@/lib/options";
-import { enumParam, hasAnyParam, idParam, pageParam, param, type SearchParams } from "@/lib/search-params";
+import { buildHref, enumParam, hasAnyParam, idParam, pageParam, param, type SearchParams } from "@/lib/search-params";
 import { AdminNav } from "@/modules/admin/components/admin-nav";
 import { ChangeList } from "@/modules/admin/components/change-list";
 import { actionLabel } from "@/modules/admin/history-format";
-import { listAllUserOptions, listAuditActions, listAuditLogs } from "@/modules/admin/service";
+import { AUDIT_EXPORT_MAX_ROWS, listAllUserOptions, listAuditActions, listAuditLogs } from "@/modules/admin/service";
 import { requirePageContext } from "@/server/auth/session";
 
 export const metadata: Metadata = { title: "Auditoria" };
@@ -33,6 +34,9 @@ export const metadata: Metadata = { title: "Auditoria" };
 const FILTER_KEYS = ["acao", "entidade", "usuario", "de", "ate"] as const;
 
 const RECORD_TYPES: readonly EntityType[] = ["legal_process", "occurrence", "contract", "document", "task", "deadline", "analysis"];
+
+/** Access to confidential processes is recorded with this action (RF-22 / TE-10). */
+const CONFIDENTIAL_ACCESS_ACTION = "legal_process.view_confidential";
 
 function dateParam(sp: SearchParams, key: string): string | undefined {
   const v = param(sp, key);
@@ -50,6 +54,12 @@ function entityLink(type: EntityType, id: string | null): string | null {
   if (type === "user") return `/admin/usuarios/${id}`;
   if (type === "team") return `/admin/equipes/${id}`;
   if (type === "unit") return `/admin/unidades/${id}`;
+  if (type === "company") return `/admin/empresas/${id}`;
+  if (type === "law_firm") return `/admin/escritorios/${id}`;
+  if (type === "case_brief") return `/analises-preliminares/${id}`;
+  if (type === "intake") return `/entrada/${id}`;
+  if (type === "email") return `/emails/${id}`;
+  if (type === "import_batch") return `/importacoes/${id}`;
   if (type === "organization") return "/admin/configuracoes";
   return null;
 }
@@ -74,6 +84,10 @@ export default async function AuditPage(props: PageProps<"/admin/auditoria">) {
     listAllUserOptions(ctx),
   ]);
   const filtered = hasAnyParam(sp, FILTER_KEYS);
+  const actionFilter = actionParam(sp);
+  const confidentialOnly = actionFilter === CONFIDENTIAL_ACCESS_ACTION;
+  const actionOptions = actions.includes(CONFIDENTIAL_ACCESS_ACTION) ? actions : [...actions, CONFIDENTIAL_ACCESS_ACTION].sort();
+  const exportHref = buildHref("/admin/auditoria/exportar", sp, { pagina: null });
 
   return (
     <>
@@ -81,6 +95,20 @@ export default async function AuditPage(props: PageProps<"/admin/auditoria">) {
         title="Auditoria"
         description="Trilha das ações relevantes: cadastros, alterações, exclusões, envios e downloads de documentos, análises de IA, validações, acessos e mudanças administrativas."
         breadcrumbs={[{ label: "Administração", href: "/admin" }, { label: "Auditoria" }]}
+        actions={
+          result.total > 0 ? (
+            <ButtonLink
+              href={exportHref}
+              variant="outline"
+              prefetch={false}
+              download
+              title={`Exporta a trilha com os filtros aplicados (até ${formatNumber(AUDIT_EXPORT_MAX_ROWS)} registros)`}
+            >
+              <Download aria-hidden="true" />
+              Exportar CSV
+            </ButtonLink>
+          ) : null
+        }
       />
       <AdminNav ctx={ctx} active="auditoria" />
 
@@ -89,11 +117,24 @@ export default async function AuditPage(props: PageProps<"/admin/auditoria">) {
         registro de que a ação ocorreu e os campos alterados (textos longos aparecem resumidos).
       </Callout>
 
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium text-muted-foreground">Atalhos:</span>
+        <ButtonLink
+          href={confidentialOnly ? buildHref("/admin/auditoria", sp, { acao: null, pagina: null }) : buildHref("/admin/auditoria", sp, { acao: CONFIDENTIAL_ACCESS_ACTION, pagina: null })}
+          variant={confidentialOnly ? "secondary" : "outline"}
+          size="sm"
+          aria-current={confidentialOnly ? "true" : undefined}
+        >
+          <EyeOff aria-hidden="true" />
+          {confidentialOnly ? "Mostrando acessos a processos sigilosos — remover filtro" : "Acessos a processos sigilosos"}
+        </ButtonLink>
+      </div>
+
       <FilterBar basePath="/admin/auditoria" search={false} showClear={filtered}>
         <FilterSelect
           name="acao"
           label="Ação"
-          options={actions.map((a) => ({ value: a, label: actionLabel(a) === a ? a : `${actionLabel(a)} (${a})` }))}
+          options={actionOptions.map((a) => ({ value: a, label: actionLabel(a) === a ? a : `${actionLabel(a)} (${a})` }))}
           defaultValue={param(sp, "acao")}
           placeholder="Todas"
         />
@@ -132,7 +173,14 @@ export default async function AuditPage(props: PageProps<"/admin/auditoria">) {
               </TableHeader>
               <TableBody>
                 {result.items.length === 0 ? (
-                  <TableEmpty colSpan={6} message="Nenhuma ação encontrada com estes filtros." />
+                  <TableEmpty
+                    colSpan={6}
+                    message={
+                      confidentialOnly
+                        ? "Nenhum acesso a processo sigiloso registrado com estes filtros."
+                        : "Nenhuma ação encontrada com estes filtros."
+                    }
+                  />
                 ) : (
                   result.items.map((entry) => {
                     const href = entityLink(entry.entityType, entry.entityId);

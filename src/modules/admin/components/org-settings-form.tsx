@@ -92,11 +92,13 @@ export function OrganizationSettingsForm<S extends FormState>({
       <Card>
         <CardHeader>
           <CardTitle>Alertas</CardTitle>
-          <CardDescription>Antecedência usada pelas rotinas de alertas e pelos indicadores do dashboard.</CardDescription>
+          <CardDescription>Antecedência usada pelas rotinas de alertas e pelos indicadores do painel executivo.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
           {numberField("upcomingDeadlineDays", "Prazos próximos (dias)", "dias")}
           {numberField("contractExpirationDays", "Contratos a vencer (dias)", "dias")}
+          {numberField("upcomingHearingDays", "Audiências próximas (dias)", "dias", "Também define a janela de “próximas audiências” do painel.")}
+          {numberField("installmentDueDays", "Parcelas de acordo a vencer (dias)", "dias")}
         </CardContent>
       </Card>
 

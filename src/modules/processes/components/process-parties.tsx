@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { PARTY_ROLE_LABELS } from "@/domain/enums";
+import { LIABILITY_NATURE_LABELS, PARTY_ROLE_LABELS } from "@/domain/enums";
 import { maskDocument } from "@/lib/format";
 import { addPartyAction, removePartyAction, updatePartyAction } from "../actions";
 import type { ProcessDetail } from "../service";
@@ -12,14 +12,16 @@ import { PartyDialog } from "./party-dialog";
 
 export function ProcessParties({ process: p }: { process: ProcessDetail }) {
   const canEdit = p.permissions.canEdit;
-  const cols = canEdit ? 5 : 4;
+  const cols = canEdit ? 6 : 5;
   return (
     <Card className="pb-0">
       <CardHeader
         actions={canEdit ? <PartyDialog mode="add" action={addPartyAction} hiddenFields={{ processId: p.id }} /> : null}
       >
         <CardTitle>Partes</CardTitle>
-        <CardDescription>Polos do processo. CPF/CNPJ aparecem mascarados nesta lista.</CardDescription>
+        <CardDescription>
+          Polos do processo (inclusive Ministério Público e terceiros). CPF aparece mascarado nesta lista.
+        </CardDescription>
       </CardHeader>
       <CardContent className="px-0">
         <Table aria-label="Partes do processo">
@@ -27,6 +29,7 @@ export function ProcessParties({ process: p }: { process: ProcessDetail }) {
             <TableRow>
               <TableHead>Nome</TableHead>
               <TableHead>Polo</TableHead>
+              <TableHead>Responsabilidade</TableHead>
               <TableHead>CPF / CNPJ</TableHead>
               <TableHead>Advogado(a)</TableHead>
               {canEdit ? (
@@ -54,7 +57,10 @@ export function ProcessParties({ process: p }: { process: ProcessDetail }) {
                       </Badge>
                     ) : null}
                   </TableCell>
-                  <TableCell>{PARTY_ROLE_LABELS[party.role]}</TableCell>
+                  <TableCell className="whitespace-nowrap">{PARTY_ROLE_LABELS[party.role]}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {party.liabilityNature ? LIABILITY_NATURE_LABELS[party.liabilityNature] : "—"}
+                  </TableCell>
                   <TableCell className="font-mono text-xs tabular-nums">{maskDocument(party.documentNumber)}</TableCell>
                   <TableCell>{party.counselName ?? "—"}</TableCell>
                   {canEdit ? (
@@ -69,6 +75,7 @@ export function ProcessParties({ process: p }: { process: ProcessDetail }) {
                           role: party.role,
                           documentNumber: party.documentNumber,
                           isClient: party.isClient,
+                          liabilityNature: party.liabilityNature,
                           counselName: party.counselName,
                         }}
                       />

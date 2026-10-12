@@ -25,25 +25,28 @@ import { enumParam, hasAnyParam, idParam, pageParam, param } from "@/lib/search-
 import { AdminNav } from "@/modules/admin/components/admin-nav";
 import { USER_SITUATIONS } from "@/modules/admin/schemas";
 import { listAllUnitOptions, listUsers } from "@/modules/admin/service";
+import { listAllLawFirmOptions } from "@/modules/organization/service";
 import { requirePageContext } from "@/server/auth/session";
 
 export const metadata: Metadata = { title: "Usuários" };
 
-const FILTER_KEYS = ["q", "perfil", "unidade", "situacao"] as const;
+const FILTER_KEYS = ["q", "perfil", "unidade", "escritorio", "situacao"] as const;
 
 export default async function UsersPage(props: PageProps<"/admin/usuarios">) {
   const ctx = await requirePageContext("admin:users");
   const sp = await props.searchParams;
   const situation = enumParam(sp, "situacao", USER_SITUATIONS);
-  const [result, unitOptions] = await Promise.all([
+  const [result, unitOptions, lawFirmOptions] = await Promise.all([
     listUsers(ctx, {
       q: param(sp, "q")?.slice(0, 120),
       role: enumParam(sp, "perfil", ROLES),
       unitId: idParam(sp, "unidade"),
+      lawFirmId: idParam(sp, "escritorio"),
       active: situation === "ativos" ? true : situation === "inativos" ? false : undefined,
       page: pageParam(sp),
     }),
     listAllUnitOptions(ctx),
+    listAllLawFirmOptions(ctx),
   ]);
   const filtered = hasAnyParam(sp, FILTER_KEYS);
 
@@ -75,6 +78,14 @@ export default async function UsersPage(props: PageProps<"/admin/usuarios">) {
           options={unitOptions.map((u) => ({ value: u.id, label: u.isActive ? u.name : `${u.name} (desativada)` }))}
           defaultValue={param(sp, "unidade")}
         />
+        {lawFirmOptions.length > 0 ? (
+          <FilterSelect
+            name="escritorio"
+            label="Escritório externo"
+            options={lawFirmOptions.map((f) => ({ value: f.id, label: f.isActive ? f.name : `${f.name} (desativado)` }))}
+            defaultValue={param(sp, "escritorio")}
+          />
+        ) : null}
         <FilterSelect
           name="situacao"
           label="Situação"
@@ -102,7 +113,7 @@ export default async function UsersPage(props: PageProps<"/admin/usuarios">) {
                   <TableHead>Nome</TableHead>
                   <TableHead>E-mail</TableHead>
                   <TableHead>Perfil</TableHead>
-                  <TableHead>Unidade</TableHead>
+                  <TableHead>Unidade / escritório</TableHead>
                   <TableHead>Equipes</TableHead>
                   <TableHead>Situação</TableHead>
                   <TableHead>Último acesso</TableHead>
@@ -123,7 +134,16 @@ export default async function UsersPage(props: PageProps<"/admin/usuarios">) {
                       </TableCell>
                       <TableCell className="break-all">{u.email}</TableCell>
                       <TableCell>{ROLE_LABELS[u.role]}</TableCell>
-                      <TableCell>{u.unitName ?? <span className="text-muted-foreground">Sem unidade</span>}</TableCell>
+                      <TableCell>
+                        {u.role === "external_counsel" ? (
+                          <span>
+                            <span className="block text-xs text-muted-foreground">Escritório</span>
+                            {u.lawFirmName ?? <span className="text-muted-foreground">Não vinculado</span>}
+                          </span>
+                        ) : (
+                          u.unitName ?? <span className="text-muted-foreground">Sem unidade</span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         {u.teams.length > 0 ? (
                           u.teams.map((t) => t.name).join(", ")

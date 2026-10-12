@@ -9,8 +9,8 @@
  *
  * Filter semantics:
  * - unit / responsible: apply to processes, occurrences, contracts, deadlines and tasks;
- * - legal area: applies to processes and to deadlines/tasks linked to processes of that
- *   area (occurrences and contracts have no legal area);
+ * - legal area / company: apply to processes and to deadlines/tasks linked to processes of that
+ *   area/company (occurrences and contracts have neither);
  * - period: applies to flows (entries, closings, registrations, resolutions) and their
  *   deltas; stock indicators (active processes, exposure, open items) are the current state.
  *
@@ -167,15 +167,27 @@ export async function getBiData(ctx: AuthContext, filters: BiFilters, opts: BiOp
     filters.unitId ? eq(p.unitId, filters.unitId) : undefined,
     filters.area ? eq(p.area, filters.area) : undefined,
     filters.responsibleId ? eq(p.responsibleId, filters.responsibleId) : undefined,
+    filters.companyId ? eq(p.companyId, filters.companyId) : undefined,
   )!;
   const occCond = and(
     occurrenceWhere(ctx),
     filters.unitId ? eq(o.unitId, filters.unitId) : undefined,
     filters.responsibleId ? eq(o.responsibleId, filters.responsibleId) : undefined,
   )!;
-  const areaProcessIds = filters.area
-    ? db.select({ id: p.id }).from(p).where(and(processWhere(ctx), eq(p.area, filters.area)))
-    : null;
+  // Deadlines and tasks have no area/company: they follow the process they are linked to.
+  const areaProcessIds =
+    filters.area || filters.companyId
+      ? db
+          .select({ id: p.id })
+          .from(p)
+          .where(
+            and(
+              processWhere(ctx),
+              filters.area ? eq(p.area, filters.area) : undefined,
+              filters.companyId ? eq(p.companyId, filters.companyId) : undefined,
+            ),
+          )
+      : null;
   const dlCond = and(
     deadlineWhere(ctx),
     filters.unitId ? eq(d.unitId, filters.unitId) : undefined,

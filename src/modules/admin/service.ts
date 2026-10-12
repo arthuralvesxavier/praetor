@@ -21,9 +21,11 @@ import { getDb, type DbOrTx } from "@/server/db/client";
 import {
   aiAnalyses,
   auditLogs,
+  companies,
   contracts,
   deadlines,
   documents,
+  lawFirms,
   legalProcesses,
   occurrences,
   organizations,
@@ -44,7 +46,9 @@ import { diffChanges, recordAudit } from "@/server/services/audit";
 import { revokeUserSessions } from "@/server/services/auth";
 import {
   auditFiltersSchema,
+  contingencySettingsSchema,
   createUserSchema,
+  emailIntakeSettingsSchema,
   listFiltersSchema,
   organizationSettingsSchema,
   resetPasswordSchema,
@@ -54,7 +58,9 @@ import {
   updateUserSchema,
   userFiltersSchema,
   type AuditFilters,
+  type ContingencySettingsInput,
   type CreateUserInput,
+  type EmailIntakeSettingsInput,
   type OrganizationSettingsInput,
   type ResetPasswordInput,
   type RoutineUpdateInput,
@@ -123,6 +129,17 @@ async function assertUnitUsable(db: DbOrTx, ctx: AuthContext, unitId: string, fi
     .limit(1);
   if (!unit) throw new ValidationError(undefined, { [field]: ["Unidade não encontrada nesta organização."] });
   if (!unit.isActive) throw new ValidationError(undefined, { [field]: ["Esta unidade está desativada."] });
+}
+
+/** A law firm newly assigned to a user must belong to the organization and be active. */
+async function assertLawFirmUsable(db: DbOrTx, ctx: AuthContext, lawFirmId: string): Promise<void> {
+  const [firm] = await db
+    .select({ id: lawFirms.id, isActive: lawFirms.isActive })
+    .from(lawFirms)
+    .where(and(eq(lawFirms.id, lawFirmId), eq(lawFirms.organizationId, ctx.organizationId)))
+    .limit(1);
+  if (!firm) throw new ValidationError(undefined, { lawFirmId: ["Escritório não encontrado nesta organização."] });
+  if (!firm.isActive) throw new ValidationError(undefined, { lawFirmId: ["Este escritório está desativado."] });
 }
 
 async function assertTeamsInOrg(db: DbOrTx, ctx: AuthContext, teamIds: readonly string[]): Promise<void> {
@@ -225,6 +242,9 @@ export type UserListItem = {
   role: Role;
   unitId: string | null;
   unitName: string | null;
+  /** Law firm of an external-counsel user (null for every other role). */
+  lawFirmId: string | null;
+  lawFirmName: string | null;
   jobTitle: string | null;
   isActive: boolean;
   lastLoginAt: Date | null;
@@ -241,6 +261,8 @@ const userColumns = {
   role: users.role,
   unitId: users.unitId,
   unitName: units.name,
+  lawFirmId: users.lawFirmId,
+  lawFirmName: lawFirms.name,
   jobTitle: users.jobTitle,
   isActive: users.isActive,
   lastLoginAt: users.lastLoginAt,
@@ -275,6 +297,7 @@ export async function listUsers(ctx: AuthContext, filters: UserFilters = {}): Pr
   }
   if (f.role) conds.push(eq(users.role, f.role));
   if (f.unitId) conds.push(eq(users.unitId, f.unitId));
+  if (f.lawFirmId) conds.push(eq(users.lawFirmId, f.lawFirmId));
   if (f.active !== undefined) conds.push(eq(users.isActive, f.active));
   const where = and(...conds);
 
@@ -283,6 +306,7 @@ export async function listUsers(ctx: AuthContext, filters: UserFilters = {}): Pr
     .select(userColumns)
     .from(users)
     .leftJoin(units, and(eq(units.id, users.unitId), eq(units.organizationId, ctx.organizationId)))
+    .leftJoin(lawFirms, and(eq(lawFirms.id, users.lawFirmId), eq(lawFirms.organizationId, ctx.organizationId)))
     .where(where)
     .orderBy(desc(users.isActive), asc(users.name), asc(users.id))
     .limit(pageSize)
@@ -304,6 +328,7 @@ export async function getUser(ctx: AuthContext, id: string): Promise<UserDetail>
     .select(userColumns)
     .from(users)
     .leftJoin(units, and(eq(units.id, users.unitId), eq(units.organizationId, ctx.organizationId)))
+    .leftJoin(lawFirms, and(eq(lawFirms.id, users.lawFirmId), eq(lawFirms.organizationId, ctx.organizationId)))
     .where(and(eq(users.id, id), eq(users.organizationId, ctx.organizationId)))
     .limit(1);
   if (!row) throw new NotFoundError();
@@ -321,6 +346,7 @@ export async function createUser(ctx: AuthContext, input: CreateUserInput): Prom
   try {
     return await getDb().transaction(async (tx) => {
       if (data.unitId) await assertUnitUsable(tx, ctx, data.unitId);
+      if (data.lawFirmId) await assertLawFirmUsable(tx, ctx, data.lawFirmId);
       await assertTeamsInOrg(tx, ctx, data.teamIds);
       // E-mail is unique across the installation (login is by e-mail).
       const [duplicate] = await tx.select({ id: users.id }).from(users).where(eq(users.email, data.email)).limit(1);
@@ -335,6 +361,7 @@ export async function createUser(ctx: AuthContext, input: CreateUserInput): Prom
           passwordHash,
           role: data.role,
           unitId: data.unitId ?? null,
+          lawFirmId: data.lawFirmId,
           jobTitle: data.jobTitle,
           isActive: true,
         })
@@ -358,6 +385,7 @@ export async function createUser(ctx: AuthContext, input: CreateUserInput): Prom
             email: data.email,
             role: data.role,
             unitId: data.unitId ?? null,
+            lawFirmId: data.lawFirmId,
             jobTitle: data.jobTitle,
             isActive: true,
             teamIds: sortedIds(data.teamIds),
@@ -413,6 +441,8 @@ export async function updateUser(ctx: AuthContext, id: string, input: UpdateUser
 
     const unitId = data.unitId ?? null;
     if (unitId && unitId !== before.unitId) await assertUnitUsable(tx, ctx, unitId);
+    const lawFirmId = data.lawFirmId;
+    if (lawFirmId && lawFirmId !== before.lawFirmId) await assertLawFirmUsable(tx, ctx, lawFirmId);
     await assertTeamsInOrg(tx, ctx, data.teamIds);
 
     const currentTeams = await tx
@@ -424,6 +454,7 @@ export async function updateUser(ctx: AuthContext, id: string, input: UpdateUser
       name: data.name,
       role: data.role,
       unitId,
+      lawFirmId,
       jobTitle: data.jobTitle,
       isActive: data.isActive,
       teamIds: sortedIds(data.teamIds),
@@ -433,7 +464,14 @@ export async function updateUser(ctx: AuthContext, id: string, input: UpdateUser
 
     await tx
       .update(users)
-      .set({ name: after.name, role: after.role, unitId: after.unitId, jobTitle: after.jobTitle, isActive: after.isActive })
+      .set({
+        name: after.name,
+        role: after.role,
+        unitId: after.unitId,
+        lawFirmId: after.lawFirmId,
+        jobTitle: after.jobTitle,
+        isActive: after.isActive,
+      })
       .where(and(eq(users.id, id), eq(users.organizationId, ctx.organizationId)));
 
     if (changes.teamIds) {
@@ -445,9 +483,10 @@ export async function updateUser(ctx: AuthContext, id: string, input: UpdateUser
       }
     }
 
-    // Role, unit or activation changes alter what the user may see: end their sessions.
+    // Role, unit, law firm or activation changes alter what the user may see: end their sessions.
     // (Your own role/activation cannot change here; your own unit change applies on the next request.)
-    const sessionsRevoked = !isSelf && Boolean(changes.role || changes.unitId || (changes.isActive && !after.isActive));
+    const sessionsRevoked =
+      !isSelf && Boolean(changes.role || changes.unitId || changes.lawFirmId || (changes.isActive && !after.isActive));
     const summary = changes.isActive
       ? `Usuário ${after.name} ${after.isActive ? "reativado" : "desativado"}`
       : `Usuário ${after.name} alterado`;
@@ -469,6 +508,7 @@ export async function setUserActive(ctx: AuthContext, id: string, active: boolea
     name: user.name,
     role: user.role,
     unitId: user.unitId,
+    lawFirmId: user.lawFirmId,
     jobTitle: user.jobTitle,
     isActive: active,
     teamIds: user.teamIds,
@@ -783,12 +823,37 @@ function unitSelect() {
       name: units.name,
       code: units.code,
       isActive: units.isActive,
-      userCount: sql<number>`(select count(*)::int from ${users} where ${users.unitId} = ${units.id})`,
-      teamCount: sql<number>`(select count(*)::int from ${teams} where ${teams.unitId} = ${units.id})`,
       createdAt: units.createdAt,
       updatedAt: units.updatedAt,
     })
     .from(units);
+}
+
+/**
+ * Users and teams per unit. Grouped queries instead of correlated subqueries:
+ * drizzle renders columns of a single-table select without the table name,
+ * which silently broke the correlation (counts always 0).
+ */
+async function unitCounts(ctx: AuthContext, unitIds: string[]) {
+  const usersByUnit = new Map<string, number>();
+  const teamsByUnit = new Map<string, number>();
+  if (unitIds.length === 0) return { usersByUnit, teamsByUnit };
+  const db = getDb();
+  const [u, t] = await Promise.all([
+    db
+      .select({ id: users.unitId, n: count() })
+      .from(users)
+      .where(and(eq(users.organizationId, ctx.organizationId), inArray(users.unitId, unitIds)))
+      .groupBy(users.unitId),
+    db
+      .select({ id: teams.unitId, n: count() })
+      .from(teams)
+      .where(and(eq(teams.organizationId, ctx.organizationId), inArray(teams.unitId, unitIds)))
+      .groupBy(teams.unitId),
+  ]);
+  for (const r of u) if (r.id) usersByUnit.set(r.id, r.n);
+  for (const r of t) if (r.id) teamsByUnit.set(r.id, r.n);
+  return { usersByUnit, teamsByUnit };
 }
 
 export async function listUnits(
@@ -807,14 +872,15 @@ export async function listUnits(
   const where = and(...conds);
   const rows = await unitSelect().where(where).orderBy(desc(units.isActive), asc(units.name)).limit(pageSize).offset(offset);
   const [{ total }] = await getDb().select({ total: count() }).from(units).where(where);
+  const { usersByUnit, teamsByUnit } = await unitCounts(ctx, rows.map((r) => r.id));
   return {
     items: rows.map((r) => ({
       id: r.id,
       name: r.name,
       code: r.code,
       isActive: r.isActive,
-      userCount: Number(r.userCount),
-      teamCount: Number(r.teamCount),
+      userCount: usersByUnit.get(r.id) ?? 0,
+      teamCount: teamsByUnit.get(r.id) ?? 0,
     })),
     total,
     page,
@@ -841,8 +907,9 @@ export async function getUnit(ctx: AuthContext, id: string): Promise<UnitDetail>
     .limit(1);
   if (!row) throw new NotFoundError();
   const records = await countUnitRecordReferences(getDb(), id);
-  const userCount = Number(row.userCount);
-  const teamCount = Number(row.teamCount);
+  const { usersByUnit, teamsByUnit } = await unitCounts(ctx, [id]);
+  const userCount = usersByUnit.get(id) ?? 0;
+  const teamCount = teamsByUnit.get(id) ?? 0;
   return { ...row, userCount, teamCount, references: { users: userCount, teams: teamCount, records } };
 }
 
@@ -986,6 +1053,8 @@ function flattenSettings(name: string, s: OrganizationSettings) {
     autoAnalyzeOnUpload: s.ai.autoAnalyzeOnUpload,
     upcomingDeadlineDays: s.alerts.upcomingDeadlineDays,
     contractExpirationDays: s.alerts.contractExpirationDays,
+    upcomingHearingDays: s.alerts.upcomingHearingDays,
+    installmentDueDays: s.alerts.installmentDueDays,
     closedRecordRetentionDays: s.retention.closedRecordRetentionDays,
     auditLogRetentionDays: s.retention.auditLogRetentionDays,
   };
@@ -1035,6 +1104,8 @@ export async function updateOrganizationSettings(ctx: AuthContext, input: Organi
         ...current.alerts,
         upcomingDeadlineDays: data.upcomingDeadlineDays,
         contractExpirationDays: data.contractExpirationDays,
+        upcomingHearingDays: data.upcomingHearingDays ?? current.alerts.upcomingHearingDays,
+        installmentDueDays: data.installmentDueDays ?? current.alerts.installmentDueDays,
       },
       retention: {
         closedRecordRetentionDays: data.closedRecordRetentionDays,
@@ -1057,6 +1128,131 @@ export async function updateOrganizationSettings(ctx: AuthContext, input: Organi
         entityType: "organization",
         entityId: ctx.organizationId,
         summary: "Configurações da organização alteradas",
+        changes,
+      },
+      tx,
+    );
+  });
+}
+
+/** Locks the organization row and returns its merged settings (inside a transaction). */
+async function lockOrganization(tx: DbOrTx, ctx: AuthContext) {
+  const [org] = await tx.select().from(organizations).where(eq(organizations.id, ctx.organizationId)).for("update");
+  if (!org) throw new NotFoundError("Organização não encontrada.");
+  return { org, current: mergeSettings(org.settings) };
+}
+
+function flattenContingency(c: OrganizationSettings["contingency"]) {
+  return {
+    riskPercentRemote: c.riskPercentages.remote,
+    riskPercentPossible: c.riskPercentages.possible,
+    riskPercentProbable: c.riskPercentages.probable,
+    confidenceThreshold: c.confidenceThreshold,
+    idleGuaranteeDays: c.idleGuaranteeDays,
+    rulesVersion: c.rulesVersion,
+  };
+}
+
+/**
+ * Contingency parameters (RN-04, RN-05, RN-11). Any change to a risk
+ * percentage increments `rulesVersion` (RNF-14): risk assessments and monthly
+ * closings record the version they used, so earlier reports stay
+ * reproducible. Audited with before/after values.
+ */
+export async function updateContingencySettings(
+  ctx: AuthContext,
+  input: ContingencySettingsInput,
+): Promise<{ rulesVersion: number; rulesVersionChanged: boolean }> {
+  assertCan(ctx, "admin:organization");
+  const data = parse(contingencySettingsSchema, input);
+  return getDb().transaction(async (tx) => {
+    const { current } = await lockOrganization(tx, ctx);
+    const before = current.contingency;
+    const riskPercentages = { remote: data.riskRemote, possible: data.riskPossible, probable: data.riskProbable };
+    const percentagesChanged =
+      riskPercentages.remote !== before.riskPercentages.remote ||
+      riskPercentages.possible !== before.riskPercentages.possible ||
+      riskPercentages.probable !== before.riskPercentages.probable;
+    const next: OrganizationSettings["contingency"] = {
+      riskPercentages,
+      confidenceThreshold: data.confidenceThreshold,
+      idleGuaranteeDays: data.idleGuaranteeDays,
+      rulesVersion: percentagesChanged ? before.rulesVersion + 1 : before.rulesVersion,
+    };
+    const changes = diffChanges(flattenContingency(before), flattenContingency(next));
+    if (!changes) return { rulesVersion: before.rulesVersion, rulesVersionChanged: false };
+    await tx
+      .update(organizations)
+      .set({ settings: { ...current, contingency: next } })
+      .where(eq(organizations.id, ctx.organizationId));
+    await recordAudit(
+      ctx,
+      {
+        action: "organization.contingency_settings_update",
+        entityType: "organization",
+        entityId: ctx.organizationId,
+        summary: percentagesChanged
+          ? `Parâmetros de contingência alterados — percentuais de risco na versão ${next.rulesVersion} das regras`
+          : "Parâmetros de contingência alterados",
+        changes,
+        metadata: {
+          rulesVersionBefore: before.rulesVersion,
+          rulesVersionAfter: next.rulesVersion,
+          riskPercentagesBefore: before.riskPercentages,
+          riskPercentagesAfter: next.riskPercentages,
+        },
+      },
+      tx,
+    );
+    return { rulesVersion: next.rulesVersion, rulesVersionChanged: percentagesChanged };
+  });
+}
+
+function flattenEmailIntake(s: Pick<OrganizationSettings, "email" | "intake">) {
+  return {
+    senderName: s.email.senderName,
+    senderAddress: s.email.senderAddress,
+    notifyOnBriefReady: s.email.notifyOnBriefReady,
+    notifyOnAssignment: s.email.notifyOnAssignment,
+    autoAssign: s.intake.autoAssign,
+    autoGenerateBrief: s.intake.autoGenerateBrief,
+    autoNotify: s.intake.autoNotify,
+  };
+}
+
+/**
+ * Simulated e-mail (sender shown in simulations, which notifications are
+ * generated) and the process intake pipeline switches. The e-mail mode is
+ * fixed to `simulated` in this version and cannot be changed here.
+ */
+export async function updateEmailIntakeSettings(ctx: AuthContext, input: EmailIntakeSettingsInput): Promise<void> {
+  assertCan(ctx, "admin:organization");
+  const data = parse(emailIntakeSettingsSchema, input);
+  await getDb().transaction(async (tx) => {
+    const { current } = await lockOrganization(tx, ctx);
+    const next: Pick<OrganizationSettings, "email" | "intake"> = {
+      email: {
+        mode: "simulated",
+        senderName: data.senderName,
+        senderAddress: data.senderAddress,
+        notifyOnBriefReady: data.notifyOnBriefReady,
+        notifyOnAssignment: data.notifyOnAssignment,
+      },
+      intake: { autoAssign: data.autoAssign, autoGenerateBrief: data.autoGenerateBrief, autoNotify: data.autoNotify },
+    };
+    const changes = diffChanges(flattenEmailIntake(current), flattenEmailIntake(next));
+    if (!changes) return;
+    await tx
+      .update(organizations)
+      .set({ settings: { ...current, ...next } })
+      .where(eq(organizations.id, ctx.organizationId));
+    await recordAudit(
+      ctx,
+      {
+        action: "organization.email_intake_settings_update",
+        entityType: "organization",
+        entityId: ctx.organizationId,
+        summary: "Configurações de e-mail (simulado) e de entrada de processos alteradas",
         changes,
       },
       tx,
@@ -1242,8 +1438,12 @@ function startOfDay(iso: string): Date {
   return new Date(`${iso}T00:00:00-03:00`);
 }
 
-/** Resolves ids that appear in diffs to user/unit/team names of the same organization. */
-async function resolveReferenceNames(ctx: AuthContext, changesList: (Changes | null)[]): Promise<Record<string, string>> {
+/** Resolves ids that appear in diffs to user/unit/team/company/law firm names of the same organization. */
+async function resolveReferenceNames(
+  ctx: AuthContext,
+  changesList: (Changes | null)[],
+  maxIds = 500,
+): Promise<Record<string, string>> {
   const ids = new Set<string>();
   const collect = (v: unknown) => {
     if (isGuid(v)) ids.add(v);
@@ -1257,9 +1457,9 @@ async function resolveReferenceNames(ctx: AuthContext, changesList: (Changes | n
     }
   }
   if (ids.size === 0) return {};
-  const list = [...ids].slice(0, 500);
+  const list = [...ids].slice(0, maxIds);
   const db = getDb();
-  const [u, un, t] = await Promise.all([
+  const [u, un, t, co, lf] = await Promise.all([
     db
       .select({ id: users.id, name: users.name })
       .from(users)
@@ -1272,16 +1472,21 @@ async function resolveReferenceNames(ctx: AuthContext, changesList: (Changes | n
       .select({ id: teams.id, name: teams.name })
       .from(teams)
       .where(and(inArray(teams.id, list), eq(teams.organizationId, ctx.organizationId))),
+    db
+      .select({ id: companies.id, name: companies.name })
+      .from(companies)
+      .where(and(inArray(companies.id, list), eq(companies.organizationId, ctx.organizationId))),
+    db
+      .select({ id: lawFirms.id, name: lawFirms.name })
+      .from(lawFirms)
+      .where(and(inArray(lawFirms.id, list), eq(lawFirms.organizationId, ctx.organizationId))),
   ]);
   const names: Record<string, string> = {};
-  for (const r of [...u, ...un, ...t]) names[r.id] = r.name;
+  for (const r of [...u, ...un, ...t, ...co, ...lf]) names[r.id] = r.name;
   return names;
 }
 
-export async function listAuditLogs(ctx: AuthContext, filters: AuditFilters = {}): Promise<Paginated<AuditLogItem>> {
-  assertCan(ctx, "audit:read");
-  const f = parse(auditFiltersSchema, filters);
-  const { page, pageSize, offset } = normalizePage(f);
+function auditWhere(ctx: AuthContext, f: z.output<typeof auditFiltersSchema>): SQL | undefined {
   const conds: (SQL | undefined)[] = [eq(auditLogs.organizationId, ctx.organizationId)];
   if (f.action) conds.push(eq(auditLogs.action, f.action));
   if (f.entityType) conds.push(eq(auditLogs.entityType, f.entityType));
@@ -1289,10 +1494,11 @@ export async function listAuditLogs(ctx: AuthContext, filters: AuditFilters = {}
   if (f.entityId) conds.push(eq(auditLogs.entityId, f.entityId));
   if (f.from) conds.push(gte(auditLogs.createdAt, startOfDay(f.from)));
   if (f.to) conds.push(lt(auditLogs.createdAt, startOfDay(addDaysISO(f.to, 1))));
-  const where = and(...conds);
+  return and(...conds);
+}
 
-  const db = getDb();
-  const rows = await db
+function auditSelect() {
+  return getDb()
     .select({
       id: auditLogs.id,
       createdAt: auditLogs.createdAt,
@@ -1305,15 +1511,60 @@ export async function listAuditLogs(ctx: AuthContext, filters: AuditFilters = {}
       actorId: auditLogs.actorId,
       actorName: users.name,
     })
-    .from(auditLogs)
+    .from(auditLogs);
+}
+
+export async function listAuditLogs(ctx: AuthContext, filters: AuditFilters = {}): Promise<Paginated<AuditLogItem>> {
+  assertCan(ctx, "audit:read");
+  const f = parse(auditFiltersSchema, filters);
+  const { page, pageSize, offset } = normalizePage(f);
+  const where = auditWhere(ctx, f);
+
+  const rows = await auditSelect()
     .leftJoin(users, and(eq(users.id, auditLogs.actorId), eq(users.organizationId, ctx.organizationId)))
     .where(where)
     .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
     .limit(pageSize)
     .offset(offset);
-  const [{ total }] = await db.select({ total: count() }).from(auditLogs).where(where);
+  const [{ total }] = await getDb().select({ total: count() }).from(auditLogs).where(where);
   const refNames = await resolveReferenceNames(ctx, rows.map((r) => r.changes));
   return { items: rows.map((r) => ({ ...r, refNames })), total, page, pageSize };
+}
+
+/** Max rows of one CSV export (the export says when the trail was cut). */
+export const AUDIT_EXPORT_MAX_ROWS = 10_000;
+
+/**
+ * Filtered audit trail for the CSV export (RF-22), newest first, capped at
+ * AUDIT_EXPORT_MAX_ROWS. The export itself is audited (`audit.export`, with
+ * the filters and row count — never the exported content).
+ */
+export async function exportAuditLogs(
+  ctx: AuthContext,
+  filters: Omit<AuditFilters, "page" | "pageSize"> = {},
+): Promise<{ items: AuditLogItem[]; total: number; truncated: boolean }> {
+  assertCan(ctx, "audit:read");
+  const f = parse(auditFiltersSchema, { ...filters, page: undefined, pageSize: undefined });
+  const where = auditWhere(ctx, f);
+  const rows = await auditSelect()
+    .leftJoin(users, and(eq(users.id, auditLogs.actorId), eq(users.organizationId, ctx.organizationId)))
+    .where(where)
+    .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
+    .limit(AUDIT_EXPORT_MAX_ROWS);
+  const [{ total }] = await getDb().select({ total: count() }).from(auditLogs).where(where);
+  const refNames = await resolveReferenceNames(ctx, rows.map((r) => r.changes), 5_000);
+  await recordAudit(ctx, {
+    action: "audit.export",
+    entityType: "organization",
+    entityId: ctx.organizationId,
+    summary: `Trilha de auditoria exportada em CSV (${rows.length.toLocaleString("pt-BR")} ${rows.length === 1 ? "registro" : "registros"})`,
+    metadata: {
+      filters: { action: f.action ?? null, entityType: f.entityType ?? null, actorId: f.actorId ?? null, from: f.from ?? null, to: f.to ?? null },
+      rows: rows.length,
+      total,
+    },
+  });
+  return { items: rows.map((r) => ({ ...r, refNames })), total, truncated: total > rows.length };
 }
 
 /** Distinct action ids recorded in the organization (audit filter). */
@@ -1418,13 +1669,17 @@ export type AdminOverview = {
   users: { active: number; total: number } | null;
   teams: number | null;
   units: { active: number; total: number } | null;
+  /** Only with `admin:organization`. */
+  companies: { active: number; total: number } | null;
+  lawFirms: { active: number; total: number } | null;
   recentAudit: AuditLogItem[] | null;
 };
 
 export async function getAdminOverview(ctx: AuthContext): Promise<AdminOverview> {
   const canUsers = can(ctx, "admin:users");
   const canAudit = can(ctx, "audit:read");
-  if (!canUsers && !canAudit && !can(ctx, "admin:organization")) throw new ForbiddenError();
+  const canOrg = can(ctx, "admin:organization");
+  if (!canUsers && !canAudit && !canOrg) throw new ForbiddenError();
   const db = getDb();
   const org = ctx.organizationId;
 
@@ -1445,6 +1700,27 @@ export async function getAdminOverview(ctx: AuthContext): Promise<AdminOverview>
     teamsStat = t.total;
     unitsStat = { total: un.total, active: Number(un.active) };
   }
+  let companiesStat: AdminOverview["companies"] = null;
+  let lawFirmsStat: AdminOverview["lawFirms"] = null;
+  if (canOrg) {
+    const [c] = await db
+      .select({ total: count(), active: sql<number>`count(*) filter (where ${companies.isActive})::int` })
+      .from(companies)
+      .where(eq(companies.organizationId, org));
+    const [f] = await db
+      .select({ total: count(), active: sql<number>`count(*) filter (where ${lawFirms.isActive})::int` })
+      .from(lawFirms)
+      .where(eq(lawFirms.organizationId, org));
+    companiesStat = { total: c.total, active: Number(c.active) };
+    lawFirmsStat = { total: f.total, active: Number(f.active) };
+  }
   const recentAudit = canAudit ? (await listAuditLogs(ctx, { pageSize: 5 })).items : null;
-  return { users: usersStat, teams: teamsStat, units: unitsStat, recentAudit };
+  return {
+    users: usersStat,
+    teams: teamsStat,
+    units: unitsStat,
+    companies: companiesStat,
+    lawFirms: lawFirmsStat,
+    recentAudit,
+  };
 }

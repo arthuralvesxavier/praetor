@@ -2,20 +2,33 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { bool, moneyCents, str, strOrNull } from "@/lib/form";
+import { bool, int, moneyCents, str, strOrNull } from "@/lib/form";
 import { requireActionContext } from "@/server/auth/session";
 import { AppError, toActionError, type ActionResult } from "@/server/lib/errors";
 import { logger } from "@/server/lib/logger";
-import type { PartyInput, ProcessEventInput, UpdateProcessInput } from "./schemas";
+import type {
+  CloseProcessInput,
+  PartyInput,
+  ProcessEventInput,
+  ProcessInstanceInput,
+  UpdateProcessInput,
+} from "./schemas";
 import {
   addParty,
   addProcessEvent,
+  addProcessInstance,
+  closeProcess,
   createProcess,
   deleteProcess,
+  flagProcessForVerification,
+  reactivateProcess,
   removeParty,
   removeProcessEvent,
+  removeProcessInstance,
+  resolveProcessVerification,
   updateParty,
   updateProcess,
+  updateProcessInstance,
 } from "./service";
 
 /** ActionResult + submitted values on failure (forms re-fill their fields). */
@@ -42,26 +55,41 @@ function idFrom(fd: FormData, key: string): string {
   return str(fd, key) ?? "";
 }
 
+/**
+ * Optional field: absent from the form -> undefined (the stored value is kept);
+ * present but empty -> null (cleared).
+ */
+function optional(fd: FormData, key: string): string | null | undefined {
+  return fd.has(key) ? strOrNull(fd, key) : undefined;
+}
+
 function processInputFromForm(fd: FormData): UpdateProcessInput {
   return {
     number: str(fd, "number"),
     title: str(fd, "title"),
     court: str(fd, "court"),
-    courtDivision: strOrNull(fd, "courtDivision"),
-    jurisdiction: strOrNull(fd, "jurisdiction"),
+    courtDivision: optional(fd, "courtDivision"),
+    jurisdiction: optional(fd, "jurisdiction"),
     area: str(fd, "area") as UpdateProcessInput["area"],
     phase: str(fd, "phase") as UpdateProcessInput["phase"],
+    phaseDetail: optional(fd, "phaseDetail"),
+    // Rendered only while the process is in the active portfolio (closure has its own action).
     status: str(fd, "status") as UpdateProcessInput["status"],
-    filedAt: strOrNull(fd, "filedAt"),
-    closedAt: strOrNull(fd, "closedAt"),
-    unitId: strOrNull(fd, "unitId"),
-    responsibleId: strOrNull(fd, "responsibleId"),
-    claimAmountCents: moneyCents(fd, "claimAmountCents"),
-    provisionAmountCents: moneyCents(fd, "provisionAmountCents"),
+    filedAt: optional(fd, "filedAt"),
+    lastMovementAt: optional(fd, "lastMovementAt"),
+    instance: optional(fd, "instance") as UpdateProcessInput["instance"],
+    processClass: optional(fd, "processClass"),
+    city: optional(fd, "city"),
+    state: optional(fd, "state"),
+    companyId: optional(fd, "companyId"),
+    // Not rendered for external counsel (their firm is fixed).
+    lawFirmId: optional(fd, "lawFirmId"),
+    unitId: optional(fd, "unitId"),
+    responsibleId: optional(fd, "responsibleId"),
+    claimAmountCents: fd.has("claimAmountCents") ? moneyCents(fd, "claimAmountCents") : undefined,
     riskLevel: str(fd, "riskLevel") as UpdateProcessInput["riskLevel"],
-    lossProbability: strOrNull(fd, "lossProbability") as UpdateProcessInput["lossProbability"],
-    riskRationale: strOrNull(fd, "riskRationale"),
-    description: strOrNull(fd, "description"),
+    riskRationale: optional(fd, "riskRationale"),
+    description: optional(fd, "description"),
     // The checkbox is only rendered for admin / legal manager; the marker tells
     // "unchecked" apart from "not shown". The service ignores it for other roles.
     isConfidential: fd.has("confidentialityField") ? bool(fd, "isConfidential") : undefined,
@@ -74,6 +102,7 @@ function partyInputFromForm(fd: FormData): PartyInput {
     role: str(fd, "role") as PartyInput["role"],
     documentNumber: strOrNull(fd, "documentNumber"),
     isClient: bool(fd, "isClient"),
+    liabilityNature: strOrNull(fd, "liabilityNature") as PartyInput["liabilityNature"],
     counselName: strOrNull(fd, "counselName"),
   };
 }
@@ -84,6 +113,24 @@ function eventInputFromForm(fd: FormData): ProcessEventInput {
     type: str(fd, "type") as ProcessEventInput["type"],
     title: str(fd, "title") as string,
     description: strOrNull(fd, "description"),
+    instance: strOrNull(fd, "instance") as ProcessEventInput["instance"],
+    cnjMovementCode: int(fd, "cnjMovementCode") ?? null,
+  };
+}
+
+function instanceInputFromForm(fd: FormData): ProcessInstanceInput {
+  return {
+    instance: str(fd, "instance") as ProcessInstanceInput["instance"],
+    court: str(fd, "court") as string,
+    courtDivision: strOrNull(fd, "courtDivision"),
+    city: strOrNull(fd, "city"),
+    state: strOrNull(fd, "state"),
+    processClass: strOrNull(fd, "processClass"),
+    phase: strOrNull(fd, "phase") as ProcessInstanceInput["phase"],
+    phaseDetail: strOrNull(fd, "phaseDetail"),
+    claimAmountCents: moneyCents(fd, "claimAmountCents"),
+    liquidatedAmountCents: moneyCents(fd, "liquidatedAmountCents"),
+    isCurrent: bool(fd, "isCurrent"),
   };
 }
 
@@ -147,6 +194,128 @@ export async function deleteProcessAction(
 }
 
 // ---------------------------------------------------------------------------
+// Active portfolio lifecycle (RN-12) and verification
+// ---------------------------------------------------------------------------
+
+export async function closeProcessAction(
+  _prev: ProcessActionState | null,
+  formData: FormData,
+): Promise<ProcessActionState> {
+  const id = idFrom(formData, "id");
+  try {
+    const ctx = await requireActionContext("process:write");
+    await closeProcess(ctx, id, {
+      closureReason: str(formData, "closureReason") as CloseProcessInput["closureReason"],
+      closedAt: strOrNull(formData, "closedAt"),
+      note: strOrNull(formData, "note"),
+    });
+    revalidatePath("/processos");
+    revalidatePath(DETAIL(id));
+    return { ok: true, data: { id }, message: "Processo retirado da carteira ativa." };
+  } catch (err) {
+    return failure(err, "closeProcess", formData);
+  }
+}
+
+export async function reactivateProcessAction(
+  _prev: ProcessActionState | null,
+  formData: FormData,
+): Promise<ProcessActionState> {
+  const id = idFrom(formData, "id");
+  try {
+    const ctx = await requireActionContext("process:write");
+    await reactivateProcess(ctx, id, { note: strOrNull(formData, "note") });
+    revalidatePath("/processos");
+    revalidatePath(DETAIL(id));
+    return { ok: true, data: { id }, message: "Processo reativado na carteira ativa." };
+  } catch (err) {
+    return failure(err, "reactivateProcess", formData);
+  }
+}
+
+export async function flagVerificationAction(
+  _prev: ProcessActionState | null,
+  formData: FormData,
+): Promise<ProcessActionState> {
+  const id = idFrom(formData, "id");
+  try {
+    const ctx = await requireActionContext("process:write");
+    await flagProcessForVerification(ctx, id, { note: str(formData, "note") ?? "" });
+    revalidatePath("/processos");
+    revalidatePath(DETAIL(id));
+    return { ok: true, data: { id }, message: "Processo marcado para verificação." };
+  } catch (err) {
+    return failure(err, "flagProcessForVerification", formData);
+  }
+}
+
+export async function resolveVerificationAction(
+  _prev: ProcessActionState | null,
+  formData: FormData,
+): Promise<ProcessActionState> {
+  const id = idFrom(formData, "id");
+  try {
+    const ctx = await requireActionContext("process:write");
+    await resolveProcessVerification(ctx, id, { note: strOrNull(formData, "note") });
+    revalidatePath("/processos");
+    revalidatePath(DETAIL(id));
+    return { ok: true, data: { id }, message: "Verificação concluída." };
+  } catch (err) {
+    return failure(err, "resolveProcessVerification", formData);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Instances
+// ---------------------------------------------------------------------------
+
+export async function addInstanceAction(
+  _prev: ProcessActionState | null,
+  formData: FormData,
+): Promise<ProcessActionState> {
+  try {
+    const ctx = await requireActionContext("process:write");
+    const processId = idFrom(formData, "processId");
+    const { id } = await addProcessInstance(ctx, processId, instanceInputFromForm(formData));
+    revalidatePath(DETAIL(processId));
+    revalidatePath("/processos");
+    return { ok: true, data: { id }, message: "Instância incluída." };
+  } catch (err) {
+    return failure(err, "addProcessInstance", formData);
+  }
+}
+
+export async function updateInstanceAction(
+  _prev: ProcessActionState | null,
+  formData: FormData,
+): Promise<ProcessActionState> {
+  try {
+    const ctx = await requireActionContext("process:write");
+    const instanceId = idFrom(formData, "instanceId");
+    const { processId } = await updateProcessInstance(ctx, instanceId, instanceInputFromForm(formData));
+    revalidatePath(DETAIL(processId));
+    revalidatePath("/processos");
+    return { ok: true, data: { id: instanceId }, message: "Instância atualizada." };
+  } catch (err) {
+    return failure(err, "updateProcessInstance", formData);
+  }
+}
+
+export async function removeInstanceAction(
+  _prev: ProcessActionState | null,
+  formData: FormData,
+): Promise<ProcessActionState> {
+  try {
+    const ctx = await requireActionContext("process:write");
+    const { processId } = await removeProcessInstance(ctx, idFrom(formData, "instanceId"));
+    revalidatePath(DETAIL(processId));
+    return { ok: true, message: "Instância removida." };
+  } catch (err) {
+    return failure(err, "removeProcessInstance");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Parties
 // ---------------------------------------------------------------------------
 
@@ -156,6 +325,7 @@ export async function addPartyAction(_prev: ProcessActionState | null, formData:
     const processId = idFrom(formData, "processId");
     const { id } = await addParty(ctx, processId, partyInputFromForm(formData));
     revalidatePath(DETAIL(processId));
+    revalidatePath("/processos");
     return { ok: true, data: { id }, message: "Parte adicionada." };
   } catch (err) {
     return failure(err, "addParty", formData);
@@ -171,6 +341,7 @@ export async function updatePartyAction(
     const partyId = idFrom(formData, "partyId");
     const { processId } = await updateParty(ctx, partyId, partyInputFromForm(formData));
     revalidatePath(DETAIL(processId));
+    revalidatePath("/processos");
     return { ok: true, data: { id: partyId }, message: "Parte atualizada." };
   } catch (err) {
     return failure(err, "updateParty", formData);
@@ -185,6 +356,7 @@ export async function removePartyAction(
     const ctx = await requireActionContext("process:write");
     const { processId } = await removeParty(ctx, idFrom(formData, "partyId"));
     revalidatePath(DETAIL(processId));
+    revalidatePath("/processos");
     return { ok: true, message: "Parte removida." };
   } catch (err) {
     return failure(err, "removeParty");

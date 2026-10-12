@@ -8,6 +8,7 @@ import type {
 } from "@/domain/enums";
 import { normalizePage, type LinkableEntityType, type Page, type Paginated } from "@/domain/entities";
 import { markAnalysesStaleForEntity } from "@/modules/analyses/service";
+import { markCaseBriefsStale } from "@/modules/briefs/service";
 import { contractWhere, documentWhere, occurrenceWhere, processWhere } from "@/server/auth/access";
 import type { AuthContext } from "@/server/auth/context";
 import { assertCan } from "@/server/auth/permissions";
@@ -27,6 +28,7 @@ import { enqueueJob } from "@/server/jobs/queue";
 import { ConflictError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { logger } from "@/server/lib/logger";
 import { recordAudit, diffChanges } from "@/server/services/audit";
+import { effectiveConfidentiality } from "./confidentiality";
 import { maxUploadBytes } from "./file-types";
 import { errorSummary } from "./log";
 import {
@@ -89,6 +91,8 @@ export type DocumentVersionItem = {
   sha256: string;
   extractionStatus: TextExtractionStatus;
   extractedAt: Date | null;
+  /** Number of pages (PDF) when known. */
+  pageCount: number | null;
   changeNote: string | null;
   uploadedByName: string | null;
   createdAt: Date;
@@ -302,7 +306,9 @@ export async function uploadDocument(
 ): Promise<{ documentId: string; versionId: string }> {
   assertCan(ctx, "document:upload");
   const { file: rawFile, ...metadata } = input ?? ({} as typeof input);
-  const meta = parseOrThrow(uploadDocumentSchema, metadata);
+  const parsedMeta = parseOrThrow(uploadDocumentSchema, metadata);
+  // PD-04: health documents (atestado, laudo, CAT) are always restricted.
+  const meta = { ...parsedMeta, confidentiality: effectiveConfidentiality(parsedMeta.category, parsedMeta.confidentiality) };
   const file = validateUploadFile(rawFile, { maxBytes: uploadLimitBytes() });
   await assertLinksVisible(ctx, meta);
 
@@ -484,7 +490,11 @@ export async function updateDocumentMetadata(ctx: AuthContext, documentId: strin
     if (description !== before.description) patch.description = description;
   }
   if (v.category !== undefined && v.category !== before.category) patch.category = v.category;
-  if (v.confidentiality !== undefined && v.confidentiality !== before.confidentiality) patch.confidentiality = v.confidentiality;
+  // PD-04: a health document stays restricted whatever level was requested.
+  const nextCategory = patch.category ?? before.category;
+  const requestedLevel = v.confidentiality ?? before.confidentiality;
+  const nextLevel = effectiveConfidentiality(nextCategory, requestedLevel);
+  if (nextLevel !== before.confidentiality) patch.confidentiality = nextLevel;
   if (v.retentionUntil !== undefined && v.retentionUntil !== before.retentionUntil) patch.retentionUntil = v.retentionUntil;
   if (v.legalHold !== undefined && v.legalHold !== before.legalHold) {
     assertCan(ctx, "document:delete");
@@ -531,6 +541,15 @@ export async function updateDocumentMetadata(ctx: AuthContext, documentId: strin
         },
         tx,
       );
+      await markCaseBriefsStale(
+        {
+          organizationId: ctx.organizationId,
+          documentId: id,
+          processId: "processId" in patch ? (patch.processId ?? null) : null,
+          reason: "Os vínculos ou a confidencialidade de um documento do processo foram alterados.",
+        },
+        tx,
+      );
     }
   });
 }
@@ -570,6 +589,10 @@ export async function deleteDocument(ctx: AuthContext, documentId: string): Prom
     );
     await markAnalysesStaleForEntity(
       { organizationId: ctx.organizationId, entityId: id, reason: "Um documento usado na análise foi excluído." },
+      tx,
+    );
+    await markCaseBriefsStale(
+      { organizationId: ctx.organizationId, documentId: id, reason: `O documento "${doc.title}" usado na análise foi excluído.` },
       tx,
     );
   });
@@ -669,6 +692,7 @@ export async function getDocument(ctx: AuthContext, documentId: string): Promise
       sha256: documentVersions.sha256,
       extractionStatus: documentVersions.extractionStatus,
       extractedAt: documentVersions.extractedAt,
+      pageCount: documentVersions.pageCount,
       changeNote: documentVersions.changeNote,
       uploadedByName: users.name,
       createdAt: documentVersions.createdAt,
@@ -788,6 +812,91 @@ export async function openDocumentVersion(
   return { fileName: row.fileName, mimeType: row.mimeType, sizeBytes: row.sizeBytes, stream };
 }
 
+export type DocumentPageText = {
+  documentId: string;
+  versionId: string;
+  title: string;
+  versionNumber: number;
+  fileName: string;
+  /** Requested page, or null when the version has no page information (whole text returned). */
+  page: number | null;
+  pageCount: number | null;
+  /** UNTRUSTED content: render as plain text. */
+  text: string;
+  /** True when the text was cut at PAGE_TEXT_MAX_CHARS. */
+  truncated: boolean;
+};
+
+export const PAGE_TEXT_MAX_CHARS = 20_000;
+
+/**
+ * Extracted text of ONE page of a document version (used to show the page a
+ * citation points to). Checks `document:read`, the document's visibility and
+ * that the version belongs to it. Versions without page offsets (non-PDF)
+ * return their whole text with `page = null`.
+ */
+export async function getDocumentVersionPageText(
+  ctx: AuthContext,
+  documentId: string,
+  versionId: string,
+  page: number | null,
+): Promise<DocumentPageText> {
+  assertCan(ctx, "document:read");
+  const docId = parseId(documentId);
+  const verId = parseId(versionId);
+  const [row] = await getDb()
+    .select({
+      title: documents.title,
+      versionNumber: documentVersions.versionNumber,
+      fileName: documentVersions.fileName,
+      extractionStatus: documentVersions.extractionStatus,
+      text: documentVersions.extractedText,
+      pageCount: documentVersions.pageCount,
+      pageOffsets: documentVersions.pageOffsets,
+    })
+    .from(documentVersions)
+    .innerJoin(documents, eq(documents.id, documentVersions.documentId))
+    .where(
+      and(
+        eq(documentVersions.id, verId),
+        eq(documentVersions.documentId, docId),
+        eq(documentVersions.organizationId, ctx.organizationId),
+        documentWhere(ctx),
+      ),
+    )
+    .limit(1);
+  if (!row) throw new NotFoundError();
+  if (row.extractionStatus !== "succeeded" || !row.text) {
+    throw new NotFoundError("O texto desta versão do documento não está disponível.");
+  }
+
+  const full = row.text;
+  const offsets = Array.isArray(row.pageOffsets) ? row.pageOffsets : null;
+  let text = full;
+  let resolvedPage: number | null = null;
+  if (offsets && offsets.length > 0 && page !== null) {
+    if (!Number.isInteger(page) || page < 1 || page > offsets.length) {
+      throw new ValidationError("Página inexistente neste documento.", { page: ["Página inexistente neste documento."] });
+    }
+    const start = offsets[page - 1];
+    const end = page < offsets.length ? offsets[page] : full.length;
+    text = full.slice(start, end).replace(/\s+$/, "");
+    resolvedPage = page;
+  }
+  const truncated = text.length > PAGE_TEXT_MAX_CHARS;
+  return {
+    documentId: docId,
+    versionId: verId,
+    title: row.title,
+    versionNumber: row.versionNumber,
+    fileName: row.fileName,
+    page: resolvedPage,
+    pageCount: row.pageCount ?? (offsets ? offsets.length : null),
+    text: truncated ? text.slice(0, PAGE_TEXT_MAX_CHARS) : text,
+    truncated,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Text extraction (system — called by the "document.extract_text" job)
 // ---------------------------------------------------------------------------
@@ -825,10 +934,21 @@ export async function extractDocumentVersionText(versionId: string): Promise<voi
   if (v.extractionStatus === "succeeded" || v.extractionStatus === "unsupported") return;
   if (v.documentDeletedAt) return;
 
-  const markStatus = async (status: TextExtractionStatus, text: string | null) => {
+  const markStatus = async (
+    status: TextExtractionStatus,
+    text: string | null,
+    pages: { pageCount?: number | null; pageOffsets?: number[] | null } = {},
+  ) => {
     await db
       .update(documentVersions)
-      .set({ extractionStatus: status, extractedText: text, extractedAt: new Date() })
+      .set({
+        extractionStatus: status,
+        extractedText: text,
+        extractedAt: new Date(),
+        pageCount: pages.pageCount ?? null,
+        // Offsets only make sense together with the stored text.
+        pageOffsets: text !== null && pages.pageOffsets?.length ? pages.pageOffsets : null,
+      })
       .where(and(eq(documentVersions.id, v.id), ne(documentVersions.extractionStatus, "succeeded")));
   };
 
@@ -850,7 +970,10 @@ export async function extractDocumentVersionText(versionId: string): Promise<voi
   }
 
   const result = await extractText(bytes, v.mimeType);
-  await markStatus(result.status, result.status === "succeeded" ? (result.text ?? "") : null);
+  await markStatus(result.status, result.status === "succeeded" ? (result.text ?? "") : null, {
+    pageCount: result.pageCount ?? null,
+    pageOffsets: result.pageOffsets ?? null,
+  });
   logger.info("document_text_extracted", {
     versionId: v.id,
     status: result.status,

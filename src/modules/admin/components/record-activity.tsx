@@ -9,7 +9,7 @@ import { listAuditLogs } from "../service";
 import { ChangeList } from "./change-list";
 
 /**
- * Latest audit entries about an administrative record (user, team, unit).
+ * Latest audit entries about an administrative record (user, team, unit, company, law firm).
  * Rendered only for users with `audit:read`.
  */
 export async function RecordActivity({
@@ -18,7 +18,7 @@ export async function RecordActivity({
   entityId,
 }: {
   ctx: AuthContext;
-  entityType: Extract<EntityType, "user" | "team" | "unit">;
+  entityType: Extract<EntityType, "user" | "team" | "unit" | "company" | "law_firm">;
   entityId: string;
 }) {
   if (!can(ctx, "audit:read")) return null;

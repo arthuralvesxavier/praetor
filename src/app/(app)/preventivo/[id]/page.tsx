@@ -1,9 +1,10 @@
-import { FilePlus2, Lock, Pencil, Scale, ShieldCheck, Trash2 } from "lucide-react";
+import { FilePlus2, Lightbulb, Lock, Pencil, Scale, ShieldCheck, Trash2 } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { DescriptionList } from "@/components/ui/description-list";
@@ -32,6 +33,7 @@ import { deleteOccurrenceAction, unlinkOccurrenceFromProcessAction } from "@/mod
 import { ActionPlanSummary } from "@/modules/occurrences/components/action-plan-summary";
 import { AiSignalsCard } from "@/modules/occurrences/components/ai-signals-card";
 import { ProcessLinkForm } from "@/modules/occurrences/components/process-link-form";
+import { PREVENTIVE_ORIGIN_LABEL } from "@/modules/occurrences/preventive-origin";
 import { getActionPlanProgress, getOccurrence, type OccurrenceDetail } from "@/modules/occurrences/service";
 import { listProcessOptions } from "@/modules/processes/service";
 import { EntityWorkItems } from "@/modules/work/components/entity-work-items";
@@ -96,6 +98,11 @@ export default async function OccurrencePage(props: PageProps<"/preventivo/[id]"
                 Preservação legal
               </Badge>
             ) : null}
+            {occurrence.preventiveOrigin ? (
+              <Badge tone="primary" icon={<Lightbulb />}>
+                {PREVENTIVE_ORIGIN_LABEL}
+              </Badge>
+            ) : null}
             <span className="text-sm text-muted-foreground">Reportada em {formatDate(occurrence.reportedOn)}</span>
           </div>
         }
@@ -153,6 +160,20 @@ type TabProps = { ctx: AuthContext; occurrence: OccurrenceDetail };
 function OverviewTab({ ctx, occurrence: o }: TabProps) {
   return (
     <div className="grid gap-6">
+      {o.preventiveOrigin ? (
+        <Callout tone="info" title={PREVENTIVE_ORIGIN_LABEL} icon={<Lightbulb />}>
+          Criada a partir de um indicador calculado pela inteligência preventiva
+          {o.preventiveOrigin.indicator ? (
+            <>
+              : <span className="font-medium">{o.preventiveOrigin.indicator}</span>
+            </>
+          ) : (
+            "."
+          )}{" "}
+          A medida associada era uma sugestão ilustrativa, a ser avaliada com a área responsável.{" "}
+          {can(ctx, "preventive_intel:read") ? <Link href="/inteligencia-preventiva">Ver indicadores atuais</Link> : null}
+        </Callout>
+      ) : null}
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>

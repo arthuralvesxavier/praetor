@@ -1,26 +1,34 @@
-import { CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, ListChecks, Sparkles } from "lucide-react";
+import { CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, Gavel, ListChecks, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { DEADLINE_KIND_LABELS, DEADLINE_KINDS, TASK_STATUS_LABELS } from "@/domain/enums";
+import {
+  DEADLINE_KIND_LABELS,
+  DEADLINE_KINDS,
+  HEARING_KIND_LABELS,
+  HEARING_MODE_LABELS,
+  HEARING_STATUS_LABELS,
+  TASK_STATUS_LABELS,
+} from "@/domain/enums";
 import { formatDate, formatMonthYear } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { buildMonthGrid, WEEKDAY_LABELS, WEEKDAY_SHORT_LABELS } from "../calendar";
-import type { CalendarData, CalendarDeadline, CalendarTask } from "../service";
+import type { CalendarData, CalendarDeadline, CalendarHearing, CalendarTask } from "../service";
 import { DEADLINE_KIND_STYLES } from "./work-badges";
 
-type DayItems = { deadlines: CalendarDeadline[]; tasks: CalendarTask[] };
+type DayItems = { hearings: CalendarHearing[]; deadlines: CalendarDeadline[]; tasks: CalendarTask[] };
 
 function groupByDay(data: CalendarData): Map<string, DayItems> {
   const map = new Map<string, DayItems>();
   const get = (date: string) => {
     let v = map.get(date);
     if (!v) {
-      v = { deadlines: [], tasks: [] };
+      v = { hearings: [], deadlines: [], tasks: [] };
       map.set(date, v);
     }
     return v;
   };
+  for (const h of data.hearings) get(h.date).hearings.push(h);
   for (const d of data.deadlines) get(d.dueDate).deadlines.push(d);
   for (const t of data.tasks) get(t.dueDate).tasks.push(t);
   return map;
@@ -81,6 +89,42 @@ function DeadlineChip({ d }: { d: CalendarDeadline }) {
   );
 }
 
+function hearingAccessibleLabel(h: CalendarHearing): string {
+  const parts = [
+    `Audiência às ${h.time}: ${HEARING_KIND_LABELS[h.kind]} (${HEARING_MODE_LABELS[h.mode].toLowerCase()}) — processo ${h.processNumber}`,
+  ];
+  if (h.status !== "scheduled") parts.push(HEARING_STATUS_LABELS[h.status].toLowerCase());
+  if (h.location) parts.push(h.location);
+  return parts.join(" — ");
+}
+
+/** Hearings have their own visual (gold border + gavel) and the text "Audiência". */
+function HearingChip({ h }: { h: CalendarHearing }) {
+  const label = hearingAccessibleLabel(h);
+  const held = h.status === "held";
+  return (
+    <Link
+      href={`/processos/${h.processId}?aba=audiencias`}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "flex items-start gap-1.5 rounded border border-l-4 border-gold-300 border-l-gold-500 bg-gold-50 px-1.5 py-1 text-xs leading-tight text-navy-900 transition-colors hover:brightness-95",
+        "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+        held && "opacity-75",
+      )}
+    >
+      <Gavel aria-hidden="true" className="mt-px size-3 shrink-0 text-gold-700" />
+      <span className="min-w-0">
+        <span className="block font-semibold">
+          Audiência {h.time}
+          {held ? <span className="font-normal"> · realizada</span> : null}
+        </span>
+        <span className="line-clamp-2">{HEARING_KIND_LABELS[h.kind]}</span>
+      </span>
+    </Link>
+  );
+}
+
 function TaskChip({ t }: { t: CalendarTask }) {
   const label = `Tarefa: ${t.title} — ${TASK_STATUS_LABELS[t.status].toLowerCase()}${t.isOverdue ? ", atrasada" : ""}`;
   return (
@@ -103,6 +147,11 @@ function TaskChip({ t }: { t: CalendarTask }) {
 function DayList({ items, date }: { items: DayItems; date: string }) {
   return (
     <ul aria-label={`Itens de ${formatDate(date)}`} className="flex flex-col gap-1">
+      {items.hearings.map((h) => (
+        <li key={`h-${h.id}`}>
+          <HearingChip h={h} />
+        </li>
+      ))}
       {items.deadlines.map((d) => (
         <li key={`d-${d.id}`}>
           <DeadlineChip d={d} />
@@ -161,8 +210,9 @@ export function WorkCalendar({ data, prevHref, nextHref, todayHref }: WorkCalend
       <div className="hidden overflow-hidden rounded-lg border border-border bg-surface shadow-xs md:block">
         <table className="w-full table-fixed border-collapse text-sm">
           <caption className="sr-only">
-            Calendário de prazos e tarefas — {monthLabel}. Prazos sugeridos pela IA aparecem com contorno tracejado e
-            só contam como prazo após validação humana.
+            Calendário de audiências, prazos e tarefas — {monthLabel}. Audiências aparecem com borda dourada e o texto
+            “Audiência”. Prazos sugeridos pela IA aparecem com contorno tracejado e só contam como prazo após validação
+            humana.
           </caption>
           <thead className="border-b border-border bg-slate-50">
             <tr>
@@ -218,7 +268,7 @@ export function WorkCalendar({ data, prevHref, nextHref, todayHref }: WorkCalend
         {daysWithItems.length === 0 ? (
           <EmptyState
             icon={<CalendarClock />}
-            title="Nenhum prazo ou tarefa neste mês"
+            title="Nenhuma audiência, prazo ou tarefa neste mês"
             description="Use as setas para navegar entre os meses."
           />
         ) : (
@@ -244,6 +294,10 @@ export function WorkCalendar({ data, prevHref, nextHref, todayHref }: WorkCalend
 
       {/* Legend */}
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted-foreground" aria-label="Legenda do calendário" role="group">
+        <span className="inline-flex items-center gap-1.5">
+          <Gavel aria-hidden="true" className="size-3.5 text-gold-700" />
+          Audiência
+        </span>
         {DEADLINE_KINDS.map((k) => (
           <span key={k} className="inline-flex items-center gap-1.5">
             <span aria-hidden="true" className={cn("size-2 rounded-full", DEADLINE_KIND_STYLES[k].bar)} />

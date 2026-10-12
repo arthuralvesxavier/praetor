@@ -42,26 +42,56 @@ export const emailSchema = z
   .max(254, "O e-mail deve ter no máximo 254 caracteres.")
   .pipe(z.email({ error: "Informe um e-mail válido." }));
 
-export const createUserSchema = z.object({
-  name: personName,
-  email: emailSchema,
-  role,
-  unitId: optionalId("Selecione uma unidade válida."),
-  jobTitle: optionalText(120, "O cargo"),
-  /** Policy (length, letters and digits) is checked by the service with `passwordPolicyError`. */
-  password: z.string({ error: "Informe a senha inicial." }).min(1, "Informe a senha inicial.").max(200, "A senha deve ter no máximo 200 caracteres."),
-  teamIds: idList(50, "Selecione no máximo 50 equipes."),
-});
+/**
+ * Role-dependent rules (RF-21): an `external_counsel` user belongs to a law firm
+ * (required) and has no unit; every other role has no law firm.
+ */
+function refineRoleScope(v: { role: string; unitId?: string | null; lawFirmId?: string | null }, ctx: z.RefinementCtx) {
+  if (v.role === "external_counsel") {
+    if (!v.lawFirmId) {
+      ctx.addIssue({ code: "custom", path: ["lawFirmId"], message: "Selecione o escritório externo do usuário." });
+    }
+    if (v.unitId) {
+      ctx.addIssue({ code: "custom", path: ["unitId"], message: "Usuários de escritório externo não têm unidade." });
+    }
+  }
+}
+
+/** Only external counsel keep a law firm; other roles always store null. */
+function normalizeLawFirm<T extends { role: string; lawFirmId?: string | null }>(v: T): T & { lawFirmId: string | null } {
+  return { ...v, lawFirmId: v.role === "external_counsel" ? (v.lawFirmId ?? null) : null };
+}
+
+export const createUserSchema = z
+  .object({
+    name: personName,
+    email: emailSchema,
+    role,
+    unitId: optionalId("Selecione uma unidade válida."),
+    /** Required for `external_counsel`; ignored (stored as null) for other roles. */
+    lawFirmId: optionalId("Selecione um escritório válido."),
+    jobTitle: optionalText(120, "O cargo"),
+    /** Policy (length, letters and digits) is checked by the service with `passwordPolicyError`. */
+    password: z.string({ error: "Informe a senha inicial." }).min(1, "Informe a senha inicial.").max(200, "A senha deve ter no máximo 200 caracteres."),
+    teamIds: idList(50, "Selecione no máximo 50 equipes."),
+  })
+  .superRefine(refineRoleScope)
+  .transform(normalizeLawFirm);
 export type CreateUserInput = z.input<typeof createUserSchema>;
 
-export const updateUserSchema = z.object({
-  name: personName,
-  role,
-  unitId: optionalId("Selecione uma unidade válida."),
-  jobTitle: optionalText(120, "O cargo"),
-  isActive: z.boolean({ error: "Informe se o usuário está ativo." }),
-  teamIds: idList(50, "Selecione no máximo 50 equipes."),
-});
+export const updateUserSchema = z
+  .object({
+    name: personName,
+    role,
+    unitId: optionalId("Selecione uma unidade válida."),
+    /** Required for `external_counsel`; ignored (stored as null) for other roles. */
+    lawFirmId: optionalId("Selecione um escritório válido."),
+    jobTitle: optionalText(120, "O cargo"),
+    isActive: z.boolean({ error: "Informe se o usuário está ativo." }),
+    teamIds: idList(50, "Selecione no máximo 50 equipes."),
+  })
+  .superRefine(refineRoleScope)
+  .transform(normalizeLawFirm);
 export type UpdateUserInput = z.input<typeof updateUserSchema>;
 
 export const resetPasswordSchema = z
@@ -82,6 +112,7 @@ export const userFiltersSchema = z.object({
   q: z.string().trim().max(120).optional(),
   role: role.optional(),
   unitId: guid().optional(),
+  lawFirmId: guid().optional(),
   active: z.boolean().optional(),
   page: z.number().int().min(1).optional(),
   pageSize: z.number().int().min(1).max(100).optional(),
@@ -139,6 +170,8 @@ export const SETTINGS_BOUNDS = {
   maxInputChars: { min: 5_000, max: 1_000_000 },
   upcomingDeadlineDays: { min: 1, max: 90 },
   contractExpirationDays: { min: 1, max: 365 },
+  upcomingHearingDays: { min: 1, max: 90 },
+  installmentDueDays: { min: 1, max: 90 },
   closedRecordRetentionDays: { min: 30, max: 36_500 },
   auditLogRetentionDays: { min: 180, max: 36_500 },
 } as const;
@@ -157,6 +190,10 @@ export const organizationSettingsSchema = z.object({
   autoAnalyzeOnUpload: z.boolean(),
   upcomingDeadlineDays: intIn(B.upcomingDeadlineDays.min, B.upcomingDeadlineDays.max, "a antecedência de alerta de prazos"),
   contractExpirationDays: intIn(B.contractExpirationDays.min, B.contractExpirationDays.max, "a antecedência de alerta de contratos"),
+  /** Optional for backwards compatibility: when absent, the current value is kept. */
+  upcomingHearingDays: intIn(B.upcomingHearingDays.min, B.upcomingHearingDays.max, "a antecedência de alerta de audiências").optional(),
+  /** Optional for backwards compatibility: when absent, the current value is kept. */
+  installmentDueDays: intIn(B.installmentDueDays.min, B.installmentDueDays.max, "a antecedência de alerta de parcelas de acordo").optional(),
   closedRecordRetentionDays: intIn(
     B.closedRecordRetentionDays.min,
     B.closedRecordRetentionDays.max,
@@ -165,6 +202,82 @@ export const organizationSettingsSchema = z.object({
   auditLogRetentionDays: intIn(B.auditLogRetentionDays.min, B.auditLogRetentionDays.max, "o prazo de retenção da auditoria"),
 });
 export type OrganizationSettingsInput = z.input<typeof organizationSettingsSchema>;
+
+// --- Contingências (RN-04, RN-05, RN-11, RNF-14) ----------------------------
+
+export const CONTINGENCY_BOUNDS = {
+  riskPercent: { min: 0, max: 100 },
+  confidenceThreshold: { min: 0, max: 100 },
+  idleGuaranteeDays: { min: 1, max: 3_650 },
+} as const;
+
+const C = CONTINGENCY_BOUNDS;
+
+/**
+ * Risk percentages per loss classification (whole percent), confidence
+ * threshold for bulk approval and the "idle guarantee" window. Changing any
+ * percentage creates a new rules version (RNF-14), so closings and
+ * assessments already recorded keep the percentages they used.
+ */
+export const contingencySettingsSchema = z
+  .object({
+    riskRemote: intIn(C.riskPercent.min, C.riskPercent.max, "o percentual da classificação remota"),
+    riskPossible: intIn(C.riskPercent.min, C.riskPercent.max, "o percentual da classificação possível"),
+    riskProbable: intIn(C.riskPercent.min, C.riskPercent.max, "o percentual da classificação provável"),
+    confidenceThreshold: intIn(C.confidenceThreshold.min, C.confidenceThreshold.max, "a confiança mínima"),
+    idleGuaranteeDays: intIn(C.idleGuaranteeDays.min, C.idleGuaranteeDays.max, "o prazo de garantia parada"),
+  })
+  .superRefine((v, ctx) => {
+    if (v.riskPossible < v.riskRemote) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["riskPossible"],
+        message: "O percentual de “possível” não pode ser menor que o de “remota”.",
+      });
+    }
+    if (v.riskProbable < v.riskPossible) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["riskProbable"],
+        message: "O percentual de “provável” não pode ser menor que o de “possível”.",
+      });
+    }
+  });
+export type ContingencySettingsInput = z.input<typeof contingencySettingsSchema>;
+
+// --- E-mail (simulado) e entrada de processos --------------------------------
+
+/**
+ * Reserved domains (RFC 2606 / RFC 6761) that can never deliver mail. E-mail
+ * is simulated in this version, so the sender shown in simulations must be
+ * visibly fictitious.
+ */
+export const FICTITIOUS_EMAIL_DOMAINS = [".invalid", ".test", ".example", ".localhost", "example.com", "example.org", "example.net"] as const;
+
+export function isFictitiousEmailAddress(address: string): boolean {
+  const domain = address.toLowerCase().split("@")[1] ?? "";
+  return FICTITIOUS_EMAIL_DOMAINS.some((d) =>
+    d.startsWith(".") ? domain.endsWith(d) : domain === d || domain.endsWith(`.${d}`),
+  );
+}
+
+export const emailIntakeSettingsSchema = z.object({
+  senderName: z
+    .string({ error: "Informe o nome do remetente." })
+    .trim()
+    .min(2, "O nome do remetente deve ter pelo menos 2 caracteres.")
+    .max(80, "O nome do remetente deve ter no máximo 80 caracteres."),
+  senderAddress: emailSchema.refine(
+    isFictitiousEmailAddress,
+    "Use um endereço fictício (domínios reservados como .invalid, .test ou example.com): nesta versão nenhum e-mail é enviado.",
+  ),
+  notifyOnBriefReady: z.boolean(),
+  notifyOnAssignment: z.boolean(),
+  autoAssign: z.boolean(),
+  autoGenerateBrief: z.boolean(),
+  autoNotify: z.boolean(),
+});
+export type EmailIntakeSettingsInput = z.input<typeof emailIntakeSettingsSchema>;
 
 // ---------------------------------------------------------------------------
 // Routines

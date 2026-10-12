@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useId } from "react";
+import { useActionState, useId, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FormField } from "@/components/ui/form-field";
 import { FormMessage } from "@/components/ui/form-message";
@@ -17,6 +17,7 @@ import {
 import { fieldError } from "@/lib/form";
 import { optionsFromLabels, type Option } from "@/lib/options";
 import { updateDocumentMetadataAction } from "../actions";
+import { SENSITIVE_HEALTH_HINT } from "../confidentiality";
 
 export type DocumentMetadataFormProps = {
   document: {
@@ -57,6 +58,8 @@ export function DocumentMetadataForm({
   const [state, action] = useActionState(updateDocumentMetadataAction, null);
   const uid = useId();
   const fid = (name: string) => `${uid}-${name}`;
+  const [category, setCategory] = useState<string>(d.category);
+  const healthDocument = category === "sensitive_health";
 
   return (
     <form action={action} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -67,11 +70,27 @@ export function DocumentMetadataForm({
         <Input name="title" required maxLength={300} defaultValue={d.title} />
       </FormField>
       <FormField label="Categoria" htmlFor={fid("category")} required error={fieldError(state, "category")}>
-        <NativeSelect name="category" options={CATEGORY_OPTIONS} defaultValue={d.category} required />
+        <NativeSelect
+          name="category"
+          options={CATEGORY_OPTIONS}
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          required
+        />
       </FormField>
-      <FormField label="Confidencialidade" htmlFor={fid("confidentiality")} error={fieldError(state, "confidentiality")}>
-        <NativeSelect name="confidentiality" options={CONFIDENTIALITY_OPTIONS} defaultValue={d.confidentiality} />
+      <FormField
+        label="Confidencialidade"
+        htmlFor={fid("confidentiality")}
+        hint={healthDocument ? SENSITIVE_HEALTH_HINT : undefined}
+        error={fieldError(state, "confidentiality")}
+      >
+        {healthDocument ? (
+          <NativeSelect options={CONFIDENTIALITY_OPTIONS} value="restricted" disabled aria-readonly="true" onChange={() => undefined} />
+        ) : (
+          <NativeSelect name="confidentiality" options={CONFIDENTIALITY_OPTIONS} defaultValue={d.confidentiality} />
+        )}
       </FormField>
+      {healthDocument ? <input type="hidden" name="confidentiality" value="restricted" /> : null}
       <FormField label="Processo vinculado" htmlFor={fid("processId")} error={fieldError(state, "processId")}>
         <NativeSelect
           name="processId"

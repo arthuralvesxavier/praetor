@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { RENEWAL_TYPE_LABELS, type RenewalType } from "@/domain/enums";
 import { daysUntil, formatDate, pluralize } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { vigencyRelativeText, type VigencyState } from "../vigencia";
+import { NOTICE_DATE_HINT, NOTICE_DATE_LABEL, vigencyRelativeText, type VigencyState } from "../vigencia";
 import { VigencyBadge } from "./vigency-badge";
 
 type Props = {
@@ -17,6 +17,8 @@ type Props = {
   daysToEnd: number | null;
   expirationDays: number;
   today: string;
+  /** Renewal / termination buttons. */
+  actions?: ReactNode;
 };
 
 function relativeTo(date: string, today: string, pastLabel: string, futureLabel: (n: number) => string): string {
@@ -76,6 +78,7 @@ export function VigencyCard({
   daysToEnd,
   expirationDays,
   today,
+  actions,
 }: Props) {
   const noticeDays = noticeDeadline ? daysUntil(noticeDeadline, today) : null;
   const endRelative = vigencyRelativeText(daysToEnd);
@@ -99,13 +102,13 @@ export function VigencyCard({
           />
           <Milestone
             icon={<CalendarClock />}
-            label="Prazo para aviso"
+            label={NOTICE_DATE_LABEL}
             date={noticeDeadline}
             detail={
               noticeDeadline
-                ? `${relativeTo(noticeDeadline, today, "encerrou", (n) => `em ${pluralize(n, "dia", "dias", { withCount: true })}`)} · calculada a partir das datas informadas`
+                ? `${relativeTo(noticeDeadline, today, "encerrou", (n) => `em ${pluralize(n, "dia", "dias", { withCount: true })}`)} · ${NOTICE_DATE_HINT}`
                 : endDate
-                  ? "Informe a antecedência de aviso para calcular."
+                  ? "Informe a antecedência de aviso no cadastro para calcular."
                   : null
             }
             passed={noticeDays !== null && noticeDays < 0}
@@ -135,6 +138,7 @@ export function VigencyCard({
             Alerta de vencimento: <span className="font-medium text-slate-800">{expirationDays} dias antes</span>
           </span>
         </div>
+        {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
       </CardContent>
     </Card>
   );

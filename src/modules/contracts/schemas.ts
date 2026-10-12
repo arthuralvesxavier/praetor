@@ -6,6 +6,7 @@ import {
   RENEWAL_TYPES,
   RISK_LEVELS,
 } from "@/domain/enums";
+import { isRecurrenceId, recurrenceToStored } from "./obligations";
 
 /** zod input contracts for the contracts module (client-safe, no server imports). */
 
@@ -119,6 +120,26 @@ export const contractInputSchema = z
 export type ContractInput = z.input<typeof contractInputSchema>;
 export type ContractData = z.output<typeof contractInputSchema>;
 
+/**
+ * Recurrence: a recurrence id from the form ("monthly", "none"...) becomes the
+ * canonical stored text ("mensal" / null); any other text (older rows, API
+ * callers) is kept as informed for backward compatibility.
+ */
+const recurrenceField = z
+  .string()
+  .trim()
+  .max(120, { error: "A recorrência deve ter no máximo 120 caracteres." })
+  .nullish()
+  .transform((v) => (!v ? null : isRecurrenceId(v) ? recurrenceToStored(v) : v));
+
+/** Required calendar date. */
+const requiredDate = (required: string, invalid: string) =>
+  z
+    .string({ error: required })
+    .trim()
+    .min(1, { error: required })
+    .refine((v) => isValidIsoDate(v), { error: invalid });
+
 export const obligationInputSchema = z.object({
   description: z
     .string({ error: "Descreva a obrigação." })
@@ -127,7 +148,7 @@ export const obligationInputSchema = z.object({
     .max(2000, { error: "A descrição deve ter no máximo 2.000 caracteres." }),
   responsibleId: optionalId("Responsável inválido."),
   dueDate: optionalDate("Data de vencimento inválida."),
-  recurrence: optionalText(120, "A recorrência deve ter no máximo 120 caracteres."),
+  recurrence: recurrenceField,
   status: z.enum(OBLIGATION_STATUSES, { error: "Selecione a situação da obrigação." }).default("pending"),
 });
 export type ObligationInput = z.input<typeof obligationInputSchema>;
@@ -138,7 +159,7 @@ export const obligationPatchSchema = z
     description: obligationInputSchema.shape.description.optional(),
     responsibleId: optionalId("Responsável inválido.").optional(),
     dueDate: optionalDate("Data de vencimento inválida.").optional(),
-    recurrence: optionalText(120, "A recorrência deve ter no máximo 120 caracteres.").optional(),
+    recurrence: recurrenceField.optional(),
     status: z.enum(OBLIGATION_STATUSES, { error: "Selecione a situação da obrigação." }).optional(),
   })
   .refine((v) => Object.values(v).some((x) => x !== undefined), { error: "Nenhuma alteração informada." });
@@ -150,9 +171,29 @@ export const listContractsSchema = z.object({
   type: z.enum(CONTRACT_TYPES).optional(),
   responsibleId: z.guid().optional(),
   expiring: z.boolean().optional(),
+  /** Active contracts whose renewal/termination notice date is within the window or already reached. */
+  noticeSoon: z.boolean().optional(),
+  /** Contracts with at least one open obligation past its due date. */
+  overdueObligations: z.boolean().optional(),
   page: z.number().int().optional(),
   pageSize: z.number().int().optional(),
 });
 export type ListContractsFilters = z.input<typeof listContractsSchema>;
+
+/** "Registrar renovação": new end date (+ optional aditivo document of the contract). */
+export const renewContractSchema = z.object({
+  newEndDate: requiredDate("Informe a nova data de término.", "Data de término inválida."),
+  amendmentDocumentId: optionalId("Documento inválido."),
+  note: optionalText(500, "A observação deve ter no máximo 500 caracteres."),
+});
+export type RenewContractInput = z.input<typeof renewContractSchema>;
+
+/** "Registrar rescisão": effective date (+ optional distrato/notificação document of the contract). */
+export const terminateContractSchema = z.object({
+  terminationDate: requiredDate("Informe a data da rescisão.", "Data da rescisão inválida."),
+  documentId: optionalId("Documento inválido."),
+  note: optionalText(500, "A observação deve ter no máximo 500 caracteres."),
+});
+export type TerminateContractInput = z.input<typeof terminateContractSchema>;
 
 export const idSchema = z.guid({ error: "Registro inválido." });

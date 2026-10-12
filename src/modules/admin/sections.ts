@@ -10,9 +10,12 @@ export type AdminSectionKey =
   | "usuarios"
   | "equipes"
   | "unidades"
+  | "empresas"
+  | "escritorios"
   | "permissoes"
   | "auditoria"
-  | "configuracoes";
+  | "configuracoes"
+  | "integracoes";
 
 export type AdminSection = {
   key: AdminSectionKey;
@@ -55,6 +58,20 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     permissions: ["admin:users"],
   },
   {
+    key: "empresas",
+    label: "Empresas",
+    href: "/admin/empresas",
+    description: "Empresas do grupo atendidas pelo jurídico (filtros de carteira, relatórios e indicadores).",
+    permissions: ["admin:organization"],
+  },
+  {
+    key: "escritorios",
+    label: "Escritórios externos",
+    href: "/admin/escritorios",
+    description: "Escritórios que patrocinam processos; seus usuários veem apenas a carteira atribuída.",
+    permissions: ["admin:organization"],
+  },
+  {
     key: "permissoes",
     label: "Permissões",
     href: "/admin/permissoes",
@@ -72,7 +89,14 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     key: "configuracoes",
     label: "Configurações",
     href: "/admin/configuracoes",
-    description: "Organização, IA, alertas, rotinas automáticas e retenção.",
+    description: "Organização, IA, alertas, contingências, e-mail (simulado), entrada de processos, rotinas e retenção.",
+    permissions: ["admin:organization"],
+  },
+  {
+    key: "integracoes",
+    label: "Integrações",
+    href: "/admin/integracoes",
+    description: "Situação de cada integração (o que é real, simulado ou não integrado) e saúde das rotinas e da fila.",
     permissions: ["admin:organization"],
   },
 ];

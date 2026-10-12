@@ -1,7 +1,7 @@
 /**
  * Data each e-mail template needs (cross-module contract: callers build the
  * data, the emails module renders subject/text/html). Client-safe types.
- * The emails package adds the renderers in this module.
+ * Renderers: `./render.ts`; runtime validation (clipping long strings): `./schemas.ts`.
  */
 import type { EmailTemplate } from "@/domain/enums";
 

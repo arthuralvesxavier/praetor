@@ -1,10 +1,13 @@
+import { Sparkles } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { OriginBadge } from "@/components/ui/origin-badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
   DEADLINE_KIND_LABELS,
   ENTITY_TYPE_LABELS,
   TASK_STATUS_LABELS,
+  type DataOrigin,
   type DeadlineKind,
   type DeadlineStatus,
   type TaskStatus,
@@ -12,7 +15,7 @@ import {
 } from "@/domain/enums";
 import { TASK_STATUS_TONES, type Tone } from "@/lib/tones";
 import { cn } from "@/lib/utils";
-import type { WorkLink } from "../service";
+import type { SuggestionSourceKind, WorkLink } from "../service";
 
 /** Visual identity of each deadline kind (badge tone + calendar chip classes). */
 export const DEADLINE_KIND_STYLES: Record<DeadlineKind, { tone: Tone; chip: string; bar: string }> = {
@@ -79,4 +82,39 @@ export function WorkLinks({ links, className }: { links: WorkLink[]; className?:
       ))}
     </ul>
   );
+}
+
+const SUGGESTION_SUFFIX: Partial<Record<ValidationStatus, string>> = {
+  pending_validation: "aguardando validação",
+  validated: "validado por pessoa",
+  rejected: "rejeitado",
+};
+
+export const BRIEF_SUGGESTION_LABEL = "Sugerido pela análise preliminar (simulação)";
+
+/**
+ * Origin of a deadline or task. AI suggestions that come from a preliminary
+ * case analysis (simulated in this version) get their own label; everything
+ * else uses the standard OriginBadge.
+ */
+export function WorkOriginBadge({
+  origin,
+  validationStatus,
+  sourceKind,
+}: {
+  origin: DataOrigin;
+  validationStatus?: ValidationStatus | null;
+  sourceKind?: SuggestionSourceKind | null;
+}) {
+  if (origin === "ai_suggested" && sourceKind === "case_brief") {
+    const suffix = validationStatus ? SUGGESTION_SUFFIX[validationStatus] : undefined;
+    const label = suffix ? `${BRIEF_SUGGESTION_LABEL} · ${suffix}` : BRIEF_SUGGESTION_LABEL;
+    return (
+      <Badge tone="ai" icon={<Sparkles />} title={`Origem: ${label}`}>
+        <span className="sr-only">Origem: </span>
+        {label}
+      </Badge>
+    );
+  }
+  return <OriginBadge origin={origin} validationStatus={validationStatus} />;
 }
