@@ -21,7 +21,7 @@ function json(body: unknown, status: number): Response {
 export async function GET(_request: NextRequest, context: RouteContext<"/api/legal-reports/[id]/pdf">): Promise<Response> {
   const ctx = await getCurrentUser();
   if (!ctx) return json({ error: "Sessão expirada. Entre novamente." }, 401);
-  if (!can(ctx, "report:read")) return json({ error: "Você não tem permissão para baixar relatórios." }, 403);
+  if (!can(ctx, "legal_report:read")) return json({ error: "Você não tem permissão para baixar relatórios." }, 403);
   const { id } = await context.params;
   try {
     const file = await openLegalReportPdf(ctx, id);

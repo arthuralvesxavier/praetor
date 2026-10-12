@@ -39,6 +39,10 @@ export const PERMISSIONS = [
   "contingency:approve",
   "snapshot:close",
   "report:read",
+  // Consultar e baixar relatórios jurídicos (PDF) dos processos visíveis (legal-reports/access.ts).
+  // Separada de `report:read` (relatórios gerenciais, exportações e Power BI da organização inteira),
+  // para o escritório externo ler os relatórios dos processos do próprio escritório e nada além.
+  "legal_report:read",
   // Gerar e gerar nova versão de relatórios jurídicos (PDF); o tipo ainda limita os papéis (legal-reports/approvers.ts).
   "report:generate",
   "import:run",
@@ -87,6 +91,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "contingency:read",
     "contingency:write",
     "report:read",
+    "legal_report:read",
     "report:generate",
     "intake:manage",
     "brief:read",
@@ -107,6 +112,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "analysis:request",
     "contingency:read",
     "report:read",
+    "legal_report:read",
     "intake:manage",
     "brief:read",
     "email:read",
@@ -114,7 +120,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "court_sync:run",
   ],
   // Diretoria: consulta painéis, relatórios e inteligência preventiva.
-  executive: [...READ_ONLY, "contingency:read", "report:read", "preventive_intel:read"],
+  executive: [...READ_ONLY, "contingency:read", "report:read", "legal_report:read", "preventive_intel:read"],
   // Contabilidade: valores, garantias, risco, provisão e fechamento mensal (RF-16, TE-06).
   accountant: [
     "dashboard:read",
@@ -125,12 +131,15 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "contingency:approve",
     "snapshot:close",
     "report:read",
+    "legal_report:read",
     "report:generate",
     "comment:write",
   ],
   // Auditoria e compliance: leitura, relatórios e trilha de auditoria (TE-10).
-  auditor: [...READ_ONLY, "contingency:read", "report:read", "audit:read", "brief:read", "email:read"],
+  auditor: [...READ_ONLY, "contingency:read", "report:read", "legal_report:read", "audit:read", "brief:read", "email:read"],
   // Escritório externo: somente a própria carteira (RF-21, TE-09); o escopo de linhas está em access.ts.
+  // Relatórios jurídicos: só leitura e download dos processos do escritório (`legal_report:read`), sem
+  // `report:read` (relatórios gerenciais e Power BI são da organização inteira) e sem gerar nem aprovar.
   external_counsel: [
     "dashboard:read",
     "process:read",
@@ -147,6 +156,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "brief:read",
     "brief:review",
     "email:read",
+    "legal_report:read",
   ],
 };
 
@@ -182,6 +192,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "contingency:approve": "Conferir e oficializar valores propostos",
   "snapshot:close": "Fechar competência mensal (provisão)",
   "report:read": "Consultar e exportar relatórios",
+  "legal_report:read": "Consultar e baixar relatórios jurídicos (PDF) dos processos visíveis",
   "report:generate": "Gerar relatórios jurídicos (PDF) para revisão",
   "import:run": "Importar planilhas da carteira",
   "intake:manage": "Registrar entrada de processos",

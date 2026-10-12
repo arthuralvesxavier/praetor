@@ -42,6 +42,7 @@ export const PROCESS_SECTION_IDS = {
   documents: "documentos",
   sensitiveDownloads: "downloads-sensiveis",
   brief: "analise-preliminar",
+  legalReport: "relatorio-do-processo",
   analyses: "analises-ia",
   comments: "comentarios",
   emails: "emails",

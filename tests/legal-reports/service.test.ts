@@ -384,7 +384,9 @@ describe("emissão", () => {
     const id = list.items[0].id;
     await expect(getLegalReport(fx.ctx.adminB, id)).rejects.toBeInstanceOf(NotFoundError);
     await expect(openLegalReportPdf(fx.ctx.adminB, id)).rejects.toBeInstanceOf(NotFoundError);
-    await expect(listLegalReports(fx.ctx.externalCounsel)).rejects.toBeInstanceOf(ForbiddenError);
+    // Escritório externo: só relatórios de processos do próprio escritório (nenhum aqui).
+    expect((await listLegalReports(fx.ctx.externalCounsel)).items).toEqual([]);
+    await expect(getLegalReport(fx.ctx.externalCounsel, id)).rejects.toBeInstanceOf(NotFoundError);
   });
 });
 

@@ -25,6 +25,7 @@ import { runHearingAlertsRoutine } from "@/modules/hearings/routines";
 import { runCourtSyncRoutine, runSimulatedFeedRoutine } from "@/modules/court-sync/routines";
 import { runBiAccessRefreshRoutine } from "@/modules/bi/routines";
 import { runIndexSeriesRefreshRoutine } from "@/modules/indices/routines";
+import { runLegalReportsRefreshRoutine } from "@/modules/legal-reports/automation";
 import type { OrganizationSettings } from "@/server/db/schema";
 import { safeErrorMessage } from "./queue";
 
@@ -53,6 +54,8 @@ export const DEFAULT_ROUTINES: { type: RoutineType; intervalMinutes: number; con
   },
   // Séries mensais do Banco Central (SGS) para o valor atualizado das valorações (P1.7).
   { type: "index_series_refresh", intervalMinutes: 1440, config: {} },
+  // R1 (Relatório de Processo): nova versão pendente quando há dado novo; R1 aprovado desatualizado vira alerta.
+  { type: "legal_reports_refresh", intervalMinutes: 1440, config: {} },
 ];
 
 export async function ensureDefaultRoutines(organizationId: string, db: DbOrTx = getDb()): Promise<void> {
@@ -115,6 +118,7 @@ const ROUTINES: Record<RoutineType, (rc: RoutineContext) => Promise<string>> = {
   simulated_feed: runSimulatedFeedRoutine,
   bi_access_refresh: runBiAccessRefreshRoutine,
   index_series_refresh: runIndexSeriesRefreshRoutine,
+  legal_reports_refresh: runLegalReportsRefreshRoutine,
 };
 
 function clipTitle(t: string, max = 140): string {

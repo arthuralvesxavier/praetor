@@ -7,7 +7,7 @@ import { requireActionContext } from "@/server/auth/session";
 import { AppError, toActionError, type ActionResult } from "@/server/lib/errors";
 import { logger } from "@/server/lib/logger";
 import { PROBABILITY_BANDS, type ProbabilityBand } from "@/domain/enums";
-import { approveLegalReport, generateEngineSample, regenerateLegalReport } from "./service";
+import { approveLegalReport, generateEngineSample, generateProcessReport, regenerateLegalReport } from "./service";
 import { addProcessScenario } from "./scenarios";
 import { updateLegalReportSettings } from "./settings-service";
 
@@ -43,12 +43,35 @@ export async function generateEngineSampleAction(
   redirect(`${BASE}/${id}?gerado=1`);
 }
 
+/** "Gerar R1" (lista de relatórios ou ficha do processo): novo R1 ou a versão seguinte do vigente. */
+export async function generateProcessReportAction(
+  _prev: ActionResult<{ id: string }> | null,
+  formData: FormData,
+): Promise<ActionResult<{ id: string }>> {
+  let id: string;
+  try {
+    const ctx = await requireActionContext("report:generate");
+    const processId = str(formData, "processId");
+    const processNumber = str(formData, "processNumber");
+    const result = await generateProcessReport(ctx, {
+      processId: processId || undefined,
+      processNumber: processId ? undefined : processNumber || undefined,
+    });
+    id = result.id;
+    revalidatePath(BASE);
+    if (processId) revalidatePath(`/processos/${processId}`);
+  } catch (err) {
+    return fail("generateProcessReport", err);
+  }
+  redirect(`${BASE}/${id}?gerado=1`);
+}
+
 export async function approveLegalReportAction(
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
   try {
-    const ctx = await requireActionContext("report:read");
+    const ctx = await requireActionContext("legal_report:read");
     const id = str(formData, "id") ?? "";
     await approveLegalReport(ctx, id);
     revalidatePath(BASE);

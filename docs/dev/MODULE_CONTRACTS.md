@@ -48,7 +48,7 @@ Domains added by v2: `organization` (companies, law firms), `contingency`, `hear
 `briefs` (preliminary analysis), `intake`, `distribution`, `emails`, `reports`, `preventive-intel`.
 Domains added after the v2 integration: `court-sync` (DataJud), `inbound` (API de entrada `/api/v1`),
 `api-keys`, `bi` (Power BI), `indices` (correction indexes, P1.7), `claims` (pedidos, P1.6),
-`legal-reports` (PDF reports engine), `provision-memo` (memória de cálculo, P1.10).
+`legal-reports` (PDF reports engine and the R1 "Relatório de Processo"), `provision-memo` (memória de cálculo, P1.10).
 
 ## Service conventions (mandatory)
 
@@ -203,6 +203,8 @@ enqueueJob(input: { type: JobType; organizationId?: string | null; payload: Reco
 processPendingJobs(opts?: { limit?: number }): Promise<{ processed: number }>   // runs queued jobs inline (admin "processar fila agora", seed, tests)
 // @/server/jobs/routines
 ensureDefaultRoutines(organizationId: string, db?: DbOrTx): Promise<void>
+// job types include "legal_report.generate" (R1 after a brief approval, @/modules/legal-reports/automation);
+// routine types include "legal_reports_refresh" (daily R1 refresh)
 ```
 
 ### processes / occurrences / contracts (v1)
@@ -295,7 +297,8 @@ in `src/server/auth/access.ts` and the matrix in [`docs/SECURITY.md`](../SECURIT
 integration: `report:generate` (generate / regenerate legal reports in PDF; admin, legal_manager,
 lawyer, accountant; the report type still restricts the roles, see "Legal reports") and
 `court_sync:run` ("Sincronizar agora" on a process and the ad-hoc DataJud lookup; admin,
-legal_manager, lawyer, analyst). API keys, DataJud settings and Power BI configuration use
+legal_manager, lawyer, analyst); after the R1: `legal_report:read` (read and download legal reports of
+visible processes; every role with `report:read`, plus `external_counsel`, which has no `report:read`). API keys, DataJud settings and Power BI configuration use
 `admin:organization`; the Power BI pages and embed token use `report:read`.
 
 New row-visibility builders (`@/server/auth/access`): `processChildWhere(ctx, table)`,
@@ -558,7 +561,7 @@ visibleAlertsWhere(ctx, onlyTypes?): SQL                             // organiza
 `AlertItem` gained `area` and `resolvedByName`. Areas (`@/modules/alerts/areas`): `ALERT_AREAS`,
 `ALERT_AREA_PARAMS` (URL values below), `ALERT_TYPES_BY_AREA` (every alert type belongs to exactly one area;
 `court_hearing_designated` → hearings, `snapshot_close_blocked` → values, `court_movement_relevant`,
-`court_sync_failed` and `claims_risk_review` → verification).
+`court_sync_failed`, `claims_risk_review` and `legal_report_outdated` → verification).
 
 Alert links depend on the alert TYPE, not only on the entity: a process with a relevant movement and a
 designated hearing has two alerts that open different tabs. Read each link with `alertHrefKey(row)`. The
@@ -567,7 +570,8 @@ that entity in the batch or, when they differ, the entity's own link without a t
 tab. `PROCESS_TAB_BY_ALERT_TYPE` (service-local; legacy tab keys, resolved by `resolveProcessTab`):
 `valuation_pending_review`, `enforcement_without_value`, `claims_risk_review` and `snapshot_close_blocked`
 → `valores` (the last two with `#classificacao-risco`), `court_movement_relevant` → `movimentacoes`,
-`court_hearing_designated` → `audiencias`; other `legal_process` alerts open the process page.
+`court_hearing_designated` → `audiencias`, `legal_report_outdated` → `documentos-e-analises#relatorio-do-processo`; other
+`legal_process` alerts open the process page.
 
 ### briefs — `@/modules/briefs/service`
 ```ts
@@ -889,7 +893,7 @@ P0.6: six tabs (keys, labels and helpers in `@/modules/processes/tabs`; build li
 | `partes-e-andamento` | Partes e andamento | Parties `#partes`; instances `#instancias`; ONE timeline of every instance of the CNJ `#andamento` (P2.13: most recent first, instance badge, source badge "DataJud (CNJ)" / imported / manual, per-instance counts) with `<CourtSyncPanel ctx processId/>` and the manual entry form beside it. |
 | `valores-e-acordos` | Valores e acordos | `<ProcessContingencyTab/>` `#valores` (risk card `#classificacao-risco`) and `<ProcessSettlementsTab/>` `#acordos` and `<ProcessScenarios/>` `#cenarios` only with contingency:read; `<ProcessClaimsPanel/>` `#pedidos` (process:read). |
 | `prazos-e-audiencias` | Prazos e audiências | `<EntityWorkItems/>` `#prazos` (deadline:read / task:read), `<ProcessHearingsTab/>` `#audiencias`. |
-| `documentos-e-analises` | Documentos e análises | Shown with document:read, brief:read or analysis:read. `<EntityDocuments/>` `#documentos` + downloads of sensitive documents `#downloads-sensiveis` (P2.12, `listSensitiveDocumentDownloads`; hidden when the viewer sees no sensitive document of the process); `<ProcessBriefTab/>` `#analise-preliminar` (brief:read); `<AnalysisPanel/>` `#analises-ia` only with analysis:read AND (analysis:request OR an analysis exists). |
+| `documentos-e-analises` | Documentos e análises | Shown with document:read, brief:read or analysis:read. `<EntityDocuments/>` `#documentos` + downloads of sensitive documents `#downloads-sensiveis` (P2.12, `listSensitiveDocumentDownloads`; hidden when the viewer sees no sensitive document of the process); `<ProcessBriefTab/>` `#analise-preliminar` (brief:read); `<AnalysisPanel/>` `#analises-ia` only with analysis:read AND (analysis:request OR an analysis exists); `<ProcessReportCard/>` `#relatorio-do-processo` (R1, legal_report:read; "Gerar R1" only for the R1 generator roles and, with an approved R1, for who could approve it). |
 | `historico` | Histórico | `<CommentThread/>` `#comentarios`, `<ProcessEmailsTab/>` `#emails` (email:read), `<EntityHistory/>` `#historico-alteracoes`. |
 
 Keys of the previous fourteen-tab layout keep working (`LEGACY_PROCESS_TABS`, `resolveProcessTab`): the page
@@ -1005,7 +1009,7 @@ instead of nesting async elements, so the `renderToString` page tests keep worki
 | `POST /api/v1/processos`, `GET /api/v1/processos/{numero}`, `GET /api/v1/openapi.json` | API key (`Authorization: Bearer prt_…`) + scope; the OpenAPI document is public | Outside the proxy matcher (no cookie); see "Inbound API" and `docs/API.md` |
 | `GET /api/bi/embed-token?report=<id>` | session + report:read | Read-only embed token (20 min) with the user's effective identity; 401/403/400/404/409/502/503 |
 | `GET /api/provision-memo/[period]?formato=xlsx\|pdf` | session + contingency:read | Memória de cálculo (P1.10); audit `provision_memo.export`; PDF refused (400 JSON) above `PROVISION_MEMO_PDF_ROW_LIMIT` |
-| `GET /api/legal-reports/[id]/pdf` | session + report:read | See "Legal reports" |
+| `GET /api/legal-reports/[id]/pdf` | session + legal_report:read | See "Legal reports" |
 | `GET /api/health` | public | `{ status, database }`, 200 or 503 |
 | `GET /api/processes/export?<list params>&formato=csv\|xlsx` | session + process:read | Same filters as `/processos`; max 20,000 processes per file; audit `legal_process.export` (filters + count, written before the file is built) |
 | `GET /api/reports/<tipo>?formato=csv\|xlsx&empresa=&unidade=&competencia=&de=&ate=` | session + report:read | 401/403/404 (unknown type)/400 (format or filters); the CSV carries the report's main table (for `provisao`: the per-process calculation detail); audit `report.export` |
@@ -1084,6 +1088,7 @@ Values diverge across sheets for some CNJs. The import module reads it with
 | `court_sync_failed` | `legal_process` (a sample process of the tribunal; dedupe `court_sync_failed:<alias>`, critical) | court-sync: the last `FAILED_RUNS_FOR_ALERT` (3) runs of a tribunal failed over at least 2 h; resolved by the next successful run |
 | `claims_risk_review` | `legal_process` (dedupe `claims_risk_review:<processId>`) | claims service (see "claims") |
 | `snapshot_close_blocked` | `legal_process` (dedupe `snapshot_close_blocked:<processId>`) | `monthly_snapshot` routine (close gate, see P1.9) |
+| `legal_report_outdated` | `legal_process` (dedupe `legal_report_outdated:<processId>`, warning) | `legal_reports_refresh` routine and the R1 job: an APPROVED R1 whose data fingerprint differs from the process data; resolved by any new R1 of the process (same transaction) and by the routine when the data matches again |
 
 Links: hearing → `?aba=audiencias`, settlement → `?aba=acordos`, guarantee/valuation →
 `?aba=valores` of their process (resolved in batch by `resolveAlertHrefs`, read with `alertHrefKey`);
@@ -1420,12 +1425,13 @@ Rules:
 - `updateContingencySettings` (admin) keeps `defaultCorrectionIndex`; `mergeOrganizationSettings`
   falls back to `"none"` for an unknown stored value (same fallback as the trigger).
 
-## Legal reports (relatórios jurídicos em PDF): foundation
+## Legal reports (relatórios jurídicos em PDF): foundation and R1
 
-Migration `drizzle/0008_legal_reports.sql` (reverse: `drizzle/down/0008_legal_reports.sql`). The R1 to R4
-generators come later; this foundation ships the data model, the PDF engine, the issuing pipeline
-(validation, source checking, pending items, sequential reference, approval, versions, download) and a
-"Documento de teste do motor" generator (`engine_sample`, type `process_report`, `is_sample = true`).
+Migration `drizzle/0008_legal_reports.sql` (reverse: `drizzle/down/0008_legal_reports.sql`). The foundation ships the
+data model, the PDF engine, the issuing pipeline (validation, source checking, pending items, sequential reference,
+approval, versions, download) and a "Documento de teste do motor" generator (`engine_sample`, type `process_report`,
+`is_sample = true`). The R1 generator ("Relatório de Processo", `process_report`) is described in "R1" below; R2 to R4
+come later. The R1 needed no migration (layout, purpose, app version and data fingerprint live in `parameters`).
 
 ### Data model (`src/server/db/schema/legal-reports.ts`, client-safe types in `@/domain/legal-reports`)
 
@@ -1476,19 +1482,38 @@ generators come later; this foundation ships the data model, the PDF engine, the
   pending (with the reason).
 - `@/domain/legal-reports`: `GAP_MARKER` ("[DADO NÃO LOCALIZADO]"), `itemDisplayText`, `cellDisplayText`
   (null is never "0" nor empty), `totalOf(values, quantity)` (sums ONE money quantity; mixing valor da
-  causa and valor apurado throws, RN-02/RN-03).
+  causa and valor apurado throws, RN-02/RN-03), `itemGapLabels(item)` (the gaps of an item: the gap item
+  itself, or every empty cell of a column whose null label is the marker, "Coluna (linha): [DADO NÃO
+  LOCALIZADO]"; used by the "Dados não localizados" list AND by the R1 methodology count),
+  `redactPersonalIds(text)` / `containsPersonalId(text)` (CPF and CNPJ: formatted, after the acronym, or
+  11/14 bare digits with valid check digits become "[CPF omitido]" / "[CNPJ omitido]"; the CNJ number, money
+  and dates are untouched).
+- Draft-only fields (never stored): `ReportItemDraft.gapRefs` (keys of the gap items whose marker a non-gap
+  item repeats in its text, e.g. the R1 synthesis) and `summarizesGaps` (an inference that only summarizes
+  gap items: not sent to pending). `validateDraft` blocks (`undeclared_gap_marker`) a marker in the text of
+  a non-gap item that is not backed by `gapRefs` or by an empty gap cell of the same item, and
+  (`invalid_table`) a cell with the marker written in it (a gap cell is an empty cell).
 - `checkDocumentSources(ctx, inputs)` (`./source-checker`): document visible to the generating user,
   version belongs to the document and has the hash read by the generator (always compared; a missing
   hash is "not confirmed"), page exists (paged versions
   only), literal excerpt found in that page text (`getDocumentVersionPageText`; whitespace-tolerant).
 
-### Services (`@/modules/legal-reports/*`; `report:read` + `legalReportWhere(ctx)`; generating needs `report:generate`)
+### Services (`@/modules/legal-reports/*`; `legal_report:read` + `legalReportWhere(ctx)`; generating needs `report:generate`)
+
+`legal_report:read` (read and download legal reports of visible processes) is separate from `report:read`
+(management reports, exports and Power BI of the whole organization): every role with `report:read` has it,
+and `external_counsel` has ONLY `legal_report:read` (reads the R1 of its firm's processes; never generates
+nor approves).
 
 ```ts
 // service.ts
 listLegalReports(ctx, { type?, status?, processId?, page?, pageSize? }): Promise<Paginated<LegalReportListItem>>
 getLegalReport(ctx, id): Promise<{ view: ReportView; versions; processNumber; approverDescription; permissions: { canApprove; canRegenerate; canDownload } }>
-issueLegalReport(ctx, draft: LegalReportDraft, { settings, supersedes? }): Promise<{ id; reference; version }>   // validation + source check + pending + PDF (watermark) + audit legal_report.generate|regenerate
+issueLegalReport(ctx, draft: IssuableDraft, { settings, supersedes? }): Promise<{ id; reference; version }>   // validation + source check + pending + PDF (watermark) + audit legal_report.generate|regenerate
+//   IssuableDraft = LegalReportDraft & { onIssue?(tx, ctx, { reportId, reference }) }: writes the content presupposes
+//   (R1: system scenario proposals), run INSIDE the issue transaction after validation (nothing stays if the issue fails).
+//   Free text (items, cells, notes, labels, methodology, titles) goes through redactPersonalIds; literal excerpts never do.
+//   draft.requiredPermissions -> parameters.requiredPermissions (sorted, unique).
 generateEngineSample(ctx, { processId? | processNumber? }): Promise<{ id; reference; version }>                   // + process:read; values from contingency positionAt (same as the process page)
 regenerateLegalReport(ctx, id)            // new version (same reference) with current data; previous -> superseded (PDF + hash kept); an APPROVED version only by someone who could approve it
 approveLegalReport(ctx, id)               // identified person with the role of the type; final PDF with stamp, no watermark; audit legal_report.approve
@@ -1506,13 +1531,18 @@ formatLegalReportReference(code, year, n), allocateReferenceNumber(tx, orgId, ty
 // scenarios.ts: addProcessScenario(ctx, processId, input) (contingency:write), listProcessScenarios(ctx, processId) (contingency:read)
 // settings-service.ts: getLegalReportSettings(ctx), updateLegalReportSettings(ctx, input) (admin:organization; audit organization.legal_reports_settings_update)
 ```
-Visibility (`legalReportWhere`, module-local): organization; process reports need the process visible;
-reports without a process only for organization-wide roles or the generator; every document cited by an
-item must be visible (a `sensitive_health` citation hides the report from profiles that cannot see the
-document). Admin and legal manager see all. New generators register in `GENERATORS` (service.ts) and
+Visibility (`legalReportWhere`, module-local): organization; process reports need the process visible
+(external counsel: only its firm's processes); reports without a process only for organization-wide roles or
+the generator; every document cited by an item must be visible (a `sensitive_health` citation hides the report
+from profiles that cannot see the document); the viewer must hold every permission in
+`parameters.requiredPermissions` (the read permissions of the content the report carries; R1: `process:read`
+always, `document:read` with documents, `brief:read` with the preliminary analysis, `deadline:read` with deadlines,
+`contingency:read` with values; e.g. an R1 with the brief is hidden from executive and accountant). Admin and
+legal manager see all. New generators register in `GENERATORS` (service.ts) and
 return a `LegalReportDraft`; `regenerateLegalReport` reuses the generator stored in `parameters.generator`.
 Audits: `legal_report.generate|regenerate|approve|download` (entity `legal_report`),
-`process_scenario.create` (entity `legal_process`, `metadata.scenarioId`).
+`process_scenario.create` (entity `legal_process`, `metadata.scenarioId`), `process_scenario.propose` (entity
+`legal_process`, `metadata.scenarioIds`, system proposals of the R1).
 
 ### PDF engine (`@/server/pdf`, server only)
 
@@ -1521,10 +1551,12 @@ Audits: `legal_report.generate|regenerate|approve|download` (entity `legal_repor
 figures in the serif), header on every page (vector wordmark from `wordmark-paths.ts` + arch/square of
 `logo.tsx`, "CONFIDENCIAL · USO INTERNO" stripe), footer "Página X de Y · reference · Data-base" + "O
 conteúdo reflete o estado da base em dd/mm/aaaa." (second pass), diagonal watermark until approval.
-Blocks: `heading` (kept with the next block), `paragraph` (no hyphenation, 2-line orphan/widow control),
+Blocks: `heading` (kept with the next block, its space after included; a table with fewer than 5 data rows, which can
+never be split, travels whole with its heading), `paragraph` (no hyphenation, 2-line orphan/widow control),
 `item` (origin seal + number + text + literal quote + notes; items up to 200 pt never split), `table`
 (header repeated on every page with "(continuação)", rows never split unless taller than a page, tables
-up to 220 pt kept together, at least 3 rows before and 2 after a break, totals row never alone),
+up to 220 pt kept together, at least 3 rows before and 2 after a break, totals row never alone; optional
+per-row origin seal `rowSeals` drawn in column `sealColumn`, used by the R1 row items),
 `keyValues` (cover identification block), `callout` (`info|warning|stamp`), `rule`, `spacer`, `pageBreak`.
 The origin legend is inserted before the first sealed block. Text is sanitized (no em/en dash, no soft
 hyphen or control characters); the literal quote of an `item` keeps the source's dashes (a quote is
@@ -1536,13 +1568,91 @@ project root) and parsed per document (a fontkit font shared across documents lo
 
 | Route | Permission | Notes |
 |---|---|---|
-| `/relatorios-juridicos` | report:read | `tipo`, `situacao`, `pagina`; "Documento de teste do motor" form (report:generate + R1 generator role + process:read) |
-| `/relatorios-juridicos/[id]` | report:read (+ `legalReportWhere`) | `gerado=1` banner; approve (approver of the type) / new version (`canSupersedeLegalReport`; action `report:generate`) / download |
+| `/relatorios-juridicos` | legal_report:read | `tipo`, `situacao`, `pagina`; "Relatório de Processo (R1)" form ("Gerar R1": process from the list or by number) and "Documento de teste do motor" form (both: report:generate + R1 generator role + process:read) |
+| `/relatorios-juridicos/[id]` | legal_report:read (+ `legalReportWhere`) | `gerado=1` banner; approve (approver of the type) / new version (`canSupersedeLegalReport`; action `report:generate`) / download |
 | `/relatorios-juridicos/parametros` | admin:organization | confidence threshold, probability bands, legal basis text |
-| `GET /api/legal-reports/[id]/pdf` | session + report:read | stored PDF (hash checked), 401/403/404/409; audit `legal_report.download` |
+| `GET /api/legal-reports/[id]/pdf` | session + legal_report:read | stored PDF (hash checked), 401/403/404/409; audit `legal_report.download` |
 
 UI on the process: `<ProcessScenarios/>` (`@/modules/legal-reports/components/process-scenarios`) in the
-"Valores e acordos" tab (`#cenarios`, contingency:read; adding a scenario needs contingency:write).
+"Valores e acordos" tab (`#cenarios`, contingency:read; adding a scenario needs contingency:write) and
+`<ProcessReportCard ctx processId/>` (`@/modules/legal-reports/components/process-report-card`) in "Documentos e análises"
+(`#relatorio-do-processo`, legal_report:read).
+
+### R1: Relatório de Processo (`@/modules/legal-reports/process-report`, `automation`)
+
+```ts
+// process-report.ts (server)
+buildProcessReportDraft(ctx, { processId }, settings): Promise<IssuableDraft>   // generator "process_report" (GENERATORS); rows read with ctx's scope;
+                                                                                // writes NOTHING: without any scenario, plans proposals (scenarios.ts)
+                                                                                // and `onIssue` records them in the issue transaction
+processReportFingerprint(organizationId, processId, db?, { plannedScenarioIds? }): Promise<string | null>
+                                                                                   // SHA-256 of the data the R1 shows (no row scope): phase/instance,
+                                                                                   // official values and indexes, risk assessments, claims and their
+                                                                                   // assessments, guarantees, scenarios (planned proposals count as
+                                                                                   // recorded), movements and the brief used
+PROCESS_REPORT_SECTIONS, SCENARIO_CAVEAT, PROCESS_REPORT_PURPOSE, TIMELINE_MAX_ROWS (150, most recent; older ones counted in an item)
+// service.ts
+generateProcessReport(ctx, { processId? | processNumber? })    // "Gerar R1": new reference, or the next version of the current R1;
+                                                               // approved current R1: only canSupersedeLegalReport (approver); current R1 not
+                                                               // visible to ctx (cites a document outside its access): ConflictError
+currentProcessReport(organizationId, processId, db?)           // latest pending/approved R1 of the generator (no row scope)
+refreshProcessReportAsSystem(organizationId, processId, { createIfMissing, allowNewVersion?, isDemo? })
+  → { outcome: "created" | "new_version" | "unchanged" | "outdated_alert" | "deferred" | "process_not_found"; reportId }
+getProcessReportPanel(ctx, processId): Promise<ProcessReportPanel>   // legal_report:read + processWhere (card of the process page)
+outdatedProcessReportAlertKey(processId), APP_VERSION (package.json, stored as parameters.appVersion)
+// automation.ts
+runProcessReportJob(organizationId, payload)                    // job "legal_report.generate" { processId, trigger: "brief_approved" }
+runLegalReportsRefreshRoutine(rc)                               // routine "legal_reports_refresh" (daily; REFRESH_MAX_NEW_VERSIONS_PER_RUN = 40)
+// scenarios.ts
+planScenarioProposals(sources, bands, now?): PlannedScenarioProposal[]      // pure: one proposal per assessed claim (band containing its %), ids fixed
+insertScenarioProposals(tx, ctx, processId, planned, { reportReference })  // inside the issue transaction; process row locked; ConflictError if a
+                                                                              // scenario appeared meanwhile; origin "system", no author; audit
+                                                                              // process_scenario.propose with who asked ("pedida por <nome>" or
+                                                                              // "geração automática") and the report reference
+```
+
+Rules:
+
+- Layout `parameters.layout = "process_report"` (`reportOutline(view)` in `view.ts`, used by the page and the PDF): 1 capa de
+  identificação (report data without seal: reference, base date, situation, generated at, "Elaborado por" = Praetor + app
+  version, "Revisado por" empty until approval, finalidade, legal basis; then the process items), 2 nota metodológica (generated
+  from the data read + `standardMethodology`), 3 síntese (3 to 6 points), 4 linha do tempo, 5 pedidos e valores, 6 garantias e
+  exposição líquida, 7 cenários (`ReportSectionSpec.note` = the fixed caveat, rendered after the section), 8 pontos de atenção,
+  9 auditoria de fontes (Verificado and Não confirmado with the rule sentence), 10 pendências (items not stated + the list of
+  every gap: `gapEntries(view)`, gap items AND empty gap cells such as "Cidade/UF (2º grau)", pending items included). Reports
+  without `layout` keep the standard layout (methodology 1, sections from 2, pending, sources, not confirmed).
+- Gaps: every datum not located is a gap item or an empty cell of a gap column; the synthesis repeats a marker only through
+  `gapRefs` (phase, current instance, valor da causa, valor apurado). The methodology count (`itemGapLabels`) equals the
+  "Dados não localizados" list. The synthesis gap point is an `inference` with `summarizesGaps`, derived from the gap items it
+  names (record gaps, missing documents, other brief gaps). "sem registros encontrados" (`dateBasis: "query"`) only for empty
+  queries (no guarantee, no open deadline, no hearing); counts of rows found use `latest`/`record`.
+- Synthesis 3.1: current instance, court and division from the `process_instances` row with `is_current` (else the row of
+  `legal_processes.instance`); `legal_processes.court/court_division` only when the process has no instance rows (court-sync
+  fills those fields from the origin instance). The cover adds "Fase processual" (record or gap) and, without instance rows,
+  city/UF and court gaps; a CNJ number that fails the check digit becomes an attention item.
+- Row items (`ReportItemData.kind = "row"`, `group`, `caption`, `columns`, `cells`): consecutive items of the same group are
+  rendered as ONE table with each row's origin seal (`PdfBlock.table.rowSeals` + `sealColumn`, engine) and item number; each row
+  is still an item (own origin, source check, pending). Used by the timeline (process events as Cadastro, DataJud ones with
+  source "DataJud (CNJ), coletado em …"; brief events as Documentado with document and page).
+- Values: the claims table shows the claimed value (original) and the updated value side by side (`updatedValueText`, computed
+  with `loadRatesFor` + `updatedValue`, never stored; missing months → "atualização indisponível (faltam meses: …)"); "Valor
+  apurado" per claim is always "Não apurado" (the claims module records none). Valor da causa and valor apurado of the process
+  are separate items (position as `positionAt`); no table of the R1 has a totals row. Net exposure = `exposureBreakdown`
+  (deductions listed; the estimate is a separate item starting with "Estimado").
+- Preliminary analysis: latest APPROVED brief, else the latest `ready_for_review`/`in_review` one (`caseBriefWhere`).
+  extracted → Documentado (first citation with a visible document, page and an excerpt of at least 12 characters and without
+  CPF/CNPJ; document hash = `document_versions.sha256` of the version the brief read); record → not repeated (the record is read
+  directly); missing → Lacuna, from EVERY section (`gaps`, `identification`, `amounts`, `claims`, arguments, missing
+  documents, timeline; reviewer items of `gaps` too), labeled "(apontado pela análise preliminar vN[, simulação])"; missing items
+  citing "REG" (the record) are not repeated, because the R1 reads the record itself and marks its current gaps (counted in the
+  methodology); illustrative → Análise `simulated: true`, text starting with "Simulação", only in sections 3 and 8; reviewer →
+  Análise credited to the person and date of the revision that introduced the item in its current form (`case_brief_revisions`;
+  without a record: "revisor não identificado no histórico de revisões"). Items citing a `sensitive_health` document have generic
+  text and no excerpt.
+- Automation: `approveCaseBrief` enqueues `legal_report.generate` AFTER its transaction (failure logged, never fails the
+  approval). `refreshProcessReportAsSystem`: same fingerprint → nothing; pending R1 → next version; approved R1 → alert
+  `legal_report_outdated` (never superseded by the system); no R1 → created only with `createIfMissing` (the job, not the routine).
+  The routine resolves the outdated alerts of R1s that match the data again (only when no process failed in the run).
 
 ## Provision memo (memória de cálculo, P1.10): `@/modules/provision-memo/*`
 

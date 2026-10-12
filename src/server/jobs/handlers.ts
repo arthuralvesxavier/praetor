@@ -105,6 +105,13 @@ export const JOB_HANDLERS: Record<JobType, JobHandler> = {
     await runBiRefreshJob(job.organizationId, p.data);
   },
 
+  // R1 (Relatório de Processo) after a preliminary analysis is approved (system context, best effort).
+  "legal_report.generate": async (job) => {
+    if (!job.organizationId) throw new InvalidJobPayloadError(job.type);
+    const { runProcessReportJob } = await import("@/modules/legal-reports/automation");
+    if (!(await runProcessReportJob(job.organizationId, job.payload))) throw new InvalidJobPayloadError(job.type);
+  },
+
   // Post-import distribution (chunked; a retry resumes from the last chunk recorded).
   "import.distribute": async (job) => {
     const p = importDistributePayload.safeParse(job.payload);

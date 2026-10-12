@@ -65,6 +65,10 @@ const VISIBILITY_RULES: { title: string; text: string }[] = [
     text: "Administrador e gestor jurídico veem todos. Os demais veem as mensagens destinadas a eles ou geradas por eles e as mensagens sobre processos que podem ver.",
   },
   {
+    title: "Relatórios jurídicos (PDF)",
+    text: "Um relatório de processo segue a visibilidade do processo. Quem não vê um documento citado, ou não tem a permissão de um conteúdo que o relatório traz (análise preliminar, prazos, valores), não vê o relatório. O escritório externo consulta e baixa os relatórios dos processos do seu escritório, sem gerar nem aprovar.",
+  },
+  {
     title: "Alertas e comentários",
     text: "Seguem a visibilidade do registro a que se referem.",
   },

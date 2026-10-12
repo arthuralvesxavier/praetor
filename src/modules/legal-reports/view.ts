@@ -1,12 +1,15 @@
-import type { LegalReportStatus, LegalReportType, ReportItemOrigin, Role } from "@/domain/enums";
+import { ROLE_LABELS, type LegalReportStatus, type LegalReportType, type ReportItemOrigin, type Role } from "@/domain/enums";
 import { formatDate, formatDateTime } from "@/lib/format";
 import {
   GAP_MARKER,
   itemDisplayText,
+  itemGapLabels,
+  type LegalReportLayout,
   type LegalReportParameters,
   type LegalReportScope,
   type RecordSource,
   type ReportItemData,
+  type ReportTableColumn,
 } from "@/domain/legal-reports";
 
 /**
@@ -76,7 +79,7 @@ export type ItemView = StoredItem & {
   source: StoredSource | null;
 };
 
-export type SectionView = { key: string; title: string; number: string; items: ItemView[] };
+export type SectionView = { key: string; title: string; number: string; note: string | null; items: ItemView[] };
 
 export type ReportView = StoredReport & {
   generatedByName: string | null;
@@ -88,8 +91,96 @@ export type ReportView = StoredReport & {
   sources: (StoredSource & { itemNumber: string | null })[];
 };
 
-/** Número da seção de metodologia (as seções de conteúdo começam em 2). */
+/** Número da seção de metodologia na disposição padrão (as seções de conteúdo começam em 2). */
 export const METHODOLOGY_NUMBER = "1";
+
+export function reportLayout(report: { parameters: Pick<LegalReportParameters, "layout"> }): LegalReportLayout {
+  return report.parameters.layout === "process_report" ? "process_report" : "standard";
+}
+
+/**
+ * Número de uma seção de conteúdo pela posição. Padrão: 2, 3, 4… (a nota
+ * metodológica é a 1). R1: a capa de identificação é a 1, a nota metodológica
+ * a 2 e as demais seções seguem a partir de 3.
+ */
+function sectionNumberFor(layout: LegalReportLayout, index: number): string {
+  if (layout === "process_report") return String(index === 0 ? 1 : index + 2);
+  return String(index + 2);
+}
+
+/** Partes do relatório na ordem de exibição (tela e PDF), com a numeração. */
+export type ReportOutlineEntry =
+  | { kind: "section"; number: string; section: SectionView }
+  | { kind: "methodology"; number: string }
+  /** Fontes consultadas (padrão) ou auditoria de fontes com verificado e não confirmado (R1). */
+  | { kind: "sources"; number: string }
+  /** Não confirmado como parte própria (padrão; no R1 fica dentro da auditoria de fontes). */
+  | { kind: "unconfirmed"; number: string }
+  | { kind: "pending"; number: string };
+
+export function reportOutline(view: Pick<ReportView, "parameters" | "sections">): ReportOutlineEntry[] {
+  const n = view.sections.length;
+  const sections = view.sections.map((section) => ({ kind: "section" as const, number: section.number, section }));
+  if (reportLayout(view) === "process_report") {
+    return [
+      ...sections.slice(0, 1),
+      { kind: "methodology", number: n > 0 ? "2" : "1" },
+      ...sections.slice(1),
+      { kind: "sources", number: String(n + 2) },
+      { kind: "pending", number: String(n + 3) },
+    ];
+  }
+  return [
+    { kind: "methodology", number: METHODOLOGY_NUMBER },
+    ...sections,
+    { kind: "pending", number: String(n + 2) },
+    { kind: "sources", number: String(n + 3) },
+    { kind: "unconfirmed", number: String(n + 4) },
+  ];
+}
+
+/** Bloco de uma seção: item isolado ou linhas consecutivas do mesmo grupo (uma tabela com o selo de cada linha). */
+export type SectionBlock =
+  | { kind: "item"; item: ItemView }
+  | { kind: "rows"; group: string; caption: string | null; columns: ReportTableColumn[]; items: ItemView[] };
+
+export function sectionBlocks(items: readonly ItemView[]): SectionBlock[] {
+  const out: SectionBlock[] = [];
+  for (const item of items) {
+    const data = item.data;
+    if (data?.kind === "row") {
+      const last = out[out.length - 1];
+      if (last?.kind === "rows" && last.group === data.group) last.items.push(item);
+      else out.push({ kind: "rows", group: data.group, caption: data.caption ?? null, columns: data.columns, items: [item] });
+    } else {
+      out.push({ kind: "item", item });
+    }
+  }
+  return out;
+}
+
+/** Um dado não localizado do relatório: o item em que aparece e o texto com o marcador literal. */
+export type GapEntry = { key: string; itemId: string; number: string; sectionTitle: string; text: string };
+
+/**
+ * Todos os dados não localizados, na ordem do relatório: itens de lacuna e
+ * células vazias de colunas de lacuna (ex.: Cidade/UF de uma instância, data de
+ * um evento), inclusive em itens que foram para as pendências. É a lista
+ * "Dados não localizados" das pendências; a nota metodológica conta pela mesma
+ * regra (`itemGapLabels`).
+ */
+export function gapEntries(view: Pick<ReportView, "sections" | "pendingItems">): GapEntry[] {
+  const items = [...view.sections.flatMap((s) => s.items), ...view.pendingItems];
+  return items.flatMap((item) =>
+    itemGapLabels(item).map((text, i) => ({
+      key: `${item.id}:${i}`,
+      itemId: item.id,
+      number: item.number,
+      sectionTitle: item.sectionTitle,
+      text,
+    })),
+  );
+}
 
 export function buildReportView(
   report: StoredReport,
@@ -112,7 +203,8 @@ export function buildReportView(
   for (const s of sources) if (s.itemId) sourceByItem.set(s.itemId, s);
 
   const numbers = new Map<string, string>();
-  const sectionNumber = (key: string) => String((sectionIndex.get(key) ?? 0) + 2);
+  const layout = reportLayout(report);
+  const sectionNumber = (key: string) => sectionNumberFor(layout, sectionIndex.get(key) ?? 0);
   const counters = new Map<string, number>();
   let pendingCounter = 0;
   for (const item of sorted) {
@@ -139,6 +231,7 @@ export function buildReportView(
     key: s.key,
     title: s.title,
     number: sectionNumber(s.key),
+    note: s.note ?? null,
     items: sorted.filter((i) => i.section === s.key && !i.pendingReason).map(toView),
   }));
   const pendingItems = sorted.filter((i) => i.pendingReason).map(toView);
@@ -203,3 +296,22 @@ export function standardMethodology(view: Pick<ReportView, "parameters">): strin
     "Valor da causa e valor apurado são grandezas diferentes e nunca são somados entre si. Valores sem data-base não são atualizados; nenhum valor atualizado é gravado.",
   ];
 }
+
+/** Aprovado (ou aprovado e depois substituído por nova versão). */
+export function isApprovedView(view: Pick<ReportView, "status" | "approvedAt">): boolean {
+  return view.status === "approved" || (view.status === "superseded" && !!view.approvedAt);
+}
+
+/** "Elaborado por" da capa do R1: o sistema (com a versão) e quem pediu a geração. */
+export function preparedByLabel(view: Pick<ReportView, "parameters" | "generatedByName">): string {
+  const version = view.parameters.appVersion ? `Praetor, versão ${view.parameters.appVersion}` : "Praetor";
+  return view.generatedByName ? `${version}, gerado a pedido de ${view.generatedByName}` : `${version}, geração automática`;
+}
+
+/** "Revisado por" da capa do R1: vazio (pendente) até a aprovação. */
+export function reviewedByLabel(view: Pick<ReportView, "status" | "approvedAt" | "approvedByName" | "approvedByRole">): string {
+  if (!isApprovedView(view)) return "Pendente (preenchido na aprovação)";
+  const role = view.approvedByRole ? ` (${ROLE_LABELS[view.approvedByRole]})` : "";
+  return `${view.approvedByName ?? "Pessoa identificada"}${role} em ${dateTimeLabel(view.approvedAt)}`;
+}
+

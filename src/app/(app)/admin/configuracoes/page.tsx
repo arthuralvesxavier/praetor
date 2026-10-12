@@ -52,6 +52,8 @@ const ROUTINE_DESCRIPTIONS: Record<RoutineType, string> = {
     "Atualiza a lista de quem pode ver cada processo no Power BI e pede ao Power BI a atualização dos painéis depois de importações, fechamentos mensais e coletas.",
   index_series_refresh:
     "Busca na API do Banco Central os índices de atualização monetária dos meses que faltam. Sem índice do período, o valor atualizado aparece como indisponível.",
+  legal_reports_refresh:
+    "Confere os processos com Relatório de Processo (R1): com dado novo, gera a versão seguinte pendente de revisão; um R1 já aprovado nunca é substituído pelo sistema, vira um alerta para uma pessoa gerar a nova versão.",
 };
 
 const usd = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });

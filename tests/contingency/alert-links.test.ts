@@ -47,6 +47,7 @@ const PRODUCER_ENTITIES: Record<AlertType, EntityType[]> = {
   court_sync_failed: ["legal_process"],
   claims_risk_review: ["legal_process"],
   snapshot_close_blocked: ["legal_process"],
+  legal_report_outdated: ["legal_process"],
 };
 
 /** Expected destination of the `legal_process` alerts (tab and card). */
@@ -57,6 +58,7 @@ const PROCESS_DESTINATION: Partial<Record<AlertType, string>> = {
   snapshot_close_blocked: `?aba=valores-e-acordos#${RISK_SECTION_ID}`,
   court_movement_relevant: `?aba=partes-e-andamento#${PROCESS_SECTION_IDS.timeline}`,
   court_hearing_designated: `?aba=prazos-e-audiencias#${PROCESS_SECTION_IDS.hearings}`,
+  legal_report_outdated: `?aba=documentos-e-analises#${PROCESS_SECTION_IDS.legalReport}`,
 };
 
 let f: Fixture;

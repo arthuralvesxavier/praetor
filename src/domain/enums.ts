@@ -622,6 +622,7 @@ export const ALERT_TYPES = [
   "court_sync_failed",
   "claims_risk_review",
   "snapshot_close_blocked",
+  "legal_report_outdated",
 ] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 export const ALERT_TYPE_LABELS = labels(ALERT_TYPES, {
@@ -647,6 +648,7 @@ export const ALERT_TYPE_LABELS = labels(ALERT_TYPES, {
   court_sync_failed: "Falha na coleta de dados do tribunal (DataJud)",
   claims_risk_review: "Classificação de risco a rever (pedidos do processo)",
   snapshot_close_blocked: "Processo sem classificação de risco impede o fechamento mensal",
+  legal_report_outdated: "Relatório do processo (R1) aprovado desatualizado: gerar nova versão",
 });
 
 export const ALERT_SEVERITIES = ["info", "warning", "critical"] as const;
@@ -669,6 +671,7 @@ export const JOB_TYPES = [
   "court_sync.run",
   "bi.refresh",
   "import.distribute",
+  "legal_report.generate",
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
@@ -684,6 +687,7 @@ export const ROUTINE_TYPES = [
   "simulated_feed",
   "bi_access_refresh",
   "index_series_refresh",
+  "legal_reports_refresh",
 ] as const;
 export type RoutineType = (typeof ROUTINE_TYPES)[number];
 export const ROUTINE_TYPE_LABELS = labels(ROUTINE_TYPES, {
@@ -698,6 +702,7 @@ export const ROUTINE_TYPE_LABELS = labels(ROUTINE_TYPES, {
   simulated_feed: "Chegada automática simulada de processos (demonstração)",
   bi_access_refresh: "Acessos e atualização dos painéis Power BI",
   index_series_refresh: "Atualização das séries de índices de correção (Banco Central)",
+  legal_reports_refresh: "Atualização dos relatórios do processo (R1) com dados novos",
 });
 
 // ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ const GROUPS: { key: string; label: string; prefixes: string[] }[] = [
     label: "Entrada, distribuição e análises preliminares",
     prefixes: ["intake", "distribution", "brief"],
   },
-  { key: "contingencias", label: "Contingências, importação e relatórios", prefixes: ["contingency", "snapshot", "import", "report"] },
+  { key: "contingencias", label: "Contingências, importação e relatórios", prefixes: ["contingency", "snapshot", "import", "report", "legal_report"] },
   { key: "prazos", label: "Prazos e tarefas", prefixes: ["deadline", "task"] },
   { key: "documentos", label: "Documentos e comentários", prefixes: ["document", "comment"] },
   { key: "preventivo", label: "Preventivo e contratos", prefixes: ["occurrence", "contract", "preventive_intel"] },

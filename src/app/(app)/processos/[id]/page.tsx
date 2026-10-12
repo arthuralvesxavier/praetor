@@ -23,6 +23,7 @@ import { CourtSyncPanel } from "@/modules/court-sync/components/court-sync-panel
 import { EntityDocuments } from "@/modules/documents/components/entity-documents";
 import { ProcessEmailsTab } from "@/modules/emails/components/process-emails-tab";
 import { ProcessHearingsTab } from "@/modules/hearings/components/process-hearings-tab";
+import { ProcessReportCard } from "@/modules/legal-reports/components/process-report-card";
 import { ProcessScenarios } from "@/modules/legal-reports/components/process-scenarios";
 import {
   closeProcessAction,
@@ -292,6 +293,12 @@ export default async function ProcessDetailPage(props: PageProps<"/processos/[id
             <section id={PROCESS_SECTION_IDS.brief} aria-labelledby="analise-preliminar-titulo" className="flex scroll-mt-4 flex-col gap-4">
               <SectionTitle id="analise-preliminar-titulo">Análise preliminar</SectionTitle>
               <ProcessBriefTab ctx={ctx} processId={process.id} />
+            </section>
+          ) : null}
+          {can(ctx, "legal_report:read") ? (
+            <section id={PROCESS_SECTION_IDS.legalReport} aria-labelledby="relatorio-processo-titulo" className="flex scroll-mt-4 flex-col gap-4">
+              <SectionTitle id="relatorio-processo-titulo">Relatório do processo</SectionTitle>
+              <ProcessReportCard ctx={ctx} processId={process.id} />
             </section>
           ) : null}
           {(await hasAnalysesToShow(ctx, process.id)) ? (

@@ -1710,6 +1710,17 @@ export async function approveCaseBrief(ctx: AuthContext, id: string, input: { no
       tx,
     );
   });
+  // Depois do commit, sem afetar a aprovação: o R1 (Relatório de Processo) é gerado pelo sistema em segundo plano.
+  try {
+    await enqueueJob({
+      type: "legal_report.generate",
+      organizationId: ctx.organizationId,
+      payload: { processId: b.processId, trigger: "brief_approved" },
+      dedupeKey: `legal_report.generate:${b.processId}`,
+    });
+  } catch (err) {
+    logger.warn("case_brief_report_enqueue_failed", { briefId: b.id, ...errorSummary(err) });
+  }
 }
 
 export async function rejectCaseBrief(ctx: AuthContext, id: string, input: { reason: string }): Promise<void> {

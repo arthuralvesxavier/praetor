@@ -180,13 +180,14 @@ describe("cenários na ficha do processo", () => {
 });
 
 describe("rota de download", () => {
-  it("401 sem sessão, 404 para outra organização, PDF para quem vê", async () => {
+  it("401 sem sessão, 404 para outra organização e para quem não vê o relatório, PDF para quem vê", async () => {
     session.current = null;
     expect((await pdfRequest(reportId)).status).toBe(401);
     session.current = fx.ctx.adminB;
     expect((await pdfRequest(reportId)).status).toBe(404);
+    // Escritório externo lê relatórios jurídicos só dos processos do escritório: este não é (e é documento de teste do gestor).
     session.current = fx.ctx.externalCounsel;
-    expect((await pdfRequest(reportId)).status).toBe(403);
+    expect((await pdfRequest(reportId)).status).toBe(404);
     session.current = fx.ctx.manager;
     const res = await pdfRequest(reportId);
     expect(res.status).toBe(200);

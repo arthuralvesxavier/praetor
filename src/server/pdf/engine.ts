@@ -47,6 +47,12 @@ export type PdfBlock =
       totals?: string[] | null;
       note?: string | null;
       emptyText?: string;
+      /**
+       * Selo de origem POR LINHA (tabela de itens, ex.: linha do tempo): desenhado na
+       * coluna `sealColumn` (padrão 0), cujo texto é ignorado. Null = linha sem selo.
+       */
+      rowSeals?: (SealKind | null)[] | null;
+      sealColumn?: number;
     }
   | { type: "keyValues"; pairs: { label: string; value: string }[]; columns?: 1 | 2 }
   | { type: "callout"; tone: "info" | "warning" | "stamp"; title?: string; lines: string[] }
@@ -427,7 +433,14 @@ class ItemFlow implements Flow {
   }
 }
 
-type TableRow = { cells: string[][]; height: number; total: boolean; index: number };
+type TableRow = {
+  cells: string[][];
+  height: number;
+  total: boolean;
+  index: number;
+  /** Selo de origem da linha (tabela de itens), desenhado na coluna `sealColumn`. */
+  seal?: { kind: SealKind; label: string } | null;
+};
 
 const CELL_PAD_X = 4.6;
 const CELL_PAD_Y = 3.4;
@@ -451,11 +464,12 @@ class TableFlow implements Flow {
       rows: TableRow[];
       note?: string | null;
       continued: boolean;
+      sealColumn?: number;
     },
     private readonly s: Styles,
     readonly spaceBefore: number,
   ) {
-    this.hasSeal = !!spec.seal;
+    this.hasSeal = !!spec.seal || spec.rows.some((r) => !!r.seal);
     const sealW = spec.seal ? sealWidth(spec.seal.label, s) + 7 : 0;
     const caption = spec.caption ? `${spec.caption}${spec.continued ? " (continuação)" : ""}` : "";
     this.captionLines = caption ? wrap(caption, s.caption, CONTENT_WIDTH - sealW) : [];
@@ -484,6 +498,10 @@ class TableFlow implements Flow {
   minHead() {
     if (this.keepTogether()) return this.height();
     const rows = this.spec.rows;
+    // Com menos de 3 linhas para esta página e 2 para a seguinte, `split` nunca divide a tabela:
+    // o primeiro pedaço é a tabela inteira (o título preso a ela vai junto para a página seguinte).
+    const dataRows = rows.filter((r) => !r.total).length;
+    if (dataRows < TABLE_MIN_ROWS + TABLE_MIN_ROWS - 1) return Math.min(this.height(), PAGE.contentTop - PAGE.contentBottom);
     const firstRows = rows.slice(0, TABLE_MIN_ROWS).reduce((h, r) => h + r.height, 0);
     return this.head() + firstRows;
   }
@@ -566,9 +584,13 @@ class TableFlow implements Flow {
       let rx = x;
       this.spec.columns.forEach((col, i) => {
         const w = this.spec.widths[i];
-        (row.cells[i] ?? []).forEach((line, j) =>
-          drawLineAt(page, line, style, rx + CELL_PAD_X, y - CELL_PAD_Y - j * style.lineHeight, col.align ?? "left", w - 2 * CELL_PAD_X),
-        );
+        if (row.seal && i === (this.spec.sealColumn ?? 0)) {
+          drawSeal(page, row.seal.kind, row.seal.label, rx + CELL_PAD_X, y - CELL_PAD_Y + 0.4, s);
+        } else {
+          (row.cells[i] ?? []).forEach((line, j) =>
+            drawLineAt(page, line, style, rx + CELL_PAD_X, y - CELL_PAD_Y - j * style.lineHeight, col.align ?? "left", w - 2 * CELL_PAD_X),
+          );
+        }
         rx += w;
       });
       y -= row.height;
@@ -868,9 +890,20 @@ function toFlows(spec: PdfDocumentSpec, s: Styles): Flow[] {
           const cells = block.columns.map((_, i) => (i === 0 ? wrap(block.emptyText ?? "Nenhum registro.", s.td, CONTENT_WIDTH) : []));
           rows.push({ cells, height: s.td.lineHeight + 2 * CELL_PAD_Y, total: false, index: 0 });
         }
+        const sealColumn = block.sealColumn ?? 0;
         block.rows.forEach((r, index) => {
+          const sealKind = block.rowSeals?.[index] ?? null;
           const cells = cellLines(r, s.td);
-          rows.push({ cells, height: Math.max(1, ...cells.map((c) => c.length)) * s.td.lineHeight + 2 * CELL_PAD_Y, total: false, index });
+          if (sealKind) cells[sealColumn] = [];
+          const textHeight = Math.max(1, ...cells.map((c) => c.length)) * s.td.lineHeight + 2 * CELL_PAD_Y;
+          rows.push({
+            cells,
+            // A linha com selo tem ao menos a altura do selo.
+            height: sealKind ? Math.max(textHeight, SEAL_HEIGHT + 2 * CELL_PAD_Y - 0.4) : textHeight,
+            total: false,
+            index,
+            seal: sealKind ? { kind: sealKind, label: sealLabel(sealKind) } : null,
+          });
         });
         if (block.totals) {
           const cells = cellLines(block.totals, s.tdTotal);
@@ -891,6 +924,7 @@ function toFlows(spec: PdfDocumentSpec, s: Styles): Flow[] {
               rows,
               note: block.note,
               continued: false,
+              sealColumn,
             },
             s,
             12,
@@ -957,7 +991,8 @@ function chainNeed(flows: Flow[], i: number): number {
   let j = i;
   while (flows[j]?.keepWithNext && j + 1 < flows.length && flows[j + 1].kind !== "pageBreak") {
     const next = flows[j + 1];
-    need += next.spaceBefore + (next.keepWithNext ? next.height() : next.minHead());
+    // O espaço depois do título também conta: sem ele o título cabia sozinho e ficava órfão no pé da página.
+    need += flows[j].spaceAfter + next.spaceBefore + (next.keepWithNext ? next.height() : next.minHead());
     j += 1;
   }
   return need;

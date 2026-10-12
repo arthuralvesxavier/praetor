@@ -1,5 +1,14 @@
 import { REPORT_ITEM_ORIGINS, type ReportItemOrigin } from "@/domain/enums";
-import { RECORD_DATE_BASES, type LegalReportDraft, type RecordSource, type ReportItemData, type ReportItemDraft } from "@/domain/legal-reports";
+import {
+  countGapMarkers,
+  emptyGapCellCount,
+  GAP_MARKER,
+  RECORD_DATE_BASES,
+  type LegalReportDraft,
+  type RecordSource,
+  type ReportItemData,
+  type ReportItemDraft,
+} from "@/domain/legal-reports";
 
 /**
  * Regras de emissão (puras, sem I/O). Todo problema listado aqui é ERRO que
@@ -30,17 +39,28 @@ export type DraftIssueCode =
   | "inference_unknown_ref"
   | "inference_cycle"
   | "gap_with_value"
+  | "undeclared_gap_marker"
   | "invalid_table";
 
 export type DraftIssue = { code: DraftIssueCode; message: string; itemKey: string | null };
 
 function tableProblem(data: ReportItemData): string | null {
-  if (data.kind !== "table") return "Tipo de conteúdo estruturado desconhecido.";
+  if (data.kind !== "table" && data.kind !== "row") return "Tipo de conteúdo estruturado desconhecido.";
   if (!Array.isArray(data.columns) || data.columns.length === 0) return "Tabela sem colunas.";
   const n = data.columns.length;
   if (data.columns.some((c) => !c.header?.trim())) return "Coluna de tabela sem título.";
+  // Lacuna em célula é célula vazia (nula), exibida pelo rótulo da coluna: assim ela entra na lista de dados não localizados.
+  const writtenMarker = (cells: readonly (string | null)[]) => cells.some((c) => typeof c === "string" && c.includes(GAP_MARKER));
+  const markerProblem = "Célula com o marcador de lacuna escrito: a lacuna é a célula vazia, exibida pelo rótulo da coluna.";
+  if (data.kind === "row") {
+    if (!data.group?.trim()) return "Linha de tabela sem grupo.";
+    if (!Array.isArray(data.cells) || data.cells.length !== n) return "Linha de tabela com número de células diferente do número de colunas.";
+    if (writtenMarker(data.cells)) return markerProblem;
+    return null;
+  }
   if (data.rows.some((r) => !Array.isArray(r) || r.length !== n)) return "Linha de tabela com número de células diferente do número de colunas.";
   if (data.totals && data.totals.length !== n) return "Linha de totais com número de células diferente do número de colunas.";
+  if (data.rows.some(writtenMarker)) return markerProblem;
   return null;
 }
 
@@ -177,6 +197,26 @@ export function validateDraft(draft: LegalReportDraft): DraftIssue[] {
     }
   }
 
+  // Marcador de lacuna no texto de um item que não é lacuna: só repetindo uma lacuna do relatório
+  // (`gapRefs`) ou uma célula vazia do próprio item. Assim todo dado não localizado consta das pendências.
+  for (const item of draft.items ?? []) {
+    if (!item.origin || item.origin === "gap") continue;
+    const markers = countGapMarkers(item.content);
+    const refs = item.gapRefs ?? [];
+    const badRef = refs.find((ref) => byKey.get(ref)?.origin !== "gap");
+    if (badRef !== undefined) {
+      add("undeclared_gap_marker", `Referência de lacuna inexistente ou que não é lacuna: "${badRef}".`, item.key);
+      continue;
+    }
+    if (markers > refs.length + emptyGapCellCount(item.data)) {
+      add(
+        "undeclared_gap_marker",
+        `Marcador ${GAP_MARKER} no texto sem a lacuna correspondente ("${(item.content ?? "").slice(0, 60)}"): todo dado não localizado precisa constar das pendências.`,
+        item.key,
+      );
+    }
+  }
+
   // Referências das inferências: existem e não formam ciclo.
   for (const item of draft.items ?? []) {
     if (item.origin !== "inference" || !item.derivedFrom?.length) continue;
@@ -214,7 +254,8 @@ export type SourceVerdict = { confirmed: boolean; reason: string | null };
  * (devolve o motivo; null = afirmado):
  * - documentado com fonte não confirmada (a fonte nunca serve de base);
  * - confiança abaixo do limite;
- * - inferência cujas bases são todas lacunas (não há dado afirmado que a sustente);
+ * - inferência cujas bases são todas lacunas (não há dado afirmado que a sustente),
+ *   salvo a que só resume as lacunas (`summarizesGaps`: afirma a ausência);
  * - inferência que depende de item não afirmado (propagado até estabilizar).
  */
 export function placeItems(
@@ -233,6 +274,7 @@ export function placeItems(
     }
     if (
       item.origin === "inference" &&
+      !item.summarizesGaps &&
       item.derivedFrom?.length &&
       item.derivedFrom.every((ref) => originOf.get(ref) === "gap")
     ) {

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, count, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import packageJson from "../../../package.json";
+import { and, count, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import {
   LEGAL_REPORT_TYPE_CODES,
@@ -9,21 +10,24 @@ import {
   type Role,
 } from "@/domain/enums";
 import { normalizePage, type Paginated } from "@/domain/entities";
-import type {
-  LegalReportDraft,
-  LegalReportScope,
-  LegalReportSequenceKey,
-  RecordSource,
-  ReportItemDraft,
+import {
+  redactPersonalIds,
+  type LegalReportDraft,
+  type LegalReportScope,
+  type LegalReportSequenceKey,
+  type RecordSource,
+  type ReportItemData,
+  type ReportItemDraft,
 } from "@/domain/legal-reports";
-import { todayISO } from "@/lib/format";
+import { formatDate, todayISO } from "@/lib/format";
+import { resolveAlertsByDedupeKeys, upsertAlert } from "@/modules/alerts/service";
 import { loadOrganization } from "@/modules/analyses/org-settings";
 import { PROCESS_SECTION_IDS, processTabUrl } from "@/modules/processes/tabs";
 import { processWhere } from "@/server/auth/access";
-import type { AuthContext } from "@/server/auth/context";
+import { systemContext, type AuthContext } from "@/server/auth/context";
 import { assertCan, can } from "@/server/auth/permissions";
 import { getDb, type DbOrTx } from "@/server/db/client";
-import { legalProcesses, users, type OrganizationSettings } from "@/server/db/schema";
+import { alerts, legalProcesses, users, type OrganizationSettings } from "@/server/db/schema";
 import {
   legalReportItems,
   legalReportSequences,
@@ -37,11 +41,14 @@ import { recordAudit } from "@/server/services/audit";
 import { legalReportWhere } from "./access";
 import { APPROVER_RULES, canApproveLegalReport, canGenerateLegalReport, canSupersedeLegalReport } from "./approvers";
 import { legalReportFileName, renderLegalReportPdf } from "./pdf";
+import { buildProcessReportDraft, PROCESS_REPORT_GENERATOR, processReportFingerprint } from "./process-report";
 import { buildEngineSampleDraft, ENGINE_SAMPLE_GENERATOR, findVisibleProcessByNumber } from "./sample";
 import {
+  generateProcessReportSchema,
   generateSampleSchema,
   idSchema,
   listLegalReportsSchema,
+  type GenerateProcessReportInput,
   type GenerateSampleInput,
   type ListLegalReportsInput,
 } from "./schemas";
@@ -68,15 +75,37 @@ import { buildReportView, type ReportView, type StoredItem, type StoredReport, t
 
 const PDF_MAX_BYTES = 30 * 1024 * 1024;
 
-type Generator = (ctx: AuthContext, scope: LegalReportScope, settings: OrganizationSettings) => Promise<LegalReportDraft>;
+/** Versão do sistema gravada nos parâmetros do relatório ("Elaborado por: Praetor <versão>"). */
+export const APP_VERSION: string = packageJson.version;
 
-/** Geradores conhecidos (parâmetro `generator` gravado no relatório). R1 a R4 entram aqui depois. */
+/**
+ * Rascunho pronto para emissão. `onIssue`: gravação que o conteúdo do relatório
+ * pressupõe (ex.: cenários propostos pelo sistema que a matriz apresenta), feita
+ * DENTRO da transação de emissão, depois da validação: se a emissão falhar ou for
+ * recusada, nada fica gravado.
+ */
+export type IssuableDraft = LegalReportDraft & {
+  onIssue?: (tx: DbOrTx, ctx: AuthContext, issued: { reportId: string; reference: string }) => Promise<void>;
+};
+
+type Generator = (ctx: AuthContext, scope: LegalReportScope, settings: OrganizationSettings) => Promise<IssuableDraft>;
+
+/** Geradores conhecidos (parâmetro `generator` gravado no relatório). R2 a R4 entram aqui depois. */
 const GENERATORS: Record<string, Generator> = {
   [ENGINE_SAMPLE_GENERATOR]: (ctx, scope, settings) => {
     if (!scope.processId) throw new ValidationError("Escopo sem processo.");
     return buildEngineSampleDraft(ctx, { processId: scope.processId }, settings);
   },
+  [PROCESS_REPORT_GENERATOR]: (ctx, scope, settings) => {
+    if (!scope.processId) throw new ValidationError("Escopo sem processo.");
+    return buildProcessReportDraft(ctx, { processId: scope.processId }, settings);
+  },
 };
+
+/** Chave do alerta "R1 aprovado desatualizado" de um processo (um por processo). */
+export function outdatedProcessReportAlertKey(processId: string): string {
+  return `legal_report_outdated:${processId}`;
+}
 
 function parse<T>(schema: z.ZodType<T>, input: unknown): T {
   const result = schema.safeParse(input);
@@ -93,18 +122,37 @@ function parseId(id: string): string {
 }
 
 function assertCanGenerate(ctx: AuthContext, type: LegalReportType): void {
-  assertCan(ctx, "report:read");
+  assertCan(ctx, "legal_report:read");
   if (!canGenerateLegalReport(ctx, type)) {
     throw new ForbiddenError(`Seu perfil não gera relatórios do tipo ${LEGAL_REPORT_TYPE_LABELS[type]}.`);
   }
 }
 
-/** Texto gravado: sem travessão (regra do produto); trechos literais NÃO passam por aqui. */
+/**
+ * Texto gravado: sem travessão (regra do produto) e sem CPF ou CNPJ (minimização:
+ * `redactPersonalIds`). Trechos literais de documento NÃO passam por aqui.
+ */
 function cleanText(value: string): string {
-  return value
+  return redactPersonalIds(value)
     .replace(/[ \u00a0]+[\u2012-\u2015][ \u00a0]+/g, ", ")
     .replace(/[\u2012-\u2015]/g, "-")
     .trim();
+}
+
+/** Tabela ou linha de tabela gravada: mesmas regras de texto em t\u00edtulos e c\u00e9lulas (nulo continua nulo). */
+function cleanData(data: ReportItemData): ReportItemData {
+  const cell = (v: string | null) => (v === null ? null : cleanText(v));
+  const columns = data.columns.map((c) => ({ ...c, header: cleanText(c.header), ...(c.nullLabel ? { nullLabel: cleanText(c.nullLabel) } : {}) }));
+  if (data.kind === "row") {
+    return { ...data, columns, caption: data.caption ? cleanText(data.caption) : (data.caption ?? null), cells: data.cells.map(cell) };
+  }
+  return {
+    ...data,
+    columns,
+    rows: data.rows.map((r) => r.map(cell)),
+    totals: data.totals ? data.totals.map(cell) : null,
+    note: data.note ? cleanText(data.note) : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +176,7 @@ export type LegalReportListItem = {
 };
 
 export async function listLegalReports(ctx: AuthContext, filters: ListLegalReportsInput = {}): Promise<Paginated<LegalReportListItem>> {
-  assertCan(ctx, "report:read");
+  assertCan(ctx, "legal_report:read");
   const f = parse(listLegalReportsSchema, filters);
   const { page, pageSize, offset } = normalizePage(f);
   const conds: SQL[] = [legalReportWhere(ctx)];
@@ -295,7 +343,7 @@ export type LegalReportDetail = {
 };
 
 export async function getLegalReport(ctx: AuthContext, id: string): Promise<LegalReportDetail> {
-  assertCan(ctx, "report:read");
+  assertCan(ctx, "legal_report:read");
   const db = getDb();
   const row = await loadVisibleReport(ctx, id, db);
   const view = await buildView(db, row);
@@ -378,6 +426,13 @@ const TABLE_LABELS: Record<string, string> = {
   case_briefs: "Análises preliminares",
   process_scenarios: "Cenários do processo",
   organizations: "Configurações da organização",
+  process_instances: "Instâncias do processo",
+  process_parties: "Partes do processo",
+  process_events: "Movimentações do processo",
+  process_claims: "Pedidos do processo",
+  deadlines: "Prazos do processo",
+  hearings: "Audiências do processo",
+  alerts: "Alertas do processo",
 };
 
 function recordUrl(source: RecordSource, processId: string | null): string | null {
@@ -394,6 +449,20 @@ function recordUrl(source: RecordSource, processId: string | null): string | nul
       return source.recordId ? `/analises-preliminares/${source.recordId}` : null;
     case "process_scenarios":
       return processId ? processTabUrl(processId, "valores-e-acordos", PROCESS_SECTION_IDS.scenarios) : null;
+    case "process_instances":
+      return processId ? processTabUrl(processId, "partes-e-andamento", PROCESS_SECTION_IDS.instances) : null;
+    case "process_parties":
+      return processId ? processTabUrl(processId, "partes-e-andamento", PROCESS_SECTION_IDS.parties) : null;
+    case "process_events":
+      return processId ? processTabUrl(processId, "partes-e-andamento", PROCESS_SECTION_IDS.timeline) : null;
+    case "process_claims":
+      return processId ? processTabUrl(processId, "valores-e-acordos", PROCESS_SECTION_IDS.claims) : null;
+    case "deadlines":
+      return processId ? processTabUrl(processId, "prazos-e-audiencias", PROCESS_SECTION_IDS.deadlines) : null;
+    case "hearings":
+      return processId ? processTabUrl(processId, "prazos-e-audiencias", PROCESS_SECTION_IDS.hearings) : null;
+    case "alerts":
+      return "/alertas";
     case "organizations":
       return "/relatorios-juridicos/parametros";
     default:
@@ -448,7 +517,7 @@ function prepareRows(
       confidence: item.confidence ?? null,
       simulated: !!item.simulated,
       pendingReason: reasons.get(item.key) ?? null,
-      data: item.data ?? null,
+      data: item.data ? cleanData(item.data) : null,
     });
 
     if (item.origin === "documented") {
@@ -534,7 +603,7 @@ type SupersedeTarget = Pick<
  */
 export async function issueLegalReport(
   ctx: AuthContext,
-  draft: LegalReportDraft,
+  draft: IssuableDraft,
   opts: { settings: OrganizationSettings; supersedes?: SupersedeTarget },
 ): Promise<{ id: string; reference: string; version: number }> {
   assertCanGenerate(ctx, draft.type);
@@ -623,6 +692,8 @@ export async function issueLegalReport(
           sample: draft.isSample,
         });
       }
+      // Gravações que o conteúdo pressupõe (ex.: cenários propostos): na mesma transação, depois da validação.
+      if (draft.onIssue) await draft.onIssue(tx, ctx, { reportId, reference });
 
       const lr = opts.settings.legalReports;
       const parameters = {
@@ -632,9 +703,18 @@ export async function issueLegalReport(
         bands: lr.bands,
         legalBasisText: lr.legalBasisText,
         subtitle: draft.subtitle ? cleanText(draft.subtitle) : null,
-        sections: draft.sections.map((s) => ({ key: s.key, title: cleanText(s.title) })),
+        sections: draft.sections.map((s) => ({
+          key: s.key,
+          title: cleanText(s.title),
+          ...(s.note ? { note: cleanText(s.note) } : {}),
+        })),
         methodology: draft.methodology.map(cleanText),
         scopeLabel: cleanText(draft.scopeLabel),
+        ...(draft.layout && draft.layout !== "standard" ? { layout: draft.layout } : {}),
+        ...(draft.purpose ? { purpose: cleanText(draft.purpose) } : {}),
+        appVersion: APP_VERSION,
+        ...(draft.dataFingerprint ? { dataFingerprint: draft.dataFingerprint } : {}),
+        ...(draft.requiredPermissions?.length ? { requiredPermissions: [...new Set(draft.requiredPermissions)].sort() } : {}),
       };
       const generatedAt = new Date();
       const row = {
@@ -661,6 +741,10 @@ export async function issueLegalReport(
       if (prepared.sources.length) await tx.insert(legalReportSources).values(prepared.sources);
       if (target) {
         await tx.update(legalReports).set({ status: "superseded" }).where(eq(legalReports.id, target.id));
+      }
+      // Um R1 novo (nova versão ou nova referência) atende o alerta de R1 aprovado desatualizado.
+      if (draft.type === "process_report" && !draft.isSample && draft.scope.processId) {
+        await resolveAlertsByDedupeKeys(ctx.organizationId, [outdatedProcessReportAlertKey(draft.scope.processId)], tx);
       }
 
       const { items, sources } = await loadItemsAndSources(tx, reportId);
@@ -740,9 +824,259 @@ export async function generateEngineSample(
   return issueLegalReport(ctx, draft, { settings: org.settings });
 }
 
+// ---------------------------------------------------------------------------
+// R1: Relatório de Processo
+// ---------------------------------------------------------------------------
+
+export type CurrentProcessReport = {
+  id: string;
+  reference: string;
+  version: number;
+  status: LegalReportStatus;
+  generatedAt: Date;
+  approvedAt: Date | null;
+  dataFingerprint: string | null;
+};
+
+/**
+ * R1 vigente de um processo (sem filtro de perfil): a versão mais recente, não
+ * substituída, gerada pelo gerador do R1 (documentos de teste e relatórios de
+ * outros geradores não contam). Um processo tem uma referência de R1: gerar de
+ * novo cria a versão seguinte dela.
+ */
+export async function currentProcessReport(organizationId: string, processId: string, db: DbOrTx = getDb()): Promise<CurrentProcessReport | null> {
+  const [row] = await db
+    .select({
+      id: legalReports.id,
+      reference: legalReports.reference,
+      version: legalReports.version,
+      status: legalReports.status,
+      generatedAt: legalReports.generatedAt,
+      approvedAt: legalReports.approvedAt,
+      parameters: legalReports.parameters,
+    })
+    .from(legalReports)
+    .where(
+      and(
+        eq(legalReports.organizationId, organizationId),
+        eq(legalReports.processId, processId),
+        eq(legalReports.type, "process_report"),
+        eq(legalReports.isSample, false),
+        inArray(legalReports.status, ["pending_review", "approved"]),
+        sql`${legalReports.parameters}->>'generator' = ${PROCESS_REPORT_GENERATOR}`,
+      ),
+    )
+    .orderBy(desc(legalReports.generatedAt), desc(legalReports.version))
+    .limit(1);
+  if (!row) return null;
+  const { parameters, ...rest } = row;
+  return { ...rest, dataFingerprint: parameters.dataFingerprint ?? null };
+}
+
+async function resolveProcessId(ctx: AuthContext, data: { processId?: string; processNumber?: string }): Promise<string> {
+  let processId = data.processId ?? null;
+  if (!processId && data.processNumber) {
+    const found = await findVisibleProcessByNumber(ctx, data.processNumber);
+    if (!found) {
+      throw new ValidationError("Processo não encontrado ou sem permissão de acesso.", {
+        processNumber: ["Processo não encontrado ou sem permissão de acesso."],
+      });
+    }
+    processId = found.id;
+  }
+  const [visible] = await getDb()
+    .select({ id: legalProcesses.id })
+    .from(legalProcesses)
+    .where(and(eq(legalProcesses.id, processId as string), processWhere(ctx)));
+  if (!visible) throw new NotFoundError("Processo não encontrado ou sem permissão de acesso.");
+  return visible.id;
+}
+
+/**
+ * "Gerar R1" (pessoa): sem R1 vigente, emite um novo (referência R1-ano-número);
+ * com R1 pendente de revisão, gera a versão seguinte (a anterior fica
+ * substituída, com PDF e hash preservados); com R1 APROVADO, só quem poderia
+ * aprová-lo gera a nova versão (gestor jurídico ou advogado responsável).
+ */
+export async function generateProcessReport(
+  ctx: AuthContext,
+  input: GenerateProcessReportInput,
+): Promise<{ id: string; reference: string; version: number }> {
+  assertCanGenerate(ctx, "process_report");
+  assertCan(ctx, "process:read");
+  const data = parse(generateProcessReportSchema, input);
+  const processId = await resolveProcessId(ctx, data);
+  const current = await currentProcessReport(ctx.organizationId, processId);
+  let target: ReportRow | undefined;
+  if (current) {
+    try {
+      target = await loadVisibleReport(ctx, current.id);
+    } catch (err) {
+      if (!(err instanceof NotFoundError)) throw err;
+      throw new ConflictError(
+        `Este processo já tem um Relatório de Processo vigente (${current.reference}) que cita documentos ou traz conteúdo fora do seu acesso. A nova versão precisa ser gerada por quem tem acesso a eles.`,
+      );
+    }
+    if (target.status === "approved") {
+      const responsible = await scopeResponsibleId(getDb(), target);
+      if (!canSupersedeLegalReport(ctx, { type: target.type, status: target.status, scopeResponsibleId: responsible })) {
+        throw new ForbiddenError(
+          `O Relatório de Processo vigente (${target.reference}, versão ${target.version}) está aprovado: a nova versão só pode ser gerada por ${APPROVER_RULES.process_report.description}.`,
+        );
+      }
+    }
+  }
+  const org = await loadOrganization(ctx.organizationId);
+  const draft = await buildProcessReportDraft(ctx, { processId }, org.settings);
+  return issueLegalReport(ctx, draft, { settings: org.settings, supersedes: target });
+}
+
+export type ProcessReportPanel = {
+  /** R1 vigente visível a quem olha (null = sem R1, ou R1 que cita documento fora do acesso). */
+  current: {
+    id: string;
+    reference: string;
+    version: number;
+    status: LegalReportStatus;
+    baseDate: string;
+    generatedAt: Date;
+    generatedByName: string | null;
+    approvedAt: Date | null;
+    hasPdf: boolean;
+  } | null;
+  /** Há R1 vigente que quem olha não vê (cita documento fora do seu acesso). */
+  hiddenCurrent: boolean;
+  /** Versões anteriores (substituídas) visíveis. */
+  previousVersions: number;
+  /** Alerta "R1 aprovado desatualizado" aberto. */
+  outdated: boolean;
+  canGenerate: boolean;
+  /** Motivo de não poder gerar (perfil com permissão de gerar, mas R1 aprovado de quem não pode substituí-lo). */
+  blockedReason: string | null;
+};
+
+/** Painel do R1 na ficha do processo (aba "Documentos e análises"). `legal_report:read` + processo visível. */
+export async function getProcessReportPanel(ctx: AuthContext, processId: string): Promise<ProcessReportPanel> {
+  assertCan(ctx, "legal_report:read");
+  const db = getDb();
+  const [p] = await db
+    .select({ id: legalProcesses.id, responsibleId: legalProcesses.responsibleId })
+    .from(legalProcesses)
+    .where(and(eq(legalProcesses.id, parseId(processId)), processWhere(ctx)));
+  if (!p) throw new NotFoundError("Processo não encontrado ou sem permissão de acesso.");
+  const cur = await currentProcessReport(ctx.organizationId, p.id, db);
+  let current: ProcessReportPanel["current"] = null;
+  let previousVersions = 0;
+  if (cur) {
+    const [row] = await db
+      .select({
+        id: legalReports.id,
+        reference: legalReports.reference,
+        version: legalReports.version,
+        status: legalReports.status,
+        baseDate: legalReports.baseDate,
+        generatedAt: legalReports.generatedAt,
+        generatedByName: users.name,
+        approvedAt: legalReports.approvedAt,
+        pdfStorageKey: legalReports.pdfStorageKey,
+      })
+      .from(legalReports)
+      .leftJoin(users, eq(users.id, legalReports.generatedById))
+      .where(and(eq(legalReports.id, cur.id), legalReportWhere(ctx)));
+    if (row) {
+      const { pdfStorageKey, ...rest } = row;
+      current = { ...rest, hasPdf: !!pdfStorageKey };
+      const [{ n }] = await db
+        .select({ n: count() })
+        .from(legalReports)
+        .where(and(eq(legalReports.reference, row.reference), eq(legalReports.status, "superseded"), legalReportWhere(ctx)));
+      previousVersions = Number(n);
+    }
+  }
+  const [alert] = await db
+    .select({ id: alerts.id })
+    .from(alerts)
+    .where(
+      and(
+        eq(alerts.organizationId, ctx.organizationId),
+        eq(alerts.dedupeKey, outdatedProcessReportAlertKey(p.id)),
+        isNull(alerts.resolvedAt),
+      ),
+    )
+    .limit(1);
+  const mayGenerate = canGenerateLegalReport(ctx, "process_report") && can(ctx, "process:read");
+  let blockedReason: string | null = null;
+  if (mayGenerate && cur?.status === "approved") {
+    if (!canSupersedeLegalReport(ctx, { type: "process_report", status: "approved", scopeResponsibleId: p.responsibleId })) {
+      blockedReason = `O R1 vigente está aprovado: a nova versão só pode ser gerada por ${APPROVER_RULES.process_report.description}.`;
+    }
+  }
+  if (mayGenerate && cur && !current) {
+    blockedReason =
+      "O R1 vigente cita documentos ou traz conteúdo fora do seu acesso: a nova versão precisa ser gerada por quem tem acesso a eles.";
+  }
+  return {
+    current,
+    hiddenCurrent: !!cur && !current,
+    previousVersions,
+    outdated: !!alert,
+    canGenerate: mayGenerate && !blockedReason,
+    blockedReason,
+  };
+}
+
+export type ProcessReportRefreshOutcome = "created" | "new_version" | "unchanged" | "outdated_alert" | "deferred" | "process_not_found";
+
+/**
+ * Atualização automática do R1 (sistema): sem R1, cria um (só com
+ * `createIfMissing`, ex.: análise preliminar aprovada); com R1 pendente de
+ * revisão e dados novos (impressão digital diferente), gera a versão seguinte;
+ * com R1 APROVADO e dados novos, nunca o substitui: abre o alerta
+ * `legal_report_outdated` pedindo que uma pessoa gere a nova versão.
+ * `allowNewVersion: false` adia a geração (limite por execução da rotina).
+ */
+export async function refreshProcessReportAsSystem(
+  organizationId: string,
+  processId: string,
+  opts: { createIfMissing: boolean; allowNewVersion?: boolean; isDemo?: boolean },
+): Promise<{ outcome: ProcessReportRefreshOutcome; reportId: string | null }> {
+  const ctx = systemContext(organizationId, opts.isDemo ?? false);
+  const fingerprint = await processReportFingerprint(organizationId, processId);
+  if (fingerprint === null) return { outcome: "process_not_found", reportId: null };
+  const current = await currentProcessReport(organizationId, processId);
+  if (current && current.dataFingerprint === fingerprint) return { outcome: "unchanged", reportId: current.id };
+  if (current?.status === "approved") {
+    const [p] = await getDb()
+      .select({ number: legalProcesses.number })
+      .from(legalProcesses)
+      .where(and(eq(legalProcesses.id, processId), eq(legalProcesses.organizationId, organizationId)));
+    await upsertAlert({
+      organizationId,
+      type: "legal_report_outdated",
+      severity: "warning",
+      title: `Relatório do processo ${p?.number ?? ""} aprovado e desatualizado`.replace(/\s+/g, " "),
+      message:
+        `O ${current.reference} (versão ${current.version}) foi aprovado${current.approvedAt ? ` em ${formatDate(current.approvedAt, "")}` : ""}, ` +
+        "mas o processo tem dados novos desde a geração (fase ou instância, valores oficiais, pedidos, garantias, cenários, movimentações ou análise preliminar). " +
+        `O sistema não substitui uma versão aprovada: gere a nova versão na aba "Documentos e análises" do processo (${APPROVER_RULES.process_report.description}).`,
+      entityType: "legal_process",
+      entityId: processId,
+      dedupeKey: outdatedProcessReportAlertKey(processId),
+    });
+    return { outcome: "outdated_alert", reportId: current.id };
+  }
+  if (!current && !opts.createIfMissing) return { outcome: "unchanged", reportId: null };
+  if (opts.allowNewVersion === false) return { outcome: "deferred", reportId: current?.id ?? null };
+  const target = current ? await loadVisibleReport(ctx, current.id) : undefined;
+  const org = await loadOrganization(organizationId);
+  const draft = await buildProcessReportDraft(ctx, { processId }, org.settings);
+  const issued = await issueLegalReport(ctx, draft, { settings: org.settings, supersedes: target });
+  return { outcome: current ? "new_version" : "created", reportId: issued.id };
+}
+
 /** Nova versão (mesma referência) com os dados atuais; a anterior fica "substituída", com PDF e hash preservados. */
 export async function regenerateLegalReport(ctx: AuthContext, id: string): Promise<{ id: string; reference: string; version: number }> {
-  assertCan(ctx, "report:read");
+  assertCan(ctx, "legal_report:read");
   const row = await loadVisibleReport(ctx, id);
   if (row.status === "superseded") throw new ConflictError("Este relatório já foi substituído por uma versão mais recente.");
   assertCanGenerate(ctx, row.type);
@@ -772,7 +1106,7 @@ export async function regenerateLegalReport(ctx: AuthContext, id: string): Promi
  * relatório não muda mais (só pode ser substituído por uma nova versão).
  */
 export async function approveLegalReport(ctx: AuthContext, id: string): Promise<{ pdfSha256: string }> {
-  assertCan(ctx, "report:read");
+  assertCan(ctx, "legal_report:read");
   if (ctx.kind !== "user" || !ctx.userId) throw new ForbiddenError("A aprovação exige uma pessoa identificada.");
   const storage = getStorage();
   let storedKey: string | null = null;
@@ -838,7 +1172,7 @@ export async function openLegalReportPdf(
   ctx: AuthContext,
   id: string,
 ): Promise<{ fileName: string; bytes: Uint8Array; sha256: string }> {
-  assertCan(ctx, "report:read");
+  assertCan(ctx, "legal_report:read");
   const row = await loadVisibleReport(ctx, id);
   if (!row.pdfStorageKey || !row.pdfSha256) throw new NotFoundError("O PDF deste relatório não está disponível.");
   const bytes = await readStreamToBytes(await getStorage().getStream(row.pdfStorageKey), PDF_MAX_BYTES);

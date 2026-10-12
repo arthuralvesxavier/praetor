@@ -25,6 +25,18 @@ export const generateSampleSchema = z
   });
 export type GenerateSampleInput = z.infer<typeof generateSampleSchema>;
 
+/** "Gerar R1": processo escolhido na lista ou informado pelo número (com ou sem pontuação). */
+export const generateProcessReportSchema = z
+  .object({
+    processId: z.guid({ error: "Processo inválido." }).optional(),
+    processNumber: z.string().trim().max(40, { error: "Número de processo inválido." }).optional(),
+  })
+  .refine((v) => !!v.processId || !!v.processNumber, {
+    error: "Informe o processo.",
+    path: ["processNumber"],
+  });
+export type GenerateProcessReportInput = z.infer<typeof generateProcessReportSchema>;
+
 const percent = z
   .number({ error: "Informe um percentual inteiro de 0 a 100." })
   .int({ error: "Informe um percentual inteiro de 0 a 100." })

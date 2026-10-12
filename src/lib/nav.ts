@@ -70,7 +70,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: "/contingencias", label: "Valores e provisão", icon: Landmark, permissions: ["contingency:read"] },
       { href: "/acordos", label: "Acordos", icon: Handshake, permissions: ["contingency:read"] },
       { href: "/relatorios", label: "Relatórios", icon: ChartColumn, permissions: ["report:read"] },
-      { href: "/relatorios-juridicos", label: "Relatórios jurídicos (PDF)", icon: FileCheck, permissions: ["report:read"] },
+      { href: "/relatorios-juridicos", label: "Relatórios jurídicos (PDF)", icon: FileCheck, permissions: ["legal_report:read"] },
       { href: "/paineis-bi", label: "Painéis Power BI", icon: ChartPie, permissions: ["report:read"] },
     ],
   },

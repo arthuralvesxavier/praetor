@@ -14,6 +14,7 @@ import { optionsFromLabels } from "@/lib/options";
 import { enumParam, hasAnyParam, pageParam } from "@/lib/search-params";
 import { LegalReportStatusBadge, SampleBadge } from "@/modules/legal-reports/components/report-badges";
 import { canGenerateLegalReport } from "@/modules/legal-reports/approvers";
+import { ProcessReportForm } from "@/modules/legal-reports/components/process-report-form";
 import { EngineSampleForm } from "@/modules/legal-reports/components/sample-form";
 import { listSampleProcessOptions } from "@/modules/legal-reports/sample";
 import { listLegalReports } from "@/modules/legal-reports/service";
@@ -25,7 +26,7 @@ export const metadata: Metadata = { title: "Relatórios jurídicos" };
 const FILTER_KEYS = ["tipo", "situacao"] as const;
 
 export default async function LegalReportsPage(props: PageProps<"/relatorios-juridicos">) {
-  const ctx = await requirePageContext("report:read");
+  const ctx = await requirePageContext("legal_report:read");
   const sp = await props.searchParams;
   const type = enumParam(sp, "tipo", LEGAL_REPORT_TYPES);
   const status = enumParam(sp, "situacao", LEGAL_REPORT_STATUSES);
@@ -52,11 +53,28 @@ export default async function LegalReportsPage(props: PageProps<"/relatorios-jur
         }
       />
 
-      <Callout tone="info" className="mb-6" title="Fundação do módulo">
-        Nesta etapa existe o motor de PDF e o modelo de dados. Os relatórios do processo, de provisão, da carteira e por responsável
-        (R1 a R4) entram nas próximas etapas. O documento de teste abaixo usa dados reais de um processo para conferir o layout e as regras
-        de origem; ele não é um relatório jurídico.
+      <Callout tone="info" className="mb-6" title="Relatórios disponíveis">
+        O Relatório de Processo (R1) já está disponível: é gerado automaticamente quando a análise preliminar de um processo é aprovada,
+        atualizado diariamente quando o processo tem dados novos (versão nova pendente de revisão; um R1 aprovado nunca é substituído pelo
+        sistema) e pode ser gerado aqui ou na aba &quot;Documentos e análises&quot; do processo. Os relatórios de provisão, da carteira e por
+        responsável (R2 a R4) entram nas próximas etapas.
       </Callout>
+
+      {canSample ? (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle as="h2">Relatório de Processo (R1)</CardTitle>
+            <CardDescription>
+              Capa de identificação, nota metodológica gerada dos dados, síntese, linha do tempo, pedidos e valores, garantias e exposição
+              líquida, cenários, pontos de atenção, auditoria de fontes e pendências. Se o processo já tem R1, gera a versão seguinte (a
+              atual fica substituída, com PDF e hash preservados); um R1 aprovado só ganha nova versão por quem poderia aprová-lo.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ProcessReportForm processes={processes} />
+          </CardContent>
+        </Card>
+      ) : null}
 
       {canSample ? (
         <Card className="mb-6">
@@ -101,7 +119,7 @@ export default async function LegalReportsPage(props: PageProps<"/relatorios-jur
                 description={
                   hasAnyParam(sp, FILTER_KEYS)
                     ? "Ajuste ou limpe os filtros."
-                    : "Gere um documento de teste do motor para ver o formato dos relatórios."
+                    : "Gere o Relatório de Processo (R1) de um processo para ver o formato dos relatórios."
                 }
               />
             ) : (

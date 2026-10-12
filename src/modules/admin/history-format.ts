@@ -522,6 +522,7 @@ const ACTION_LABELS: Record<string, string> = {
   "legal_report.download": "Download do PDF de relatório jurídico",
   "organization.legal_reports_settings_update": "Parâmetros dos relatórios jurídicos alterados",
   "process_scenario.create": "Cenário do processo registrado",
+  "process_scenario.propose": "Cenários propostos pelo sistema a partir dos pedidos (sujeitos a revisão)",
   // Índices de correção (P1.7)
   "valuation.correction_index_set": "Índice de atualização de valor informado",
   "valuation.correction_index_replace": "Índice de atualização de valor oficial trocado (novo registro)",

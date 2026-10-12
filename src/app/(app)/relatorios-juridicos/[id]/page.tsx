@@ -14,14 +14,14 @@ import { LegalReportStatusBadge, SampleBadge } from "@/modules/legal-reports/com
 import { ApproveReportButton, RegenerateReportButton } from "@/modules/legal-reports/components/report-actions";
 import { LegalReportContent } from "@/modules/legal-reports/components/report-content";
 import { getLegalReport } from "@/modules/legal-reports/service";
-import { dateTimeLabel, standardMethodology } from "@/modules/legal-reports/view";
+import { dateTimeLabel, preparedByLabel, reportLayout, reviewedByLabel } from "@/modules/legal-reports/view";
 import { requirePageContext } from "@/server/auth/session";
 import { NotFoundError } from "@/server/lib/errors";
 
 export const metadata: Metadata = { title: "Relatório jurídico" };
 
 export default async function LegalReportPage(props: PageProps<"/relatorios-juridicos/[id]">) {
-  const ctx = await requirePageContext("report:read");
+  const ctx = await requirePageContext("legal_report:read");
   const { id } = await props.params;
   const sp = await props.searchParams;
   let detail;
@@ -33,6 +33,7 @@ export default async function LegalReportPage(props: PageProps<"/relatorios-juri
   }
   const { view, permissions, versions } = detail;
   const approved = view.status === "approved" || (view.status === "superseded" && !!view.approvedAt);
+  const processReport = reportLayout(view) === "process_report";
 
   return (
     <>
@@ -125,6 +126,17 @@ export default async function LegalReportPage(props: PageProps<"/relatorios-juri
                   : `Pendente: ${detail.approverDescription}`,
               },
               { label: "Limite de confiança", value: `${view.parameters.confidenceThreshold} de 100` },
+              ...(processReport
+                ? [
+                    { label: "Elaborado por", value: preparedByLabel(view) },
+                    { label: "Revisado por", value: reviewedByLabel(view) },
+                    {
+                      label: "Finalidade",
+                      value: view.parameters.purpose ?? "Relatório interno de acompanhamento do processo",
+                      full: true,
+                    },
+                  ]
+                : []),
               {
                 label: "PDF armazenado",
                 value: view.pdfSha256 ? `${formatFileSize(view.pdfSizeBytes, "tamanho não informado")} · SHA-256 ${view.pdfSha256}` : "Não disponível",
@@ -153,19 +165,6 @@ export default async function LegalReportPage(props: PageProps<"/relatorios-juri
               </ul>
             </div>
           ) : null}
-        </CardContent>
-      </Card>
-
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle as="h2">
-            <span className="mr-2 text-gold-700">1</span>Nota metodológica
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-2 text-sm text-foreground">
-          {[...view.parameters.methodology, ...standardMethodology(view)].map((p) => (
-            <p key={p}>{p}</p>
-          ))}
         </CardContent>
       </Card>
 

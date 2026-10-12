@@ -98,6 +98,8 @@ const PROCESS_TAB_BY_ALERT_TYPE: Partial<Record<AlertType, ProcessTabTarget>> = 
   snapshot_close_blocked: { tab: "valores-e-acordos", section: PROCESS_SECTION_IDS.risk },
   court_movement_relevant: { tab: "partes-e-andamento", section: PROCESS_SECTION_IDS.timeline },
   court_hearing_designated: { tab: "prazos-e-audiencias", section: PROCESS_SECTION_IDS.hearings },
+  // R1 aprovado desatualizado: o botão "Gerar nova versão" fica na aba de documentos e análises.
+  legal_report_outdated: { tab: "documentos-e-analises", section: PROCESS_SECTION_IDS.legalReport },
 };
 
 /**
