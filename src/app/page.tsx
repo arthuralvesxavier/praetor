@@ -1,27 +1,18 @@
 import {
   ArrowRight,
-  Ban,
-  BellRing,
   BookOpenCheck,
+  CalendarClock,
   ChevronDown,
-  FileSearch,
-  FileSignature,
-  FileSpreadsheet,
-  FlaskConical,
-  Gavel,
-  Handshake,
+  CircleDashed,
+  EyeOff,
   HeartPulse,
   Inbox,
   Landmark,
   LayoutDashboard,
-  Lightbulb,
   Lock,
-  Mail,
-  PlugZap,
   Scale,
-  ShieldAlert,
   ShieldCheck,
-  UsersRound,
+  UserCheck,
   type LucideIcon,
 } from "lucide-react";
 import type { Metadata } from "next";
@@ -29,9 +20,8 @@ import Link from "next/link";
 import type { CSSProperties } from "react";
 import { Logo, LogoMark } from "@/components/brand/logo";
 import { FlowStepper } from "@/components/landing/flow-stepper";
-import { CountUp, RevealRoot, Spotlight } from "@/components/landing/motion";
+import { RevealRoot, Spotlight } from "@/components/landing/motion";
 import { ProductPreview } from "@/components/landing/product-preview";
-import { ProfileSwitcher } from "@/components/landing/profile-switcher";
 import { SiteHeader } from "@/components/landing/site-header";
 import { getCurrentUser } from "@/server/auth/session";
 
@@ -39,184 +29,143 @@ import { getCurrentUser } from "@/server/auth/session";
  * Public presentation page shown before the login. It contains no tenant data:
  * the only server read is whether the visitor already has a session, to switch
  * the call to action between "Entrar" and "Ir para o painel". Product visuals
- * are illustrative and labeled as such; simulated features (preliminary
- * analysis, e-mail) are presented as simulations; there are no testimonials,
- * client logos, usage statistics or tribunal integrations, because none exist.
+ * are illustrative and labeled as such. Copy rule (product owner): no dashes as
+ * punctuation and no claims beyond what the code delivers today (no real AI,
+ * no tribunal integration, no statistics). tests/landing checks both.
  */
 export const metadata: Metadata = {
-  title: { absolute: "Praetor — Gestão do passivo jurídico e do jurídico preventivo" },
+  title: { absolute: "Praetor: gestão do passivo jurídico e do jurídico preventivo" },
   description:
-    "Carteira de processos importada da planilha com validação de CNJ, entrada de processos com análise preliminar e e-mail simulados nesta versão, valores, garantias, risco e provisão com fechamento mensal, audiências, alertas e perfis por função.",
+    "Carteira de processos importada da planilha com validação do número CNJ, distribuição por regras, análise preliminar revisada pelo advogado, valores, garantias, risco e provisão com fechamento mensal.",
 };
 
 const delay = (ms: number) => ({ "--reveal-delay": `${ms}ms` }) as CSSProperties;
 
-const FRONTS = [
+/** Rules the portfolio follows everywhere (dashboard, lists, reports and exports). */
+const RULES: { icon: LucideIcon; title: string; text: string }[] = [
   {
-    icon: Gavel,
-    kicker: "Passivo e contencioso",
-    title: "A carteira, conferida",
-    text: "Um processo por número CNJ, com todas as instâncias, partes, fases, valores, garantias, acordos e audiências — e a origem de cada dado: cadastro, planilha ou simulação.",
-    points: [
-      "Importação da planilha com relatório de inconsistências",
-      "Valor da causa e valor liquidado lado a lado",
-      "Provisão mensal com fechamento imutável",
-    ],
+    icon: Scale,
+    title: "Causa e apurado separados",
+    text: "Valor da causa e valor liquidado medem coisas diferentes e nunca entram na mesma soma.",
   },
   {
-    icon: ShieldAlert,
-    kicker: "Antes do conflito",
-    title: "Jurídico preventivo",
-    text: "Ocorrências que ainda não viraram processo, contratos e uma leitura da carteira que mostra onde os conflitos se concentram — calculada a partir dos dados, separada das sugestões ilustrativas.",
-    points: [
-      "Ocorrências com plano de ação",
-      "Contratos, vigências e obrigações",
-      "Inteligência preventiva por empresa e tribunal",
-    ],
+    icon: CircleDashed,
+    title: "Falta de dado fica visível",
+    text: "Sem valor apurado, o processo mostra “Não apurado”, nunca zero, e os totais dizem quantos ficaram de fora.",
   },
-] as const;
+  {
+    icon: UserCheck,
+    title: "Valor oficial tem conferente",
+    text: "Um valor proposto só entra nos totais depois que uma pessoa identificada o confere.",
+  },
+  {
+    icon: Lock,
+    title: "Mês fechado não muda",
+    text: "Os relatórios de uma competência fechada sempre leem o mesmo retrato da carteira.",
+  },
+];
 
-const MODULES: { icon: LucideIcon; title: string; text: string; simulated?: boolean }[] = [
+const AREAS: { icon: LucideIcon; title: string; text: string }[] = [
   {
     icon: Scale,
     title: "Carteira de processos",
-    text: "Filtros por tribunal, instância, cidade, empresa, escritório, fase e valor; carteira ativa e encerrada.",
+    text: "Um registro por número CNJ, com 1º grau, 2º grau e tribunal superior no mesmo processo. Filtros por tribunal, cidade, empresa, escritório, fase e valor.",
   },
   {
-    icon: FileSpreadsheet,
-    title: "Importação de planilhas",
-    text: "Leitura das abas, validação de CNJ, duplicidades, divergências de valor e relatório por linha.",
+    icon: Landmark,
+    title: "Valores, garantias e provisão",
+    text: "Valor da causa e valor liquidado em campos separados, garantias vinculadas ao processo, classificação de risco e provisão mês a mês.",
+  },
+  {
+    icon: CalendarClock,
+    title: "Audiências, prazos e acordos",
+    text: "Agenda de audiências, prazos e tarefas por responsável, e acordos com parcelas. Os alertas mostram o que vence e o que está parado.",
   },
   {
     icon: Inbox,
     title: "Entrada e distribuição",
-    text: "Fila de novos processos e regras que definem o advogado ou escritório responsável.",
+    text: "Fila dos processos que chegam, regras de distribuição e painel de carga por advogado e por escritório externo.",
   },
   {
-    icon: FileSearch,
-    title: "Análise preliminar",
-    text: "Resumo do caso com a origem de cada item e revisão do advogado. Simulada nesta versão.",
-    simulated: true,
-  },
-  {
-    icon: Landmark,
-    title: "Valores e provisão",
-    text: "Valores propostos e oficiais, garantias, risco e fechamento mensal da competência.",
-  },
-  {
-    icon: Handshake,
-    title: "Acordos",
-    text: "Parcelas, vencimentos e alertas de pagamento, com o histórico de valores preservado.",
-  },
-  {
-    icon: BellRing,
-    title: "Audiências e alertas",
-    text: "Agenda de audiências e alertas de prazos, parcelas, garantias paradas e pendências.",
+    icon: ShieldCheck,
+    title: "Preventivo e contratos",
+    text: "Ocorrências que ainda não viraram processo, com plano de ação, e contratos com vigência, aviso de renovação e obrigações.",
   },
   {
     icon: LayoutDashboard,
     title: "Painel e relatórios",
-    text: "Visão executiva por empresa, tribunal e fase; exportação em XLSX e CSV.",
+    text: "Painel executivo, relatórios de provisão por competência e carta de auditoria, com exportação em Excel e CSV.",
   },
-  {
-    icon: Lightbulb,
-    title: "Inteligência preventiva",
-    text: "Concentrações calculadas a partir da carteira, separadas das sugestões ilustrativas.",
-  },
-  {
-    icon: Mail,
-    title: "Central de e-mails",
-    text: "Avisos aos responsáveis registrados com assunto “[Simulação]”. Nenhuma mensagem é enviada.",
-    simulated: true,
-  },
-  {
-    icon: FileSignature,
-    title: "Contratos e documentos",
-    text: "Vigências, obrigações, versões e download protegido por permissão.",
-  },
-  {
-    icon: UsersRound,
-    title: "Perfis e auditoria",
-    text: "Oito perfis de acesso, escritórios externos restritos à própria carteira e trilha de auditoria.",
-  },
-];
-
-const SIMULATED: { icon: LucideIcon; title: string; text: string; label: string }[] = [
-  {
-    icon: FileSearch,
-    title: "Análise preliminar",
-    label: "Simulação",
-    text: "Gerada por um simulador e marcada como demonstrativa. Cada item mostra a origem — extraído do documento (com página e trecho), cadastro/planilha, ilustrativo ou lacuna — e nada é aplicado ao processo sem revisão do advogado.",
-  },
-  {
-    icon: Mail,
-    title: "E-mails ao responsável",
-    label: "Envio simulado",
-    text: "As mensagens ficam registradas na Central de e-mails com o assunto iniciado por “[Simulação]” e o aviso “Envio simulado — nenhuma mensagem foi enviada”.",
-  },
-  {
-    icon: PlugZap,
-    title: "Tribunais",
-    label: "Não integrado",
-    text: "DataJud, MNI e PJe aparecem como “não integrado nesta versão”. Movimentações vêm do cadastro ou da planilha importada, sempre com a origem indicada.",
-  },
-];
-
-const NEVER = [
-  "Inventar jurisprudência, citações ou movimentações processuais.",
-  "Somar o valor da causa ao valor liquidado.",
-  "Tratar um valor não apurado como zero.",
-  "Tornar oficial um valor proposto sem a conferência de uma pessoa identificada.",
-  "Apresentar uma simulação como fato do processo.",
 ];
 
 const GOVERNANCE: { icon: LucideIcon; title: string; text: string }[] = [
   {
     icon: Lock,
-    title: "Isolamento e perfis",
-    text: "Cada organização só enxerga os próprios dados; dentro dela, a visibilidade segue perfil, unidade, escritório e sigilo.",
+    title: "Acesso por perfil",
+    text: "A permissão é conferida no servidor, registro a registro, conforme o perfil, a unidade e o escritório de cada pessoa. Cada organização só enxerga os próprios dados.",
   },
   {
     icon: HeartPulse,
     title: "Documentos sensíveis",
-    text: "Atestados, laudos e CAT ficam restritos a gestores, a quem enviou e ao responsável pelo caso. Download só com sessão e permissão.",
+    text: "Atestados, laudos e CAT ficam restritos aos gestores, a quem enviou e ao responsável pelo caso. O download exige sessão e permissão.",
   },
   {
     icon: BookOpenCheck,
     title: "Trilha de auditoria",
-    text: "Alterações relevantes, conferências de valores, fechamentos e acessos a documentos ficam registrados.",
+    text: "Alterações, conferências de valores, fechamentos, exportações e consultas a processos sigilosos ficam registrados, com autor e horário.",
   },
   {
-    icon: ShieldCheck,
-    title: "Fechamento imutável",
-    text: "Uma competência fechada não muda: os relatórios daquele mês sempre leem o mesmo retrato da carteira.",
+    icon: EyeOff,
+    title: "Dados pessoais mascarados",
+    text: "CPF e CNPJ aparecem mascarados nas listas, na aba de partes e nos arquivos exportados.",
   },
 ];
 
-const FAQ = [
+const HISTORY = [
+  { when: "367 a.C.", text: "Roma cria o cargo de pretor para cuidar da justiça na cidade." },
+  { when: "242 a.C.", text: "Surge um segundo pretor, para as disputas que envolviam estrangeiros." },
   {
-    q: "A análise preliminar é feita por inteligência artificial?",
-    a: "Nesta versão, não: ela é gerada por um simulador e identificada como demonstrativa em todas as telas. Cada item informa a origem (extraído do documento, cadastro/planilha, ilustrativo ou lacuna) e o advogado revisa, edita e aprova antes de qualquer uso.",
+    when: "Por volta de 130 d.C.",
+    text: "A pedido do imperador Adriano, os editos são consolidados num texto definitivo, o Edito Perpétuo.",
+  },
+];
+
+const FAQ: { q: string; a: string }[] = [
+  {
+    q: "De onde vêm os processos?",
+    a: "Da planilha da carteira, importada em Excel (.xlsx); do cadastro de um processo recebido na Entrada de processos, junto com os documentos que chegaram; ou do cadastro direto na carteira. Nos três caminhos, o Praetor confere o dígito verificador do número CNJ e sinaliza o que não confere, sem corrigir o número por conta própria.",
   },
   {
-    q: "Os e-mails são enviados de verdade?",
-    a: "Não. O envio é simulado: as mensagens ficam registradas na Central de e-mails, com o assunto iniciado por “[Simulação]” e o aviso “Envio simulado — nenhuma mensagem foi enviada”.",
+    q: "Por que o valor da causa e o valor apurado nunca são somados?",
+    a: "Porque medem coisas diferentes. O valor da causa é o atribuído na petição inicial. O valor liquidado, ou apurado, é o resultado do cálculo feito na liquidação ou na execução. Somar os dois contaria o mesmo risco duas vezes. Por isso eles aparecem lado a lado, em colunas separadas, na carteira, no painel e nas exportações.",
   },
   {
-    q: "Como a planilha da carteira é importada?",
-    a: "O Praetor lê as abas da planilha, valida o número CNJ pelo dígito verificador, agrupa as instâncias do mesmo processo, aponta duplicidades e valores divergentes e gera um relatório de inconsistências para conferência antes da carga.",
+    q: "O que acontece quando falta um dado?",
+    a: "A falta aparece. Um processo sem valor apurado mostra “Não apurado”, nunca zero, e os totais oficiais somam só os processos com valor apurado, dizendo quantos ficaram de fora (por exemplo, apurado em 9 de 14 processos). Quando o painel usa uma estimativa, como o valor da causa multiplicado pelo percentual de risco, ela vem marcada como estimativa. Processos sem tribunal, fase ou cidade entram numa lista de pendências de cadastro.",
   },
   {
-    q: "Como ficam o valor da causa e o valor liquidado?",
-    a: "Lado a lado e sempre identificados — nunca somados. Valor não apurado aparece como “Não apurado”, e não como zero. Valores propostos só se tornam oficiais com a conferência de uma pessoa identificada, e o fechamento mensal congela a provisão da competência.",
+    q: "Quem vê o quê?",
+    a: "Cada pessoa entra com um perfil. No jurídico interno, o gestor vê a carteira inteira, inclusive os processos sigilosos, e advogados e analistas veem a própria unidade e os casos sob sua responsabilidade. A diretoria consulta painéis e relatórios, sem editar. A contabilidade cuida de valores, garantias, provisão e fechamento mensal. A auditoria lê a carteira, os relatórios e a trilha de auditoria, sem alterar nada. O escritório externo vê apenas os processos atribuídos a ele. Diretoria, contabilidade e auditoria não acessam processos sigilosos.",
   },
   {
-    q: "Existe integração com tribunais?",
-    a: "Não nesta versão. As integrações aparecem como “não integrado nesta versão”, e as movimentações vêm do cadastro ou da planilha importada, com a origem indicada.",
+    q: "Como funciona o fechamento mensal?",
+    a: "Durante o mês, o Praetor mantém uma prévia da provisão, que pode ser recalculada. No fechamento, uma pessoa autorizada (contabilidade ou gestão jurídica) fecha a competência e o retrato da carteira fica gravado: valores, risco e provisão daquele mês não mudam mais, e os relatórios passam a ler esse retrato. O mês seguinte é comparado com ele, e o fechamento pode ser exportado em CSV para a contabilidade.",
   },
   {
-    q: "Quem vê cada informação?",
-    a: "São perfis para o jurídico (administrador, gestor, advogado e analista), diretoria, contabilidade, auditoria e escritório externo. Advogados e analistas veem a própria unidade e os casos sob sua responsabilidade; o escritório externo vê somente os processos atribuídos a ele; registros sigilosos e documentos de saúde têm acesso mais restrito.",
+    q: "A análise preliminar substitui o advogado?",
+    a: "Não. Ela prepara a primeira leitura do caso: fatos, pedidos, valores, provas, lacunas e possíveis prazos, cada item com a sua origem. Quem decide é o advogado, que revisa, edita e aprova. Nada é aplicado ao processo sem uma ação dele: prazos sugeridos ficam aguardando validação e valores entram como propostos, para conferência. Nesta versão, a análise é gerada em modo de demonstração.",
+  },
+  {
+    q: "O escritório externo tem acesso ao sistema?",
+    a: "Sim, com um usuário do perfil Escritório externo, vinculado ao escritório. Ele vê só os processos atribuídos ao escritório e, nessa carteira, atualiza processos, documentos, prazos e tarefas, lança valores (que entram como propostos, para conferência) e revisa análises preliminares. O restante da carteira e os relatórios da empresa ficam fora do alcance dele.",
+  },
+  {
+    q: "Como ficam a segurança e a LGPD?",
+    a: "O acesso é conferido no servidor, registro a registro, conforme o perfil, a unidade e o escritório. Alterações, conferências de valores, fechamentos, exportações e consultas a processos sigilosos ficam na trilha de auditoria. Atestados, laudos e CAT são guardados como documentos restritos, e CPF e CNPJ aparecem mascarados nas listas e nas exportações. Esses controles ajudam na adequação à LGPD, mas não substituem a avaliação da própria empresa (bases legais, relatório de impacto e encarregado de dados) antes do uso com dados reais.",
+  },
+  {
+    q: "Dá para exportar para Excel?",
+    a: "Sim. A carteira sai em Excel (.xlsx), com uma aba consolidada e uma aba por instância, ou em CSV, sempre com os filtros aplicados na tela. Os relatórios também exportam em XLSX e CSV, e o fechamento mensal gera um CSV pronto para a contabilidade.",
   },
 ];
 
@@ -235,7 +184,7 @@ export default async function LandingPage() {
   const cta = user ? { href: "/dashboard", label: "Ir para o painel" } : { href: "/login", label: "Entrar" };
 
   return (
-    <RevealRoot className="min-h-dvh bg-white text-[15px] text-slate-900">
+    <RevealRoot className="min-h-dvh overflow-x-clip bg-white text-[15px] text-slate-900 normal-nums">
       <a
         href="#conteudo"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:shadow"
@@ -266,32 +215,29 @@ export default async function LandingPage() {
             className="pointer-events-none absolute -bottom-48 -left-24 size-[28rem] rounded-full bg-gold-500/10 blur-3xl"
           />
 
-          <div className="relative mx-auto grid max-w-6xl items-center gap-14 px-4 pt-32 pb-24 sm:px-6 lg:grid-cols-[1.05fr_0.95fr] lg:pt-40 lg:pb-32">
-            <div>
+          <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-4 pt-28 pb-20 sm:px-6 sm:pt-32 lg:pb-24 xl:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)] xl:gap-12 xl:pt-36 xl:pb-28">
+            <div className="max-w-2xl">
               <p
                 data-reveal
                 className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-medium text-slate-200"
               >
                 <span aria-hidden="true" className="size-1.5 rounded-full bg-gold-400" />
-                Gestão do passivo jurídico · contencioso e preventivo
+                Passivo jurídico · contencioso e preventivo
               </p>
               <h1
                 data-reveal
                 style={delay(80)}
-                className="mt-6 font-display text-5xl leading-[1.04] font-semibold tracking-tight text-white sm:text-6xl xl:text-[4.25rem]"
+                className="mt-6 font-display text-5xl leading-[1.04] font-semibold tracking-tight text-white sm:text-6xl xl:text-[4rem]"
               >
-                Toda a carteira.
-                <br />
-                Cada valor conferido.
-                <br />
-                <span className="bg-gradient-to-r from-gold-300 via-gold-400 to-gold-500 bg-clip-text text-transparent">
-                  Nada inventado.
+                O passivo jurídico da empresa,{" "}
+                <span className="bg-gradient-to-r from-gold-300 via-gold-400 to-gold-500 bg-clip-text whitespace-nowrap text-transparent">
+                  em ordem.
                 </span>
               </h1>
               <p data-reveal style={delay(160)} className="mt-6 max-w-xl text-lg leading-relaxed text-slate-300">
-                O Praetor organiza a carteira de processos a partir da sua planilha, acompanha valores, garantias, risco
-                e provisão mês a mês e prepara cada novo processo para o advogado responsável — com as simulações desta
-                versão sempre identificadas.
+                O Praetor reúne a carteira de processos, os valores e a provisão de cada mês. Cada processo novo chega
+                ao advogado responsável com uma análise preliminar para revisar, e cada valor oficial passa pela
+                conferência de uma pessoa.
               </p>
               <div data-reveal style={delay(240)} className="mt-9 flex flex-wrap gap-3">
                 <Link
@@ -308,127 +254,54 @@ export default async function LandingPage() {
                   Ver como funciona
                 </a>
               </div>
-              <ul
-                data-reveal
-                style={delay(320)}
-                className="mt-10 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-300"
-              >
-                {["Validação do número CNJ", "Fechamento mensal imutável", "Simulações sempre identificadas"].map(
-                  (t) => (
-                    <li key={t} className="inline-flex items-center gap-2">
-                      <ShieldCheck aria-hidden="true" className="size-4 text-gold-400" />
-                      {t}
-                    </li>
-                  ),
-                )}
-              </ul>
             </div>
-            <div data-reveal style={delay(200)}>
+            <div data-reveal style={delay(200)} className="mx-auto w-full max-w-3xl min-w-0 xl:max-w-none">
               <ProductPreview />
             </div>
           </div>
           <a
             href="#plataforma"
-            aria-label="Rolar para a plataforma"
-            className="absolute bottom-6 left-1/2 hidden -translate-x-1/2 text-slate-400 transition hover:text-white lg:block"
+            aria-label="Ir para a plataforma"
+            className="absolute bottom-5 left-1/2 hidden -translate-x-1/2 text-slate-400 transition hover:text-white xl:block"
           >
             <ChevronDown aria-hidden="true" className="size-6 motion-safe:animate-bounce" />
           </a>
         </Spotlight>
 
-        {/* ------------------------------------------------------------ Facts */}
-        <section aria-label="A plataforma em números" className="border-b border-slate-200 bg-white">
-          <dl className="mx-auto grid max-w-6xl grid-cols-2 gap-px bg-slate-200 lg:grid-cols-4">
-            {[
-              { n: 1, s: "", label: "processo por número CNJ, com todas as instâncias" },
-              { n: 8, s: "", label: "perfis de acesso, do jurídico ao escritório externo" },
-              { n: 100, s: "%", label: "dos itens da análise preliminar com origem indicada" },
-              { n: 0, s: "", label: "e-mails reais enviados nesta versão (envio simulado)" },
-            ].map((f, i) => (
-              <div key={f.label} data-reveal style={delay(i * 80)} className="bg-white px-6 py-8 text-center">
-                <dt className="sr-only">{f.label}</dt>
-                <dd>
-                  <span className="block font-display text-5xl font-semibold text-navy-900">
-                    <CountUp value={f.n} suffix={f.s} />
+        {/* ------------------------------------------------------------ Rules */}
+        <section aria-labelledby="regras" className="border-b border-slate-200 bg-white">
+          <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+            <h2 id="regras" data-reveal className="text-xs font-semibold tracking-[0.18em] text-gold-700 uppercase">
+              Regras que valem em toda a carteira
+            </h2>
+            <ul className="mt-8 grid gap-x-8 gap-y-8 sm:grid-cols-2 lg:grid-cols-4">
+              {RULES.map(({ icon: Icon, title, text }, i) => (
+                <li key={title} data-reveal style={delay(i * 80)} className="flex gap-3.5">
+                  <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-navy-900 text-gold-400">
+                    <Icon aria-hidden="true" className="size-[18px]" />
                   </span>
-                  <span className="mt-1 block text-sm text-slate-600">{f.label}</span>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </section>
-
-        {/* ----------------------------------------------------------- Fronts */}
-        <section id="plataforma" className="scroll-mt-16 bg-white">
-          <div className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
-            <div data-reveal className="max-w-2xl">
-              <Kicker>Plataforma</Kicker>
-              <h2 className="mt-3 font-display text-4xl font-semibold text-slate-900 sm:text-5xl">
-                Duas frentes, uma carteira
-              </h2>
-              <p className="mt-4 text-lg text-slate-600">
-                Conduzir bem o passivo existente e evitar o próximo conflito fazem parte do mesmo trabalho.
-              </p>
-            </div>
-            <div className="mt-12 grid gap-6 md:grid-cols-2">
-              {FRONTS.map(({ icon: Icon, kicker, title, text, points }, i) => (
-                <Spotlight key={title} className="rounded-2xl" color="rgba(11, 26, 44, 0.07)">
-                  <article
-                    data-reveal
-                    style={delay(i * 120)}
-                    className="relative h-full rounded-2xl border border-slate-200 bg-white p-8 transition-shadow duration-300 hover:shadow-xl hover:shadow-slate-900/5"
-                  >
-                    <span className="inline-flex size-12 items-center justify-center rounded-xl bg-navy-900 text-gold-400">
-                      <Icon aria-hidden="true" className="size-6" />
-                    </span>
-                    <p className="mt-6 text-xs font-semibold tracking-[0.16em] text-gold-700 uppercase">{kicker}</p>
-                    <h3 className="mt-1 font-display text-3xl font-semibold">{title}</h3>
-                    <p className="mt-3 leading-relaxed text-slate-600">{text}</p>
-                    <ul className="mt-6 space-y-2.5">
-                      {points.map((p) => (
-                        <li key={p} className="flex items-center gap-2.5 text-sm text-slate-700">
-                          <span
-                            aria-hidden="true"
-                            className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-gold-400/20"
-                          >
-                            <span className="size-1.5 rounded-full bg-gold-600" />
-                          </span>
-                          {p}
-                        </li>
-                      ))}
-                    </ul>
-                  </article>
-                </Spotlight>
+                  <span>
+                    <span className="block font-semibold text-slate-900">{title}</span>
+                    <span className="mt-1 block text-sm leading-relaxed text-slate-600">{text}</span>
+                  </span>
+                </li>
               ))}
-            </div>
+            </ul>
           </div>
         </section>
 
-        {/* ----------------------------------------------------- How it works */}
-        <section id="como-funciona" className="scroll-mt-16 bg-slate-50">
-          <div className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
-            <div data-reveal className="max-w-2xl">
-              <Kicker>Como funciona</Kicker>
-              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Da planilha ao fechamento do mês</h2>
-              <p className="mt-4 text-lg text-slate-600">
-                Clique em cada passo — ou deixe a demonstração avançar sozinha.
-              </p>
-            </div>
-            <div data-reveal style={delay(120)} className="mt-12">
-              <FlowStepper />
-            </div>
-          </div>
-        </section>
-
-        {/* ---------------------------------------------------------- Modules */}
-        <section className="bg-white">
+        {/* --------------------------------------------------------- Platform */}
+        <section id="plataforma" className="scroll-mt-16 bg-white">
           <div className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
             <div data-reveal className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
               <div className="max-w-2xl">
-                <Kicker>Módulos</Kicker>
-                <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">
-                  Tudo o que o jurídico acompanha
+                <Kicker>Plataforma</Kicker>
+                <h2 className="mt-3 font-display text-4xl font-semibold text-slate-900 sm:text-5xl">
+                  O que o Praetor controla
                 </h2>
+                <p className="mt-4 text-lg text-slate-600">
+                  O contencioso e o preventivo da empresa no mesmo lugar, com os mesmos dados e as mesmas regras.
+                </p>
               </div>
               <Link
                 href={cta.href}
@@ -439,23 +312,17 @@ export default async function LandingPage() {
               </Link>
             </div>
             <ul className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {MODULES.map(({ icon: Icon, title, text, simulated }, i) => (
+              {AREAS.map(({ icon: Icon, title, text }, i) => (
                 <li key={title} data-reveal style={delay((i % 3) * 90)}>
                   <Spotlight className="h-full rounded-2xl" color="rgba(212, 176, 98, 0.16)" size={300}>
-                    <div className="group relative h-full rounded-2xl border border-slate-200 bg-white p-6 transition duration-300 hover:-translate-y-1 hover:border-gold-400/60">
-                      <div className="flex items-start justify-between gap-3">
-                        <span className="inline-flex size-10 items-center justify-center rounded-lg bg-navy-50 text-navy-800 transition-colors group-hover:bg-navy-900 group-hover:text-gold-400">
+                    <div className="group relative h-full rounded-2xl border border-slate-200 bg-white p-5 transition duration-300 hover:-translate-y-1 hover:border-gold-400/60 sm:p-6">
+                      <div className="flex items-center gap-3">
+                        <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg bg-navy-50 text-navy-800 transition-colors group-hover:bg-navy-900 group-hover:text-gold-400">
                           <Icon aria-hidden="true" className="size-5" />
                         </span>
-                        {simulated ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
-                            <FlaskConical aria-hidden="true" className="size-3" />
-                            Simulação nesta versão
-                          </span>
-                        ) : null}
+                        <h3 className="text-lg leading-snug font-semibold">{title}</h3>
                       </div>
-                      <h3 className="mt-4 text-lg font-semibold">{title}</h3>
-                      <p className="mt-2 text-sm leading-relaxed text-slate-600">{text}</p>
+                      <p className="mt-3 text-sm leading-relaxed text-slate-600">{text}</p>
                     </div>
                   </Spotlight>
                 </li>
@@ -464,70 +331,25 @@ export default async function LandingPage() {
           </div>
         </section>
 
-        {/* ---------------------------------------------------------- Profiles */}
-        <section id="perfis" className="scroll-mt-16 bg-slate-50">
+        {/* ----------------------------------------------------- How it works */}
+        <section id="como-funciona" className="scroll-mt-16 bg-slate-50">
           <div className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
             <div data-reveal className="max-w-2xl">
-              <Kicker>Perfis</Kicker>
-              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Cada área vê o que precisa</h2>
+              <Kicker>Como funciona</Kicker>
+              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">
+                Do processo recebido ao fechamento do mês
+              </h2>
               <p className="mt-4 text-lg text-slate-600">
-                A permissão é conferida no servidor, registro a registro — esconder um botão nunca é a única barreira.
+                O caminho de um processo dentro do Praetor, na ordem em que o trabalho acontece. Escolha uma etapa para
+                ver a tela correspondente.
               </p>
             </div>
             <div data-reveal style={delay(120)} className="mt-12">
-              <ProfileSwitcher />
+              <FlowStepper />
             </div>
-          </div>
-        </section>
-
-        {/* ------------------------------------------------- Simulations & limits */}
-        <section id="simulacoes" className="relative scroll-mt-16 overflow-hidden bg-navy-900 text-white">
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute top-0 left-1/2 size-[40rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gold-500/10 blur-3xl"
-          />
-          <div className="relative mx-auto max-w-6xl px-4 py-24 sm:px-6">
-            <div data-reveal className="max-w-2xl">
-              <Kicker tone="dark">Transparência</Kicker>
-              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">
-                O que é simulado — e o que nunca acontece
-              </h2>
-              <p className="mt-4 text-lg text-slate-300">
-                Esta versão demonstra o fluxo completo. O que ainda não é real está identificado em cada tela, com o
-                mesmo aviso.
-              </p>
-            </div>
-            <div className="mt-12 grid gap-4 md:grid-cols-3">
-              {SIMULATED.map(({ icon: Icon, title, text, label }, i) => (
-                <div
-                  key={title}
-                  data-reveal
-                  style={delay(i * 100)}
-                  className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 backdrop-blur"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <Icon aria-hidden="true" className="size-6 text-gold-400" />
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
-                      <FlaskConical aria-hidden="true" className="size-3" />
-                      {label}
-                    </span>
-                  </div>
-                  <h3 className="mt-4 text-lg font-semibold text-white">{title}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-slate-300">{text}</p>
-                </div>
-              ))}
-            </div>
-            <div data-reveal className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-6 sm:p-8">
-              <h3 className="text-lg font-semibold text-white">O Praetor nunca vai</h3>
-              <ul className="mt-5 grid gap-3.5 md:grid-cols-2">
-                {NEVER.map((t) => (
-                  <li key={t} className="flex gap-3 text-slate-200">
-                    <Ban aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-rose-300" />
-                    {t}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            <p className="mt-10 border-t border-slate-200 pt-5 text-xs text-slate-600">
+              Nesta versão, a leitura automática dos documentos e o envio de e-mails funcionam em modo de demonstração.
+            </p>
           </div>
         </section>
 
@@ -535,10 +357,12 @@ export default async function LandingPage() {
         <section id="seguranca" className="scroll-mt-16 bg-white">
           <div className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
             <div data-reveal className="max-w-2xl">
-              <Kicker>Segurança e governança</Kicker>
-              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">
-                Controle de acesso desde a primeira linha
-              </h2>
+              <Kicker>Segurança</Kicker>
+              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Acesso controlado e registrado</h2>
+              <p className="mt-4 text-lg text-slate-600">
+                Cada pessoa vê só o que o perfil dela permite, e o que muda na carteira fica registrado com autor e
+                horário.
+              </p>
             </div>
             <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {GOVERNANCE.map(({ icon: Icon, title, text }, i) => (
@@ -550,36 +374,55 @@ export default async function LandingPage() {
               ))}
             </div>
             <p data-reveal className="mt-6 text-xs text-slate-600">
-              Esses controles não equivalem a uma declaração de conformidade legal ou de segurança completa. Pontos
-              ainda em avaliação estão documentados para a equipe técnica.
+              Esses controles são uma base técnica e não equivalem a uma declaração de conformidade com a LGPD ou de
+              segurança completa.
             </p>
           </div>
         </section>
 
         {/* -------------------------------------------------------------- Name */}
-        <section className="relative overflow-hidden bg-gold-50">
-          <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 py-24 sm:px-6 lg:grid-cols-[0.8fr_1.2fr]">
-            <div data-reveal className="flex justify-center">
+        <section id="por-que-praetor" className="relative scroll-mt-16 overflow-hidden bg-gold-50">
+          <div className="mx-auto grid max-w-6xl items-start gap-12 px-4 py-24 sm:px-6 lg:grid-cols-[0.75fr_1.25fr] lg:gap-16">
+            <div data-reveal className="order-last flex flex-col items-center text-center lg:sticky lg:top-28 lg:order-none">
               <div className="relative">
                 <div aria-hidden="true" className="absolute inset-4 rounded-full bg-gold-400/25 blur-3xl" />
-                <LogoMark animated className="relative size-36 sm:size-44" title="Símbolo do Praetor" />
+                <LogoMark animated className="relative size-24 sm:size-32 lg:size-40" title="Símbolo do Praetor" />
               </div>
+              <p className="mt-6 font-display text-2xl text-slate-800">
+                <em>praetor</em>, de <em>prae-ire</em>
+              </p>
+              <p className="mt-1 text-sm text-slate-600">“ir à frente”, em latim</p>
+              <p className="mt-5 max-w-xs text-sm leading-relaxed text-slate-600">
+                O símbolo une um arco, como os pórticos romanos, a um quadrado dourado.
+              </p>
             </div>
             <div data-reveal style={delay(120)}>
               <Kicker>O nome</Kicker>
-              <h2 className="mt-3 font-display text-5xl font-semibold text-navy-900">Por que “Praetor”?</h2>
-              <p className="mt-5 text-lg leading-relaxed text-slate-700">
-                <em className="font-display text-2xl not-italic">Praetor</em> é a palavra latina para{" "}
-                <strong>pretor</strong>, o magistrado que administrava a justiça na Roma Antiga. Ao assumir o cargo,
-                publicava o seu <em>edito</em> — as regras que aplicaria —, orientando as pessoas antes do conflito, e
-                conduzia os litígios quando surgiam.
+              <h2 className="mt-3 font-display text-5xl font-semibold text-navy-900">Por que Praetor</h2>
+              <p className="mt-6 text-lg leading-relaxed text-slate-700">
+                Na Roma antiga, o pretor (<em>praetor</em>, em latim) era o magistrado encarregado de administrar a
+                justiça. Ao assumir o cargo, que durava um ano, ele publicava um <strong>edito</strong>: um texto que
+                dizia, de antemão, como receberia os pedidos e conduziria as disputas durante o mandato.
               </p>
-              <blockquote className="mt-6 border-l-2 border-gold-500 pl-5 font-display text-2xl text-slate-800 italic">
-                <em>prae-ire</em> — “ir à frente”.
-              </blockquote>
-              <p className="mt-4 text-slate-700">
-                Prevenir e conduzir: as duas frentes desta plataforma. O símbolo reúne um arco, a passagem dos pórticos
-                romanos, e um quadrado dourado.
+              <p className="mt-4 text-lg leading-relaxed text-slate-700">
+                Quem tinha um conflito sabia o que esperar. Edito após edito, essa prática deu ordem e previsibilidade
+                ao direito romano.
+              </p>
+              <ol className="mt-8 space-y-4 border-l-2 border-gold-400 pl-6">
+                {HISTORY.map((h) => (
+                  <li key={h.when} className="relative">
+                    <span
+                      aria-hidden="true"
+                      className="absolute top-2 -left-[1.9rem] size-2.5 rounded-full border-2 border-gold-50 bg-gold-500"
+                    />
+                    <span className="block text-sm font-semibold text-gold-800">{h.when}</span>
+                    <span className="block text-slate-700">{h.text}</span>
+                  </li>
+                ))}
+              </ol>
+              <p className="mt-8 rounded-2xl border border-gold-200 bg-white/70 p-6 text-lg leading-relaxed text-slate-800">
+                O nome vem daí. Como o edito, o Praetor deixa as regras claras antes do conflito: cada processo segue o
+                mesmo método, do cadastro ao fechamento do mês, e cada decisão tem um responsável identificado.
               </p>
             </div>
           </div>
@@ -589,16 +432,18 @@ export default async function LandingPage() {
         <section id="perguntas" className="scroll-mt-16 bg-white">
           <div className="mx-auto max-w-3xl px-4 py-24 sm:px-6">
             <div data-reveal className="text-center">
-              <Kicker>Perguntas frequentes</Kicker>
-              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Antes de começar</h2>
+              <Kicker>Perguntas</Kicker>
+              <h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Perguntas frequentes</h2>
+              <p className="mt-4 text-lg text-slate-600">Respostas sobre o que a plataforma faz hoje.</p>
             </div>
             <div className="mt-10 divide-y divide-slate-200 rounded-2xl border border-slate-200">
               {FAQ.map((f, i) => (
                 <details
                   key={f.q}
+                  open={i === 0}
                   data-reveal
-                  style={delay(i * 60)}
-                  className="group px-6 [&_summary::-webkit-details-marker]:hidden"
+                  style={delay(Math.min(i, 4) * 50)}
+                  className="group px-5 sm:px-6 [&_summary::-webkit-details-marker]:hidden"
                 >
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-md py-5 font-semibold text-slate-900">
                     {f.q}
@@ -625,8 +470,8 @@ export default async function LandingPage() {
                 O jurídico um passo à frente
               </h2>
               <p className="mx-auto mt-4 max-w-xl text-lg text-slate-300">
-                Acesse com seu e-mail corporativo. No ambiente demonstrativo, use uma das contas fictícias listadas na
-                tela de login.
+                Acesse com o seu e-mail corporativo. No ambiente de demonstração, use uma das contas fictícias listadas
+                na tela de login.
               </p>
               <Link
                 href={cta.href}
@@ -642,11 +487,8 @@ export default async function LandingPage() {
 
       <footer className="border-t border-white/5 bg-navy-950 text-slate-300">
         <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-10 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <Logo size="sm" />
-          <div className="space-y-1 text-xs sm:text-right">
-            <p>Praetor · versão em desenvolvimento</p>
-            <p>Análise preliminar e e-mails simulados nesta versão; sem integração com tribunais.</p>
-          </div>
+          <Logo size="sm" className="self-start sm:self-auto" />
+          <p className="text-xs sm:text-right">Praetor · gestão do passivo jurídico · versão em desenvolvimento</p>
         </div>
       </footer>
     </RevealRoot>

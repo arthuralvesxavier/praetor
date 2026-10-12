@@ -9,9 +9,8 @@ import { cn } from "@/lib/utils";
 const LINKS = [
   { href: "#plataforma", label: "Plataforma" },
   { href: "#como-funciona", label: "Como funciona" },
-  { href: "#perfis", label: "Perfis" },
-  { href: "#simulacoes", label: "Simulações" },
   { href: "#seguranca", label: "Segurança" },
+  { href: "#por-que-praetor", label: "Por que Praetor" },
   { href: "#perguntas", label: "Perguntas" },
 ];
 
@@ -34,11 +33,11 @@ export function SiteHeader({ cta }: { cta: { href: string; label: string } }) {
         scrolled || open ? "bg-navy-900/90 shadow-lg shadow-black/10 backdrop-blur-md" : "bg-transparent",
       )}
     >
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-        <Link href="/" aria-label="Praetor — início" className="rounded-md py-1 focus-visible:outline-gold-400">
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
+        <Link href="/" aria-label="Praetor, página inicial" className="rounded-md py-1 focus-visible:outline-gold-400">
           <Logo size="md" title="" />
         </Link>
-        <nav aria-label="Seções da página" className="hidden items-center gap-6 text-sm text-slate-300 xl:flex">
+        <nav aria-label="Seções da página" className="hidden items-center gap-7 text-sm text-slate-300 lg:flex">
           {LINKS.map((l) => (
             <a
               key={l.href}
@@ -59,7 +58,7 @@ export function SiteHeader({ cta }: { cta: { href: string; label: string } }) {
           </Link>
           <button
             type="button"
-            className="inline-flex size-10 cursor-pointer items-center justify-center rounded-md text-white focus-visible:outline-gold-400 xl:hidden"
+            className="inline-flex size-10 cursor-pointer items-center justify-center rounded-md text-white focus-visible:outline-gold-400 lg:hidden"
             aria-expanded={open}
             aria-controls="menu-site"
             aria-label={open ? "Fechar menu" : "Abrir menu"}
@@ -70,7 +69,7 @@ export function SiteHeader({ cta }: { cta: { href: string; label: string } }) {
         </div>
       </div>
       {open ? (
-        <nav id="menu-site" aria-label="Seções da página" className="border-t border-white/10 px-4 pb-5 xl:hidden">
+        <nav id="menu-site" aria-label="Seções da página" className="border-t border-white/10 px-4 pb-5 lg:hidden">
           <ul className="flex flex-col py-2">
             {LINKS.map((l) => (
               <li key={l.href}>

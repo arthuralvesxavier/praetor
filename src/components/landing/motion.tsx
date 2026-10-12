@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
@@ -94,39 +94,5 @@ export function Spotlight({
       />
       {children}
     </div>
-  );
-}
-
-/** Counts from 0 to `value` when it scrolls into view. */
-export function CountUp({ value, suffix = "", duration = 1200 }: { value: number; suffix?: string; duration?: number }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const [shown, setShown] = useState(value);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || prefersReducedMotion() || !("IntersectionObserver" in window)) return;
-    let raf = 0;
-    const io = new IntersectionObserver(([entry]) => {
-      if (!entry?.isIntersecting) return;
-      io.disconnect();
-      const start = performance.now();
-      const tick = (t: number) => {
-        const p = Math.min(1, (t - start) / duration);
-        setShown(Math.round(value * (1 - (1 - p) ** 3)));
-        if (p < 1) raf = requestAnimationFrame(tick);
-      };
-      setShown(0);
-      raf = requestAnimationFrame(tick);
-    });
-    io.observe(el);
-    return () => {
-      io.disconnect();
-      cancelAnimationFrame(raf);
-    };
-  }, [value, duration]);
-  return (
-    <span ref={ref} className="lining-nums tabular-nums">
-      {shown}
-      {suffix}
-    </span>
   );
 }

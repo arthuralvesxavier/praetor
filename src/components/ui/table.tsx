@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 export function Table({ className, containerClassName, ...props }: ComponentProps<"table"> & { containerClassName?: string }) {
   return (
     <div className={cn("relative w-full overflow-x-auto", containerClassName)}>
-      <table className={cn("w-full caption-bottom border-collapse text-sm tabular-nums", className)} {...props} />
+      <table className={cn("w-full caption-bottom border-collapse text-sm", className)} {...props} />
     </div>
   );
 }

@@ -235,9 +235,17 @@
     /* Dense data screens: 14px base with comfortable line height. */
     font-size: 0.875rem;
     line-height: 1.5;
-    font-variant-numeric: tabular-nums;
+    /* No global tabular figures: Inter's tnum feature widens the hyphen
+       ("e - mail", spaced CNJ numbers). Numeric cells opt in below or with
+       the `tabular-nums` utility. */
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Right-aligned table cells hold money and counts: align their digits. */
+  td.text-right,
+  th.text-right {
+    font-variant-numeric: tabular-nums;
   }
 
   *,
