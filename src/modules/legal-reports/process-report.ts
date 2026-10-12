@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
-import { CASE_BRIEF_DEMO_NOTICE, CASE_BRIEF_SECTIONS, type BriefCitation, type StoredCaseBrief } from "@/domain/case-brief";
+import {
+  CASE_BRIEF_DEMO_NOTICE,
+  CASE_BRIEF_SECTIONS,
+  SIMULATED_RECORD_AMOUNT_LABELS,
+  SIMULATED_RECORD_GAP_TEXTS,
+  type BriefCitation,
+  type CaseBriefIdentificationKey,
+  type StoredCaseBrief,
+} from "@/domain/case-brief";
 import { isValidCnj, normalizeCnj } from "@/domain/cnj";
 import { formatBp } from "@/domain/contingency";
 import {
@@ -184,6 +192,95 @@ function sentence(text: string): string {
 
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+// ---------------------------------------------------------------------------
+// Parecer da classificação de risco (item de Análise: nunca cortado no meio de uma frase)
+// ---------------------------------------------------------------------------
+
+/** Parecer acima deste tamanho é resumido no R1, sempre em fim de frase e com o aviso de onde está o texto completo. */
+export const RISK_OPINION_MAX_CHARS = 3000;
+export const RISK_OPINION_FULL_TEXT_AT =
+  "O texto completo do parecer está na ficha do processo, aba Valores e acordos, quadro Classificação de risco.";
+/**
+ * Abreviações comuns em pareceres (jurídicas, de tratamento e societárias) e letras isoladas (iniciais, "S.A."):
+ * o ponto delas não encerra a frase. Na dúvida o ponto não conta como fim de frase (o resumo só fica mais curto).
+ */
+const ABBREVIATIONS = [
+  "arts?", "incs?", "n[ºo°]s?", "nr?s?", "fls?", "pp", "p[áa]gs?", "caps?", "t[íi]ts?", "se[çc]", "par", "al", "ref", "cf", "ex", "obs",
+  "dr[as]?", "drs", "sr[as]?", "srs", "srta", "exm[oa]s?", "ilm[oa]s?", "dd", "des", "desa", "min", "rel", "proc", "advs?",
+  "cia", "ltda", "eireli", "me", "epp", "s/a", "etc", "id", "ib", "ibid", "op", "cit", "vs", "av", "tel", "jr",
+  "resp", "agr?", "emb", "ed", "res", "dec", "reg", "docs?", "aprox", "of", "inq", "ac", "ap", "hc", "ms", "rr", "re", "ai",
+].join("|");
+const ABBREVIATION = new RegExp(String.raw`(?:^|[\s(./])(?:[a-zà-ý]|${ABBREVIATIONS})\.$`, "i");
+
+/**
+ * Texto do parecer para o R1: inteiro; acima de `max` caracteres, só até o último fim de frase dentro do limite
+ * (`shortened`, e o item diz onde está o texto completo). Sem fim de frase utilizável, vai inteiro (o parecer
+ * tem tamanho limitado no cadastro): nunca é cortado no meio de uma frase.
+ */
+export function riskOpinionText(opinion: string, max = RISK_OPINION_MAX_CHARS): { text: string; shortened: boolean } {
+  const full = clean(opinion);
+  if (full.length <= max) return { text: full, shortened: false };
+  let end = -1;
+  // Fim de frase: ponto, exclamação, interrogação ou reticências seguidos de espaço e de início de frase (maiúscula, aspas, parêntese).
+  for (const m of full.matchAll(/[.!?…](?=\s+["“'(]?[A-ZÀ-Ý])/g)) {
+    const at = (m.index ?? 0) + 1;
+    if (at > max) break;
+    if (ABBREVIATION.test(full.slice(Math.max(0, at - 12), at))) continue;
+    end = at;
+  }
+  if (end < max * 0.4) return { text: full, shortened: false };
+  return { text: full.slice(0, end), shortened: true };
+}
+
+// ---------------------------------------------------------------------------
+// Lacunas da análise preliminar que citam o cadastro (REG)
+// ---------------------------------------------------------------------------
+
+/** Dados do cadastro que o R1 lê diretamente na data-base (chaves da identificação da análise preliminar). */
+export const RECORD_TOPICS = [
+  "process_number",
+  "plaintiffs",
+  "defendants",
+  "company",
+  "court",
+  "court_division",
+  "city",
+  "instance",
+  "process_class",
+  "phase",
+  "filed_at",
+  "claim_amount",
+  "liquidated_amount",
+  "responsible",
+] as const satisfies readonly CaseBriefIdentificationKey[];
+export type RecordTopic = (typeof RECORD_TOPICS)[number];
+
+/** Comparação de frases fixas: sem diferença de maiúsculas, espaços nem pontuação final. */
+function gapTextKey(text: string): string {
+  return text.replace(/\s+/g, " ").trim().replace(/[.;:,\s]+$/, "").toLocaleLowerCase("pt-BR");
+}
+/** Frases fixas da análise preliminar simulada sobre um dado do cadastro: texto das lacunas e rótulo dos valores. */
+const RECORD_TOPIC_BY_GAP_TEXT = new Map<string, RecordTopic>(
+  Object.entries(SIMULATED_RECORD_GAP_TEXTS).map(([key, text]) => [gapTextKey(text), key as RecordTopic]),
+);
+const RECORD_TOPIC_BY_AMOUNT_LABEL = new Map<string, RecordTopic>(
+  Object.entries(SIMULATED_RECORD_AMOUNT_LABELS).map(([key, label]) => [gapTextKey(label), key as RecordTopic]),
+);
+
+/**
+ * Dado do cadastro de que trata uma lacuna da análise preliminar: pela chave do campo da identificação; sem chave,
+ * só quando o texto (ou o rótulo do valor) é, por inteiro, uma das frases fixas da análise simulada sobre aquele dado.
+ * Qualquer outro texto (do provedor real ou editado na revisão) não é ligado a dado nenhum (`null`) e entra no
+ * relatório como Lacuna: procurar palavras-chave ligaria, por exemplo, "data de admissão do reclamante" às partes
+ * e descartaria uma lacuna sobre um dado que o R1 não lê.
+ */
+export function recordTopicOf(item: { key?: string | null; label?: string | null; text?: string | null; description?: string | null }): RecordTopic | null {
+  if (item.key) return (RECORD_TOPICS as readonly string[]).includes(item.key) ? (item.key as RecordTopic) : null;
+  const text = item.text ?? item.description;
+  if (text) return RECORD_TOPIC_BY_GAP_TEXT.get(gapTextKey(text)) ?? null;
+  return item.label ? (RECORD_TOPIC_BY_AMOUNT_LABEL.get(gapTextKey(item.label)) ?? null) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -771,12 +868,27 @@ export async function buildProcessReportDraft(
     phaseGapKey = gap("identification", "Fase processual");
   }
 
+  /**
+   * Situação, neste relatório, de cada dado do cadastro que ele lê diretamente: "marked" (o relatório marca o
+   * dado como não localizado no item correspondente), "flagged" (o dado consta, e o relatório aponta o mesmo
+   * problema num ponto de atenção: dígito verificador do número) ou "present" (o dado consta da base). Dado sem
+   * situação: o relatório não o trata, e a lacuna da análise sobre ele entra como as demais. Decide o que fazer
+   * com as lacunas da análise preliminar que citam o cadastro (REG).
+   */
+  const recordTopics = new Map<RecordTopic, "marked" | "flagged" | "present">();
+  const setTopic = (topic: RecordTopic, marked: boolean) => recordTopics.set(topic, marked ? "marked" : "present");
+  setTopic("phase", !phaseLabel);
+  // Só número no padrão CNJ tem o dígito verificador conferido (e apontado na seção 8, quando não confere).
+  if (normalizeCnj(p.number)) recordTopics.set("process_number", isValidCnj(p.number) ? "present" : "flagged");
+
   const sortedInstances = [...instances].sort((a, b) => PROCESS_INSTANCE_RANK[a.instance] - PROCESS_INSTANCE_RANK[b.instance]);
   // Instância atual: a linha marcada como atual; sem ela, a da instância do cadastro. O tribunal e o órgão
   // julgador da síntese vêm desta linha (os campos do cadastro do processo guardam os da origem).
   const currentInstance =
     sortedInstances.find((i) => i.isCurrent) ?? (p.instance ? sortedInstances.find((i) => i.instance === p.instance) : undefined) ?? null;
   let instanceGapKey: string | null = null;
+  /** Lacuna da vara / órgão julgador marcada na capa (sem instâncias registradas): repetida na síntese. */
+  let divisionGapKey: string | null = null;
   if (sortedInstances.length > 0) {
     push({
       section: "identification",
@@ -792,16 +904,19 @@ export async function buildProcessReportDraft(
       },
       data: {
         kind: "table",
+        // Tribunal e vara / órgão julgador em colunas separadas: a falta de um deles é uma lacuna própria (célula vazia).
         columns: [
-          { header: "Instância", weight: 1.1 },
-          { header: "Tribunal e órgão julgador", weight: 3 },
-          { header: "Cidade/UF", weight: 1.4, nullLabel: GAP_MARKER },
-          { header: "Classe", weight: 1, nullLabel: GAP_MARKER },
-          { header: "Situação", weight: 1 },
+          { header: "Instância", weight: 1.05 },
+          { header: "Tribunal", weight: 1.1 },
+          { header: "Vara / órgão julgador", weight: 2.2 },
+          { header: "Cidade/UF", weight: 1.35, nullLabel: GAP_MARKER },
+          { header: "Classe", weight: 0.95, nullLabel: GAP_MARKER },
+          { header: "Situação", weight: 1.05 },
         ],
         rows: sortedInstances.map((i) => [
           PROCESS_INSTANCE_LABELS[i.instance],
-          clean([i.court, i.courtDivision].filter(Boolean).join(", ")),
+          clean(i.court ?? "") || null,
+          clean(i.courtDivision ?? "") || null,
           [i.city, i.state].filter(Boolean).join("/") || null,
           i.processClass,
           i.isCurrent || i.id === currentInstance?.id ? "Instância atual" : "Anterior",
@@ -811,8 +926,14 @@ export async function buildProcessReportDraft(
       },
     });
     if (!currentInstance && !p.instance) instanceGapKey = gap("identification", "Instância atual do processo");
+    setTopic("court", sortedInstances.some((i) => !clean(i.court ?? "")));
+    setTopic("court_division", sortedInstances.some((i) => !clean(i.courtDivision ?? "")));
+    setTopic("city", sortedInstances.some((i) => !i.city && !i.state));
+    setTopic("process_class", !p.processClass || sortedInstances.some((i) => !i.processClass));
   } else {
-    const where = clean([p.court, p.courtDivision].filter(Boolean).join(", "));
+    const court = clean(p.court ?? "");
+    const division = clean(p.courtDivision ?? "");
+    const where = [court, division].filter(Boolean).join(", ");
     const place = [p.city, p.state].filter(Boolean).join("/");
     push({
       section: "identification",
@@ -820,11 +941,18 @@ export async function buildProcessReportDraft(
       origin: "record",
       recordSource: processSource("court, court_division, city, state, instance", "Tribunal, órgão julgador, cidade e instância"),
     });
-    if (!where) gap("identification", "Tribunal e órgão julgador");
+    // Tribunal conhecido e vara ausente (ou o contrário): cada dado que falta é uma lacuna própria.
+    if (!court) gap("identification", "Tribunal");
+    if (!division) divisionGapKey = gap("identification", "Vara / órgão julgador");
     if (!place) gap("identification", "Cidade/UF do processo");
     if (!p.instance) instanceGapKey = gap("identification", "Instância atual do processo");
     gap("identification", "Vínculos de instância (autos de origem e recursais) registrados");
+    setTopic("court", !court);
+    setTopic("court_division", !division);
+    setTopic("city", !place);
+    setTopic("process_class", !p.processClass);
   }
+  setTopic("instance", !!instanceGapKey);
 
   if (parties.length > 0) {
     push({
@@ -870,6 +998,14 @@ export async function buildProcessReportDraft(
   } else {
     gap("identification", "Responsável pelo processo");
   }
+  // Partes: sem nenhuma, o relatório marca "Partes do processo"; com partes, cada polo consta ou não é tratado
+  // (sem parte no polo ativo, por exemplo, a lacuna da análise sobre os autores entra como as demais).
+  for (const [topic, role] of [["plaintiffs", "plaintiff"], ["defendants", "defendant"]] as const) {
+    if (parties.length === 0) setTopic(topic, true);
+    else if (parties.some((r) => r.role === role)) setTopic(topic, false);
+  }
+  setTopic("company", !p.companyName);
+  setTopic("responsible", !p.responsibleName);
 
   // ===== 4. Linha do tempo ===============================================
   /** `recordedAt`: data do registro lido (movimentação) ou da análise preliminar (itens dela). */
@@ -1010,6 +1146,7 @@ export async function buildProcessReportDraft(
   }
   // Ajuizamento: a data vem do cadastro; sem ela, lacuna.
   if (!p.filedAt && !hasFilingEvent) gap("timeline", "Data de ajuizamento");
+  setTopic("filed_at", !p.filedAt && !hasFilingEvent);
   for (const label of timelineGaps) gap("timeline", label, "brief");
 
   // ===== 5. Quadro de pedidos e valores ===================================
@@ -1102,7 +1239,8 @@ export async function buildProcessReportDraft(
   let guaranteesKey: string | null = null;
   let riskKey: string | null = null;
   let exposureKey: string | null = null;
-  let riskSummary: { content: string; origin: "analysis" | "record"; recordSource: RecordSource } | null = null;
+  /** `content`: item da seção 6 (com o parecer); `synthesis`: o mesmo sem o parecer, para a síntese. */
+  let riskSummary: { content: string; synthesis: string; origin: "analysis" | "record"; recordSource: RecordSource } | null = null;
   let valuesSummary: { content: string; recordSource: RecordSource; gapRefs: string[] } | null = null;
   /** Cenários propostos pelo sistema nesta geração (gravados só na emissão). */
   let plannedScenarios: PlannedScenarioProposal[] = [];
@@ -1242,6 +1380,8 @@ export async function buildProcessReportDraft(
     const isGapItem = (key: string | null) => !!key && items.find((i) => i.key === key)?.origin === "gap";
     const claimGap = isGapItem(claimKey);
     const liquidatedGap = isGapItem(liquidatedKey);
+    setTopic("claim_amount", claimGap);
+    setTopic("liquidated_amount", liquidatedGap);
     valuesSummary = {
       content: `Valores vigentes: valor da causa ${!claimGap && position.claimCents !== null ? money(position.claimCents) : GAP_MARKER}; valor apurado ${!liquidatedGap && position.liquidatedCents !== null ? money(position.liquidatedCents) : GAP_MARKER}. São grandezas diferentes e não são somadas.`,
       gapRefs: [claimGap ? claimKey : null, liquidatedGap ? liquidatedKey : null].filter((k): k is string => !!k),
@@ -1263,8 +1403,14 @@ export async function buildProcessReportDraft(
     const riskRow = risks.find((r) => r.id === riskInForce?.id);
     const derivedNote = claimsRisk?.inForce?.link === "derived" ? ", derivada dos pedidos" : claimsRisk?.inForce?.link === "override" ? ", definida manualmente (diferente da derivada dos pedidos)" : "";
     if (history.risk && riskRow) {
+      const head = `Classificação de risco vigente: ${LOSS_PROBABILITY_LABELS[riskRow.classification]} (${formatBp(riskRow.percentageBp)})${derivedNote}, desde ${day(riskRow.effectiveFrom)}${riskRow.assessedByName ? `, registrada por ${riskRow.assessedByName}` : ""}`;
+      // O parecer entra inteiro; só um parecer muito longo é resumido, em fim de frase e com o aviso de onde está o texto completo.
+      const opinion = riskOpinionText(riskRow.opinion);
       riskSummary = {
-        content: `Classificação de risco vigente: ${LOSS_PROBABILITY_LABELS[riskRow.classification]} (${formatBp(riskRow.percentageBp)})${derivedNote}, desde ${day(riskRow.effectiveFrom)}${riskRow.assessedByName ? `, registrada por ${riskRow.assessedByName}` : ""}. Parecer: ${clip(riskRow.opinion, 420)}`,
+        content: opinion.shortened
+          ? `${head}. Parecer (resumido neste relatório, até o fim de uma frase): ${opinion.text} ${RISK_OPINION_FULL_TEXT_AT}`
+          : `${head}. Parecer: ${opinion.text}`,
+        synthesis: `${head} (parecer na seção 6).`,
         origin: "analysis",
         recordSource: {
           table: "process_risk_assessments",
@@ -1275,8 +1421,10 @@ export async function buildProcessReportDraft(
         },
       };
     } else if (!history.risk && position.classification !== null) {
+      const content = `Classificação de risco: ${LOSS_PROBABILITY_LABELS[position.classification]}${position.percentageBp !== null ? ` (${formatBp(position.percentageBp)})` : ""}, conforme o cadastro do processo (sem classificação oficial no histórico).`;
       riskSummary = {
-        content: `Classificação de risco: ${LOSS_PROBABILITY_LABELS[position.classification]}${position.percentageBp !== null ? ` (${formatBp(position.percentageBp)})` : ""}, conforme o cadastro do processo (sem classificação oficial no histórico).`,
+        content,
+        synthesis: content,
         origin: "record",
         recordSource: processSource("loss_probability", "Classificação de risco"),
       };
@@ -1442,12 +1590,13 @@ export async function buildProcessReportDraft(
         },
         data: {
           kind: "table",
+          // O comentário é a coluna mais longa: mais largura para ela deixa as linhas mais baixas.
           columns: [
-            { header: "Cenário", weight: 2.6 },
-            { header: "Probabilidade", weight: 1.1 },
+            { header: "Cenário", weight: 2.25 },
+            { header: "Probabilidade", weight: 1.15 },
             { header: "Intervalo", weight: 0.95, align: "right" },
-            { header: "Comentário", weight: 2.6, nullLabel: "Sem comentário" },
-            { header: "Origem", weight: 1.7 },
+            { header: "Comentário", weight: 3.55, nullLabel: "Sem comentário" },
+            { header: "Origem", weight: 1.5 },
           ],
           rows: scenarios.map((s) => [
             clip(s.description, 200),
@@ -1521,7 +1670,8 @@ export async function buildProcessReportDraft(
       .orderBy(desc(alerts.createdAt))
       .limit(ATTENTION_TABLE_MAX),
   ]);
-  if (openDeadlines) requiredPermissions.add("deadline:read");
+  // Só prazo lido é conteúdo de prazos (tabela e próximo ato); "nenhum registrado" não exige deadline:read de quem lê.
+  if (openDeadlines && openDeadlines.length > 0) requiredPermissions.add("deadline:read");
   const upcomingHearings = scheduledHearings.filter((h) => formatIsoDay(h.scheduledAt) >= baseDate);
   const hearingsWithoutOutcome = scheduledHearings.filter((h) => formatIsoDay(h.scheduledAt) < baseDate);
 
@@ -1770,7 +1920,29 @@ export async function buildProcessReportDraft(
 
   // Análise preliminar: urgências e possíveis prazos (extraídos), próximos passos ilustrativos (simulação) e lacunas.
   let briefGapCount = 0;
-  let briefRecordGaps = 0;
+  /**
+   * Lacunas da análise sobre o cadastro (REG) que não são repetidas, por situação do dado neste relatório:
+   * marcado como não localizado no item dele, problema apontado num ponto de atenção, ou dado presente na base.
+   */
+  const briefRecordHandled = { marked: 0, flagged: 0, present: 0 };
+  /** Lacunas incluídas ou editadas pelo revisor (sempre entram como Lacuna). */
+  let briefReviewerGapCount = 0;
+  /**
+   * Lacuna da análise que cita o cadastro (REG): só deixa de ser repetida quando trata, por inteiro, de um dado que
+   * este relatório lê (`recordTopicOf`: chave da identificação ou frase fixa da análise simulada) e o relatório o
+   * trata (marca a própria lacuna, aponta o mesmo problema ou lê o dado na base). Lacuna incluída ou editada pelo
+   * revisor nunca deixa de entrar (o texto dele pode tratar de outro dado), nem a que não se liga a um dado lido:
+   * entram como as demais da análise. Nenhuma lacuna é descartada sem o motivo contado na metodologia.
+   */
+  const recordGapHandled = (item: BriefItemLike & { key?: string | null; citations?: readonly BriefCitation[] }): boolean => {
+    if (item.provenance === "reviewer") return false;
+    if (!(item.citations ?? []).some((c) => c.ref === "REG")) return false;
+    const topic = recordTopicOf(item);
+    const state = topic ? recordTopics.get(topic) : undefined;
+    if (!state) return false;
+    briefRecordHandled[state] += 1;
+    return true;
+  };
   if (brief) {
     const briefItem = (
       section: "attention",
@@ -1868,22 +2040,21 @@ export async function buildProcessReportDraft(
     }
 
     // Lacunas da análise (proveniência "lacuna" em qualquer seção, e lacunas incluídas pelo revisor): todas viram
-    // Lacuna. As que citam o cadastro (REG) não são repetidas: o cadastro é lido diretamente na data-base e as
-    // lacunas atuais dele estão marcadas nos itens (repetir a da análise poderia contradizer um cadastro já corrigido).
+    // Lacuna. As que citam o cadastro (REG) e tratam de um dado que este relatório lê não são repetidas: o cadastro
+    // é lido diretamente na data-base e, se o dado ainda falta, a lacuna atual está marcada no item dele (repetir a
+    // da análise poderia contradizer um cadastro já corrigido).
     const seen = new Set<string>();
-    const briefGap = (label: string, kind: GapKind) => {
+    const briefGap = (label: string, kind: GapKind): boolean => {
       const dedupe = label.toLocaleLowerCase("pt-BR");
-      if (seen.has(dedupe)) return;
+      if (seen.has(dedupe)) return false;
       seen.add(dedupe);
       gap("attention", label, kind);
       briefGapCount += 1;
+      return true;
     };
     for (const m of brief.content.missingDocuments) {
       if (m.provenance !== "missing") continue;
-      if (m.citations.some((c) => c.ref === "REG")) {
-        briefRecordGaps += 1;
-        continue;
-      }
+      if (recordGapHandled(m)) continue;
       const name = clip(m.text.split(":")[0] ?? m.text, 90).replace(/[.;:,\s]+$/, "");
       briefGap(`Documento indicado como faltante: ${name}${briefGapSuffix}`, "brief_doc");
     }
@@ -1894,18 +2065,16 @@ export async function buildProcessReportDraft(
       if (!Array.isArray(list)) continue;
       for (const raw of list as unknown[]) {
         if (!raw || typeof raw !== "object") continue;
-        const it = raw as BriefItemLike & { citations?: BriefCitation[]; note?: string | null };
+        const it = raw as BriefItemLike & { key?: string | null; citations?: BriefCitation[]; note?: string | null };
         const byReviewer = section.key === "gaps" && it.provenance === "reviewer";
         if (it.provenance !== "missing" && !byReviewer) continue;
-        if ((it.citations ?? []).some((c) => c.ref === "REG")) {
-          briefRecordGaps += 1;
-          continue;
-        }
+        if (recordGapHandled(it)) continue;
         const text = briefMissingText(section.key, it);
         if (!text) continue;
         const where = section.key === "gaps" ? "" : `${section.label}: `;
-        const suffix = byReviewer ? ` (incluído na revisão da ${briefLabel})` : briefGapSuffix;
-        briefGap(`${where}${clip(text, 220)}${suffix}`, "brief");
+        // Lacuna do revisor: creditada a quem a incluiu ou editou (pelo histórico de revisões).
+        const suffix = byReviewer ? ` (incluída ou editada na revisão da ${briefLabel}, por ${reviewerCredit(brief, "gaps", it).who})` : briefGapSuffix;
+        if (briefGap(`${where}${clip(text, 220)}${suffix}`, "brief") && byReviewer) briefReviewerGapCount += 1;
       }
     }
   }
@@ -1914,10 +2083,12 @@ export async function buildProcessReportDraft(
   // Instância atual, tribunal e órgão julgador: da linha da instância atual (os campos do cadastro do processo
   // guardam os da origem, preenchidos pela consulta ao DataJud); sem instâncias registradas, do cadastro.
   const instValue = currentInstance ? PROCESS_INSTANCE_LABELS[currentInstance.instance] : instanceLabel(p.instance);
+  // Sem instâncias registradas, a vara que falta aparece com o marcador (a lacuna dela está na capa).
+  const divisionMarker = !currentInstance && divisionGapKey && clean(p.court ?? "") ? `vara / órgão julgador ${GAP_MARKER}` : null;
   const instWhere = currentInstance
     ? clean([currentInstance.court, currentInstance.courtDivision].filter(Boolean).join(", "))
     : sortedInstances.length === 0
-      ? clean([p.court, p.courtDivision].filter(Boolean).join(", "))
+      ? [clean([p.court, p.courtDivision].filter(Boolean).join(", ")), divisionMarker].filter(Boolean).join(", ")
       : "";
   push({
     section: "synthesis",
@@ -1933,7 +2104,9 @@ export async function buildProcessReportDraft(
           dateBasis: "latest",
         }
       : processSource("phase, instance, court, court_division", "Fase, instância e tribunal"),
-    gapRefs: [phaseLabel ? null : phaseGapKey, instValue ? null : instanceGapKey].filter((k): k is string => !!k),
+    gapRefs: [phaseLabel ? null : phaseGapKey, instValue ? null : instanceGapKey, instWhere && divisionMarker ? divisionGapKey : null].filter(
+      (k): k is string => !!k,
+    ),
   });
   if (valuesSummary) {
     push({
@@ -1959,7 +2132,7 @@ export async function buildProcessReportDraft(
     });
   }
   if (riskSummary) {
-    push({ section: "synthesis", content: riskSummary.content.replace(/\. Parecer: .*$/, " (parecer na seção 6)."), origin: riskSummary.origin, recordSource: riskSummary.recordSource });
+    push({ section: "synthesis", content: riskSummary.synthesis, origin: riskSummary.origin, recordSource: riskSummary.recordSource });
   } else if (readValues) {
     gap("synthesis", "Classificação de risco vigente");
   }
@@ -1979,18 +2152,21 @@ export async function buildProcessReportDraft(
     const short = g.label.replace(/\s*\(.*\)$/, "");
     return short.charAt(0).toLocaleLowerCase("pt-BR") + short.slice(1);
   });
-  if (docGaps.length > 0) {
-    mainGaps.push(`${plural(docGaps.length, "documento apontado", "documentos apontados")} como ${docGaps.length === 1 ? "faltante" : "faltantes"} pela análise preliminar`);
-  }
-  if (otherBriefGaps.length > 0) {
-    mainGaps.push(
-      `${plural(otherBriefGaps.length, "outra informação apontada", "outras informações apontadas")} como não ${otherBriefGaps.length === 1 ? "localizada" : "localizadas"} pela análise preliminar`,
-    );
-  }
+  // A parte que vem da análise preliminar leva a versão e, se ela for simulada, a marca de simulação.
+  const byBrief = brief ? `pela análise preliminar v${brief.version}${brief.demo ? " (simulação)" : ""}` : "pela análise preliminar";
+  const briefParts = [
+    docGaps.length > 0
+      ? `${plural(docGaps.length, "documento apontado", "documentos apontados")} como ${docGaps.length === 1 ? "faltante" : "faltantes"}`
+      : null,
+    otherBriefGaps.length > 0
+      ? `${plural(otherBriefGaps.length, recordGaps.length || docGaps.length ? "outra informação apontada" : "informação apontada", recordGaps.length || docGaps.length ? "outras informações apontadas" : "informações apontadas")} como não ${otherBriefGaps.length === 1 ? "localizada" : "localizadas"}`
+      : null,
+  ].filter((v): v is string => !!v);
+  if (briefParts.length > 0) mainGaps.push(`${briefParts.join(" e ")} ${byBrief}`);
   if (synthesisCount < 6 && mainGaps.length > 0) {
     push({
       section: "synthesis",
-      content: `Principais dados não localizados: ${mainGaps.join("; ")} (lista completa na seção 10).`,
+      content: `Principais dados não localizados: ${mainGaps.join("; ")}. Lista completa na seção 10.`,
       origin: "inference",
       derivedFrom: [...recordGaps, ...docGaps, ...otherBriefGaps].map((g) => g.key),
       summarizesGaps: true,
@@ -2003,7 +2179,7 @@ export async function buildProcessReportDraft(
   const methodology = [
     `Relatório gerado em ${day(baseDate)} (data-base) a partir da base do Praetor para o processo ${p.number}. Base examinada: ${documentsSummary(counts)}, ${valuationsSummary(counts)}, ${plural(counts.claims, "pedido confirmado", "pedidos confirmados")} (${counts.claimsAssessed} com avaliação de risco vigente), ${plural(counts.guarantees, "garantia registrada", "garantias registradas")}, ${plural(counts.movements, "movimentação", "movimentações")} (${counts.movementsDataJud} coletadas do DataJud) e ${plural(counts.scenarios, "cenário", "cenários")}${counts.scenariosProposed ? ` (${counts.scenariosProposed} ${counts.scenariosProposed === 1 ? "proposto" : "propostos"} pelo sistema nesta geração, a partir das avaliações dos pedidos, e ${counts.scenariosProposed === 1 ? "registrado" : "registrados"} na emissão deste relatório)` : ""}.`,
     brief
-      ? `Análise preliminar usada: versão ${brief.version} (${brief.approvedAt ? `aprovada${brief.approvedByName ? ` por ${brief.approvedByName}` : ""} em ${day(brief.approvedAt)}` : `${CASE_BRIEF_STATUS_LABELS[brief.status].toLocaleLowerCase("pt-BR")}, ainda não aprovada`})${brief.demo ? ", gerada por simulação nesta versão do sistema" : ""}. Itens extraídos de documentos entram como Documentado só com trecho literal conferido na página (${plural(briefDocumented, "item", "itens")}; ${plural(briefSkipped, "item sem citação utilizável foi deixado", "itens sem citação utilizável foram deixados")} de fora); itens de cadastro da análise entram como Cadastro, com a data da geração da análise, e na linha do tempo não são repetidos (o cadastro e as movimentações são lidos diretamente da base); itens ilustrativos aparecem só nas seções 3 e 8, marcados como Simulação, nunca como fato; itens incluídos pelo revisor aparecem como Análise, com o autor e a data da revisão que os incluiu. Lacunas apontadas pela análise: ${plural(briefGapCount + timelineGaps.length, "entra", "entram")} como Lacuna (seções 4 e 8)${briefRecordGaps ? `; ${plural(briefRecordGaps, "lacuna sobre o cadastro não é repetida", "lacunas sobre o cadastro não são repetidas")}, porque o cadastro é lido diretamente na data-base e as lacunas atuais dele estão marcadas nos itens` : ""}.`
+      ? `Análise preliminar usada: versão ${brief.version} (${brief.approvedAt ? `aprovada${brief.approvedByName ? ` por ${brief.approvedByName}` : ""} em ${day(brief.approvedAt)}` : `${CASE_BRIEF_STATUS_LABELS[brief.status].toLocaleLowerCase("pt-BR")}, ainda não aprovada`})${brief.demo ? ", gerada por simulação nesta versão do sistema" : ""}. Itens extraídos de documentos entram como Documentado só com trecho literal conferido na página (${plural(briefDocumented, "item", "itens")}; ${plural(briefSkipped, "item sem citação utilizável foi deixado", "itens sem citação utilizável foram deixados")} de fora); itens de cadastro da análise entram como Cadastro, com a data da geração da análise, e na linha do tempo não são repetidos (o cadastro e as movimentações são lidos diretamente da base); itens ilustrativos aparecem só nas seções 3 e 8, marcados como Simulação, nunca como fato; itens incluídos pelo revisor aparecem como Análise, com o autor e a data da revisão que os incluiu. Lacunas apontadas pela análise: ${plural(briefGapCount + timelineGaps.length, "entra", "entram")} como Lacuna (seções 4 e 8)${briefRecordHandled.marked ? `; ${plural(briefRecordHandled.marked, "lacuna sobre o cadastro não é repetida", "lacunas sobre o cadastro não são repetidas")}, porque este relatório lê o cadastro na data-base e marca o mesmo dado como não localizado no item dele` : ""}${briefRecordHandled.flagged ? `; ${plural(briefRecordHandled.flagged, "lacuna sobre o dígito verificador do número do processo não é repetida", "lacunas sobre o dígito verificador do número do processo não são repetidas")}, porque este relatório confere o número na data-base e aponta o mesmo problema nos pontos de atenção (seção 8)` : ""}${briefRecordHandled.present ? `; ${plural(briefRecordHandled.present, "lacuna sobre o cadastro não se aplica mais", "lacunas sobre o cadastro não se aplicam mais")}, porque o dado consta da base na data-base (o cadastro é lido diretamente)` : ""}${briefReviewerGapCount ? `; das que entram, ${plural(briefReviewerGapCount, "foi incluída ou editada na revisão", "foram incluídas ou editadas na revisão")} (lacuna do revisor entra sempre, com o nome de quem a incluiu ou editou)` : ""}.`
       : "Não há análise preliminar com conteúdo disponível para quem gerou este relatório; nenhum item vem dela.",
     `Lacunas: ${plural(gapCount, "dado não localizado", "dados não localizados")} (itens de lacuna e células de tabela sem o dado), cada um marcado como ${GAP_MARKER} onde aparece e listado uma vez na seção 10, com o item correspondente; a síntese pode repetir o marcador de um dado já listado. Nenhuma lacuna é preenchida por presunção. Conferência das fontes: na emissão, cada trecho citado é procurado na página indicada do documento, com o hash da versão lida; dados de cadastro são lidos diretamente da base na geração e datados.`,
     "Minimização de dados: o relatório não traz CPF nem CNPJ. As partes aparecem pelo nome e polo; números de CPF ou CNPJ em textos livres (títulos, notas, textos da análise preliminar) são substituídos por [CPF omitido] ou [CNPJ omitido], e trecho de documento que contenha esses números não é citado. Documentos de saúde (atestado, laudo, CAT) são apenas referenciados, sem transcrição. O relatório só aparece para perfis que podem ver todo o conteúdo que ele traz: os documentos citados e, conforme o caso, a análise preliminar, os prazos e os valores.",

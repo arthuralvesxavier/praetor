@@ -1536,8 +1536,8 @@ Visibility (`legalReportWhere`, module-local): organization; process reports nee
 the generator; every document cited by an item must be visible (a `sensitive_health` citation hides the report
 from profiles that cannot see the document); the viewer must hold every permission in
 `parameters.requiredPermissions` (the read permissions of the content the report carries; R1: `process:read`
-always, `document:read` with documents, `brief:read` with the preliminary analysis, `deadline:read` with deadlines,
-`contingency:read` with values; e.g. an R1 with the brief is hidden from executive and accountant). Admin and
+always, `document:read` with documents, `brief:read` with the preliminary analysis, `deadline:read` only when it lists at
+least one open deadline (an empty list, "nenhum registrado", is not deadline content), `contingency:read` with values; e.g. an R1 with the brief is hidden from executive and accountant). Admin and
 legal manager see all. New generators register in `GENERATORS` (service.ts) and
 return a `LegalReportDraft`; `regenerateLegalReport` reuses the generator stored in `parameters.generator`.
 Audits: `legal_report.generate|regenerate|approve|download` (entity `legal_report`),
@@ -1551,11 +1551,15 @@ Audits: `legal_report.generate|regenerate|approve|download` (entity `legal_repor
 figures in the serif), header on every page (vector wordmark from `wordmark-paths.ts` + arch/square of
 `logo.tsx`, "CONFIDENCIAL · USO INTERNO" stripe), footer "Página X de Y · reference · Data-base" + "O
 conteúdo reflete o estado da base em dd/mm/aaaa." (second pass), diagonal watermark until approval.
-Blocks: `heading` (kept with the next block, its space after included; a table with fewer than 5 data rows, which can
-never be split, travels whole with its heading), `paragraph` (no hyphenation, 2-line orphan/widow control),
+Blocks: `heading` (kept with the next block, its space after included; before a table, kept with the table's header and
+first 3 data rows, or with the whole table when it cannot be split), `paragraph` (no hyphenation, 2-line orphan/widow control),
 `item` (origin seal + number + text + literal quote + notes; items up to 200 pt never split), `table`
-(header repeated on every page with "(continuação)", rows never split unless taller than a page, tables
-up to 220 pt kept together, at least 3 rows before and 2 after a break, totals row never alone; optional
+(header repeated on every page with "(continuação)", rows never split unless taller than a page; a table that does not
+fit the remaining space is split when the caption, the column header and at least 3 data rows fit there, otherwise it
+goes whole to the next page, so a short table never leaves a large blank area just to stay together; after the break at
+least 2 data rows in tables of 5 or more, at least 1 in smaller ones, or only the note when every row fit (caption
+"(continuação)" without the column header; a table without caption gets `NOTE_ONLY_CONTINUATION_CAPTION`, "Nota da tabela
+da página anterior (continuação)"); totals row never alone; optional
 per-row origin seal `rowSeals` drawn in column `sealColumn`, used by the R1 row items),
 `keyValues` (cover identification block), `callout` (`info|warning|stamp`), `rule`, `spacer`, `pageBreak`.
 The origin legend is inserted before the first sealed block. Text is sanitized (no em/en dash, no soft
@@ -1591,6 +1595,14 @@ processReportFingerprint(organizationId, processId, db?, { plannedScenarioIds? }
                                                                                    // assessments, guarantees, scenarios (planned proposals count as
                                                                                    // recorded), movements and the brief used
 PROCESS_REPORT_SECTIONS, SCENARIO_CAVEAT, PROCESS_REPORT_PURPOSE, TIMELINE_MAX_ROWS (150, most recent; older ones counted in an item)
+riskOpinionText(opinion, max?) -> { text; shortened }   // pure: full text; above RISK_OPINION_MAX_CHARS (3000) only up to the last
+                                                        // sentence end inside the limit (abbreviations like "art." are not ends);
+                                                        // without a usable sentence end, the full text (never cut mid-sentence)
+RISK_OPINION_FULL_TEXT_AT                               // sentence saying where the full opinion is (process page, "Valores e acordos")
+recordTopicOf(briefItem): RecordTopic | null           // pure: record datum a brief gap is about: identification `key` (RECORD_TOPICS),
+                                                        // else only an exact fixed sentence of the simulated provider
+                                                        // (SIMULATED_RECORD_GAP_TEXTS / SIMULATED_RECORD_AMOUNT_LABELS in
+                                                        // @/domain/case-brief, also used by the provider); never by keyword
 // service.ts
 generateProcessReport(ctx, { processId? | processNumber? })    // "Gerar R1": new reference, or the next version of the current R1;
                                                                // approved current R1: only canSupersedeLegalReport (approver); current R1 not
@@ -1624,12 +1636,22 @@ Rules:
 - Gaps: every datum not located is a gap item or an empty cell of a gap column; the synthesis repeats a marker only through
   `gapRefs` (phase, current instance, valor da causa, valor apurado). The methodology count (`itemGapLabels`) equals the
   "Dados não localizados" list. The synthesis gap point is an `inference` with `summarizesGaps`, derived from the gap items it
-  names (record gaps, missing documents, other brief gaps). "sem registros encontrados" (`dateBasis: "query"`) only for empty
+  names (record gaps, missing documents, other brief gaps); its part about the preliminary analysis names the version and,
+  for a simulated analysis, "(simulação)" ("... pela análise preliminar v1 (simulação). Lista completa na seção 10."). "sem registros encontrados" (`dateBasis: "query"`) only for empty
   queries (no guarantee, no open deadline, no hearing); counts of rows found use `latest`/`record`.
 - Synthesis 3.1: current instance, court and division from the `process_instances` row with `is_current` (else the row of
   `legal_processes.instance`); `legal_processes.court/court_division` only when the process has no instance rows (court-sync
-  fills those fields from the origin instance). The cover adds "Fase processual" (record or gap) and, without instance rows,
-  city/UF and court gaps; a CNJ number that fails the check digit becomes an attention item.
+  fills those fields from the origin instance). The cover adds "Fase processual" (record or gap). The instances table has
+  separate "Tribunal" and "Vara / órgão julgador" columns, so a missing division is a gap of its own even with the court
+  known (empty cell, listed as "Vara / órgão julgador (1º grau)"); without instance rows the cover marks separate gaps
+  "Tribunal", "Vara / órgão julgador" and "Cidade/UF do processo", and the synthesis 3.1 repeats the division marker
+  through `gapRefs` ("(TJSP, vara / órgão julgador [DADO NÃO LOCALIZADO])"); with instance rows the missing division of the
+  current instance is only the table cell gap (3.1 shows the known parts); a CNJ number that fails the check digit becomes an
+  attention item.
+- Risk (6.2, Análise, credited to who assessed it): the official opinion in force goes in full (`riskOpinionText`); only an
+  opinion above 3,000 characters is shortened, at a sentence end (a dot after an abbreviation such as "art.", "Cia.",
+  "Exmo.", "Ltda." or a single letter as in "S.A." is not an end), with the explicit "resumido neste relatório" label and
+  `RISK_OPINION_FULL_TEXT_AT`. The synthesis 3.4 repeats the classification without the opinion ("parecer na seção 6").
 - Row items (`ReportItemData.kind = "row"`, `group`, `caption`, `columns`, `cells`): consecutive items of the same group are
   rendered as ONE table with each row's origin seal (`PdfBlock.table.rowSeals` + `sealColumn`, engine) and item number; each row
   is still an item (own origin, source check, pending). Used by the timeline (process events as Cadastro, DataJud ones with
@@ -1643,9 +1665,16 @@ Rules:
   extracted → Documentado (first citation with a visible document, page and an excerpt of at least 12 characters and without
   CPF/CNPJ; document hash = `document_versions.sha256` of the version the brief read); record → not repeated (the record is read
   directly); missing → Lacuna, from EVERY section (`gaps`, `identification`, `amounts`, `claims`, arguments, missing
-  documents, timeline; reviewer items of `gaps` too), labeled "(apontado pela análise preliminar vN[, simulação])"; missing items
-  citing "REG" (the record) are not repeated, because the R1 reads the record itself and marks its current gaps (counted in the
-  methodology); illustrative → Análise `simulated: true`, text starting with "Simulação", only in sections 3 and 8; reviewer →
+  documents, timeline; reviewer items of `gaps` too), labeled "(apontado pela análise preliminar vN[, simulação])"; a missing
+  item citing "REG" (the record) is matched to the datum it is about (`recordTopicOf`: identification key, or the whole text
+  equal to a fixed sentence of the simulated provider; free text that merely mentions a datum is NOT matched) and is not
+  repeated only when the R1 handles that datum: if the R1 marks its own gap for it (e.g. "Vara / órgão julgador"), it is
+  counted in the methodology as "não é repetida ... marca o mesmo dado como não localizado"; for the CNJ check digit, as
+  "não é repetida ... aponta o mesmo problema nos pontos de atenção (seção 8)"; if the datum is in the base on the base date,
+  as "não se aplica mais". A REG gap about a datum the R1 does not read or does not handle (e.g. plaintiffs missing while
+  other parties exist), or that cannot be matched, enters as a Lacuna like the others. A `gaps` item with provenance
+  `reviewer` (included or edited in the review, even if it keeps the REG citation) ALWAYS enters, labeled "(incluída ou
+  editada na revisão da análise preliminar vN[, simulação], por <who>)" and counted in the methodology; illustrative → Análise `simulated: true`, text starting with "Simulação", only in sections 3 and 8; reviewer →
   Análise credited to the person and date of the revision that introduced the item in its current form (`case_brief_revisions`;
   without a record: "revisor não identificado no histórico de revisões"). Items citing a `sensitive_health` document have generic
   text and no excerpt.

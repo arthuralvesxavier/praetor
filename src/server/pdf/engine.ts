@@ -233,9 +233,16 @@ const SEAL_COLUMN = 66;
 const SEAL_GAP = 9;
 /** Itens até esta altura (pt) nunca são divididos entre páginas. */
 const ITEM_KEEP_TOGETHER = 200;
-/** Tabelas até esta altura (pt) nunca são divididas; nas maiores, ao menos 3 linhas antes e 2 depois da quebra. */
-const TABLE_KEEP_TOGETHER = 220;
+/**
+ * Tabela que não cabe no espaço restante é dividida (cabeçalho repetido) quando cabem nele o cabeçalho e ao menos
+ * 3 linhas de dados; senão vai inteira para a página seguinte. Assim uma tabela curta não deixa uma área grande em
+ * branco só para ficar junta.
+ */
 const TABLE_MIN_ROWS = 3;
+/** Tabelas com ao menos este número de linhas de dados deixam 2 linhas para a página seguinte; as menores, ao menos 1 (ou só a nota). */
+const TABLE_TWO_AFTER_FROM = 5;
+/** Título da continuação só com a nota de uma tabela sem legenda (com legenda: "<legenda> (continuação)"). */
+export const NOTE_ONLY_CONTINUATION_CAPTION = "Nota da tabela da página anterior (continuação)";
 
 function sealWidth(label: string, s: Styles): number {
   return widthOf(label, s.seal) + 2 * SEAL_PAD_X;
@@ -471,7 +478,13 @@ class TableFlow implements Flow {
   ) {
     this.hasSeal = !!spec.seal || spec.rows.some((r) => !!r.seal);
     const sealW = spec.seal ? sealWidth(spec.seal.label, s) + 7 : 0;
-    const caption = spec.caption ? `${spec.caption}${spec.continued ? " (continuação)" : ""}` : "";
+    // Continuação só com a nota: sempre com um título que a liga à tabela (sem legenda, o genérico).
+    const noteOnly = spec.continued && spec.rows.length === 0;
+    const caption = spec.caption
+      ? `${spec.caption}${spec.continued ? " (continuação)" : ""}`
+      : noteOnly
+        ? NOTE_ONLY_CONTINUATION_CAPTION
+        : "";
     this.captionLines = caption ? wrap(caption, s.caption, CONTENT_WIDTH - sealW) : [];
     this.headerCells = spec.columns.map((c, i) => wrap(c.header, s.th, spec.widths[i] - 2 * CELL_PAD_X));
     this.headerHeight = Math.max(...this.headerCells.map((l) => l.length)) * s.th.lineHeight + 2 * HEAD_PAD_Y;
@@ -483,47 +496,52 @@ class TableFlow implements Flow {
   private noteHeight() {
     return this.noteLines.length ? 4 + this.noteLines.length * this.s.note.lineHeight : 0;
   }
+  /** Continuação só com a nota (todas as linhas couberam na página anterior): sem cabeçalho de colunas. */
+  private noteOnly() {
+    return this.spec.continued && this.spec.rows.length === 0;
+  }
   private head() {
-    return this.captionHeight() + this.headerHeight;
+    return this.captionHeight() + (this.noteOnly() ? 0 : this.headerHeight);
   }
   height() {
     return this.head() + this.spec.rows.reduce((h, r) => h + r.height, 0) + this.noteHeight();
   }
-  /** Tabela pequena que cabe numa página nova: nunca é dividida. */
-  private keepTogether() {
-    const fullPage = PAGE.contentTop - PAGE.contentBottom;
-    const height = this.height();
-    return height <= TABLE_KEEP_TOGETHER && height <= fullPage;
+  /**
+   * Divisão com `k` linhas no primeiro pedaço: ao menos 3 linhas de dados nesta página; na seguinte, ao menos
+   * 2 linhas de dados (tabelas com 5 ou mais) ou 1 (as menores; a linha de totais nunca vai sozinha), ou só a
+   * nota, quando todas as linhas couberam.
+   */
+  private validCut(k: number): boolean {
+    const rows = this.spec.rows;
+    if (k <= 0 || k > rows.length) return false;
+    const before = rows.slice(0, k).filter((r) => !r.total).length;
+    if (before < TABLE_MIN_ROWS) return false;
+    if (k === rows.length) return this.noteLines.length > 0;
+    const after = rows.slice(k).filter((r) => !r.total).length;
+    return after >= (before + after >= TABLE_TWO_AFTER_FROM ? 2 : 1);
   }
   minHead() {
-    if (this.keepTogether()) return this.height();
+    // Primeiro pedaço da menor divisão válida (o título preso à tabela vai junto com ele); sem divisão válida,
+    // a tabela inteira (título e tabela vão juntos para a página seguinte).
     const rows = this.spec.rows;
-    // Com menos de 3 linhas para esta página e 2 para a seguinte, `split` nunca divide a tabela:
-    // o primeiro pedaço é a tabela inteira (o título preso a ela vai junto para a página seguinte).
-    const dataRows = rows.filter((r) => !r.total).length;
-    if (dataRows < TABLE_MIN_ROWS + TABLE_MIN_ROWS - 1) return Math.min(this.height(), PAGE.contentTop - PAGE.contentBottom);
-    const firstRows = rows.slice(0, TABLE_MIN_ROWS).reduce((h, r) => h + r.height, 0);
-    return this.head() + firstRows;
+    for (let k = 1; k <= rows.length; k += 1) {
+      if (this.validCut(k)) return this.head() + rows.slice(0, k).reduce((h, r) => h + r.height, 0);
+    }
+    return Math.min(this.height(), PAGE.contentTop - PAGE.contentBottom);
   }
   split(avail: number): [Flow, Flow] | null {
     const rows = this.spec.rows;
-    if (this.keepTogether()) return null;
     let used = this.head();
-    let k = 0;
-    while (k < rows.length && used + rows[k].height <= avail) {
-      used += rows[k].height;
-      k += 1;
+    let fit = 0;
+    while (fit < rows.length && used + rows[fit].height <= avail) {
+      used += rows[fit].height;
+      fit += 1;
     }
-    const dataRows = rows.filter((r) => !r.total).length;
-    if (k >= rows.length) {
-      // Todas as linhas cabem, mas a nota não: leva as últimas linhas junto com a nota.
-      k = rows.length - 1;
-    }
-    // Na página seguinte ficam ao menos 2 linhas de dados (a linha de totais nunca vai sozinha).
-    const remainingData = () => rows.slice(k).filter((r) => !r.total).length;
-    while (k > 0 && remainingData() < Math.min(TABLE_MIN_ROWS - 1, dataRows)) k -= 1;
-    // E nesta página ficam ao menos 3 linhas (senão a tabela começa na página seguinte).
-    if (k > 0 && k < Math.min(TABLE_MIN_ROWS, dataRows)) k = 0;
+    // A maior divisão válida entre as linhas que cabem. Se todas cabem e só a nota não, prefere levar linhas
+    // junto com a nota; sem como (tabela curta), a nota vai sozinha, com o título "(continuação)".
+    let k = fit === rows.length ? rows.length - 1 : fit;
+    while (k > 0 && !this.validCut(k)) k -= 1;
+    if (k <= 0 && fit === rows.length && this.validCut(rows.length)) k = rows.length;
     if (k <= 0) {
       const fullPage = PAGE.contentTop - PAGE.contentBottom;
       if (rows.length > 0 && this.head() + rows[0].height > fullPage) {
@@ -562,17 +580,19 @@ class TableFlow implements Flow {
       this.captionLines.forEach((line, i) => drawLineAt(page, line, s.caption, cx, y - i * s.caption.lineHeight));
       y -= this.captionHeight();
     }
-    // Cabeçalho (repetido em cada página).
-    page.drawRectangle({ x, y: y - this.headerHeight, width: CONTENT_WIDTH, height: this.headerHeight, color: COLORS.navy });
-    let cx = x;
-    this.spec.columns.forEach((col, i) => {
-      const w = this.spec.widths[i];
-      this.headerCells[i].forEach((line, j) =>
-        drawLineAt(page, line, s.th, cx + CELL_PAD_X, y - HEAD_PAD_Y - j * s.th.lineHeight, col.align ?? "left", w - 2 * CELL_PAD_X),
-      );
-      cx += w;
-    });
-    y -= this.headerHeight;
+    // Cabeçalho (repetido em cada página com linhas).
+    if (!this.noteOnly()) {
+      page.drawRectangle({ x, y: y - this.headerHeight, width: CONTENT_WIDTH, height: this.headerHeight, color: COLORS.navy });
+      let cx = x;
+      this.spec.columns.forEach((col, i) => {
+        const w = this.spec.widths[i];
+        this.headerCells[i].forEach((line, j) =>
+          drawLineAt(page, line, s.th, cx + CELL_PAD_X, y - HEAD_PAD_Y - j * s.th.lineHeight, col.align ?? "left", w - 2 * CELL_PAD_X),
+        );
+        cx += w;
+      });
+      y -= this.headerHeight;
+    }
     for (const row of this.spec.rows) {
       if (row.total) {
         page.drawRectangle({ x, y: y - row.height, width: CONTENT_WIDTH, height: row.height, color: COLORS.goldWash });

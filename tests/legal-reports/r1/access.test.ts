@@ -44,9 +44,9 @@ import {
 import type { AuthContext } from "@/server/auth/context";
 import { can } from "@/server/auth/permissions";
 import { requirePageContext } from "@/server/auth/session";
-import { auditLogs, legalReportItems } from "@/server/db/schema";
+import { auditLogs, deadlines, legalReportItems } from "@/server/db/schema";
 import { ForbiddenError, NotFoundError } from "@/server/lib/errors";
-import { makeProcess, runJobs, setupFixture, type Fixture } from "../../helpers/fixtures";
+import { makeDeadline, makeProcess, runJobs, setupFixture, type Fixture } from "../../helpers/fixtures";
 import { pageTexts } from "../pdf-inspect";
 import { buildR1World, type R1World } from "./world";
 
@@ -154,6 +154,7 @@ describe("R1: permissões e visibilidade", () => {
     const pid = await makeProcess(fx.ctx.manager, { unitId: fx.unitSp, responsibleId: fx.ctx.lawyer.userId, claimAmountCents: 2_500_000 });
     await requestCaseBrief(fx.ctx.lawyer, pid, { inline: true });
     await runJobs();
+    await makeDeadline(fx.ctx.lawyer, { processId: pid, title: "Manifestação sobre documentos (fictício)", kind: "procedural" });
     const r = await generateProcessReport(fx.ctx.manager, { processId: pid });
     const { view } = await getLegalReport(fx.ctx.manager, r.id);
     expect(view.parameters.requiredPermissions).toEqual(expect.arrayContaining(["brief:read", "contingency:read", "deadline:read", "process:read"]));
@@ -166,6 +167,38 @@ describe("R1: permissões e visibilidade", () => {
     const panel = await getProcessReportPanel(fx.ctx.executive, pid);
     expect(panel.current).toBeNull();
     expect(panel.hiddenCurrent).toBe(true);
+  }, 120_000);
+
+  it("R1 sem prazos e sem análise preliminar: lista vazia de prazos não é conteúdo; a contabilidade vê o R1", async () => {
+    // Processo sem documento, sem análise preliminar e sem prazo em aberto; só uma sugestão de prazo aguardando validação
+    // (não é prazo real) e um prazo já cumprido.
+    const pid = await makeProcess(fx.ctx.manager, { unitId: fx.unitSp, responsibleId: fx.ctx.lawyer.userId, claimAmountCents: 1_800_000 });
+    const done = await makeDeadline(fx.ctx.lawyer, { processId: pid, title: "Prazo já cumprido (fictício)", kind: "procedural" });
+    await fx.db.update(deadlines).set({ status: "done" }).where(eq(deadlines.id, done));
+    const suggested = await makeDeadline(fx.ctx.lawyer, { processId: pid, title: "Prazo sugerido pela análise (fictício)", kind: "procedural" });
+    await fx.db.update(deadlines).set({ validationStatus: "pending_validation" }).where(eq(deadlines.id, suggested));
+    const r = await generateProcessReport(fx.ctx.manager, { processId: pid });
+    const { view } = await getLegalReport(fx.ctx.manager, r.id);
+    expect([...(view.parameters.requiredPermissions ?? [])].sort()).toEqual(["contingency:read", "process:read"]);
+    const attention = view.sections.find((s) => s.key === "attention")!.items.map((i) => i.content);
+    expect(attention).toContain("Prazos em aberto: nenhum registrado (prazos cadastrados ou validados).");
+    expect(attention.some((t) => /Prazo já cumprido|Prazo sugerido pela análise/.test(t))).toBe(false);
+    // Contabilidade (sem deadline:read nem brief:read) vê, lista e baixa o R1; diretoria também.
+    expect(can(fx.ctx.accountant, "deadline:read")).toBe(false);
+    expect(can(fx.ctx.accountant, "brief:read")).toBe(false);
+    await expect(getLegalReport(fx.ctx.accountant, r.id)).resolves.toBeTruthy();
+    expect((await listLegalReports(fx.ctx.accountant, { pageSize: 100 })).items.some((i) => i.id === r.id)).toBe(true);
+    await expect(openLegalReportPdf(fx.ctx.accountant, r.id)).resolves.toBeTruthy();
+    await expect(getLegalReport(fx.ctx.executive, r.id)).resolves.toBeTruthy();
+    const panel = await getProcessReportPanel(fx.ctx.accountant, pid);
+    expect(panel.current?.id).toBe(r.id);
+
+    // Com um prazo em aberto, o R1 passa a trazer conteúdo de prazos: só quem tem deadline:read o vê.
+    await makeDeadline(fx.ctx.lawyer, { processId: pid, title: "Réplica (fictício)", kind: "procedural" });
+    const next = await generateProcessReport(fx.ctx.manager, { processId: pid });
+    const { view: nextView } = await getLegalReport(fx.ctx.manager, next.id);
+    expect(nextView.parameters.requiredPermissions).toContain("deadline:read");
+    await expect(getLegalReport(fx.ctx.accountant, next.id)).rejects.toBeInstanceOf(NotFoundError);
   }, 120_000);
 
   it("outra unidade e outra organização não veem nem geram o R1", async () => {

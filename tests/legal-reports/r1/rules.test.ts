@@ -7,10 +7,21 @@
  */
 import { and, count, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { SIMULATED_RECORD_AMOUNT_LABELS, SIMULATED_RECORD_GAP_TEXTS, type StoredCaseBrief } from "@/domain/case-brief";
+import { isValidCnj, normalizeCnj } from "@/domain/cnj";
 import { GAP_MARKER, totalOf } from "@/domain/legal-reports";
-import { formatMoneyCents } from "@/lib/format";
+import { formatMoneyCents, todayISO } from "@/lib/format";
 import { loadOrganization } from "@/modules/analyses/org-settings";
-import { buildProcessReportDraft, PROCESS_REPORT_SECTIONS } from "@/modules/legal-reports/process-report";
+import { requestCaseBrief, saveCaseBriefSection } from "@/modules/briefs/service";
+import { addRiskAssessment } from "@/modules/contingency/risk-service";
+import {
+  buildProcessReportDraft,
+  PROCESS_REPORT_SECTIONS,
+  RISK_OPINION_FULL_TEXT_AT,
+  RISK_OPINION_MAX_CHARS,
+  recordTopicOf,
+  riskOpinionText,
+} from "@/modules/legal-reports/process-report";
 import {
   approveLegalReport,
   generateProcessReport,
@@ -19,9 +30,18 @@ import {
   openLegalReportPdf,
 } from "@/modules/legal-reports/service";
 import { validateDraft } from "@/modules/legal-reports/validation";
-import { legalProcesses, legalReportSequences, legalReports } from "@/server/db/schema";
+import { gapEntries, type ItemView, type ReportView } from "@/modules/legal-reports/view";
+import {
+  caseBriefs,
+  legalProcesses,
+  legalReportSequences,
+  legalReports,
+  processInstances,
+  processRiskAssessments,
+} from "@/server/db/schema";
+import { buildSimulatedCaseBrief } from "@/server/integrations/ai/case-brief/simulated";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/lib/errors";
-import { makeProcess, setupFixture, type Fixture } from "../../helpers/fixtures";
+import { makeProcess, runJobs, setupFixture, type Fixture } from "../../helpers/fixtures";
 import { pageTexts } from "../pdf-inspect";
 import { buildR1World, officialValue, type R1World } from "./world";
 
@@ -40,6 +60,15 @@ afterAll(async () => {
 /** "85.432,10" (só os algarismos do valor: o símbolo pode vir com espaço inseparável). */
 function digits(cents: number): string {
   return formatMoneyCents(cents, "").replace(/[^\d.,]/g, "");
+}
+
+function allItems(v: ReportView): ItemView[] {
+  return [...v.sections.flatMap((s) => s.items), ...v.pendingItems];
+}
+
+async function generatedView(processId: string): Promise<ReportView> {
+  const r = await generateProcessReport(fx.ctx.manager, { processId });
+  return (await getLegalReport(fx.ctx.manager, r.id)).view;
 }
 
 async function reportCount(): Promise<number> {
@@ -101,6 +130,338 @@ describe("R1: lacuna nunca vira zero nem vazio", () => {
     expect(text).toContain("DADOS NÃO LOCALIZADOS");
     expect(text).not.toMatch(/[\u2013\u2014]/);
   }, 120_000);
+});
+
+describe("R1: tribunal e vara / órgão julgador", () => {
+  it("tribunal conhecido e vara ausente: o R1 marca a lacuna da vara; só então a lacuna da análise sobre o cadastro conta como repetida", async () => {
+    // Sem instâncias registradas: tribunal TJSP no cadastro, sem vara.
+    const pid = await makeProcess(fx.ctx.manager, { unitId: fx.unitSp, responsibleId: fx.ctx.lawyer.userId, claimAmountCents: 1_500_000 });
+    const { briefId } = await requestCaseBrief(fx.ctx.lawyer, pid, { inline: true });
+    await runJobs();
+    // Entre as lacunas da análise que citam o cadastro (REG), ficam só a da vara e uma sobre dado que o R1 não lê.
+    const [b] = await fx.db.select({ content: caseBriefs.content }).from(caseBriefs).where(eq(caseBriefs.id, briefId));
+    const content = b.content as StoredCaseBrief;
+    const division = content.identification.find((f) => f.key === "court_division");
+    expect(division?.provenance).toBe("missing");
+    expect(division?.citations.some((c) => c.ref === "REG")).toBe(true);
+    const sections = content as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(sections)) {
+      if (!Array.isArray(value)) continue;
+      sections[key] = (value as { key?: string; provenance?: string; citations?: { ref: string }[] }[]).filter(
+        (it) => !(it.provenance === "missing" && it.citations?.some((c) => c.ref === "REG")) || it.key === "court_division",
+      );
+    }
+    content.gaps.push({
+      text: "Telefone do preposto não informado no cadastro (teste).",
+      provenance: "missing",
+      citations: [{ ref: "REG", page: null, excerpt: null }],
+      note: null,
+    });
+    await fx.db.update(caseBriefs).set({ content }).where(eq(caseBriefs.id, briefId));
+
+    const first = await generatedView(pid);
+    const gaps = allItems(first).filter((i) => i.origin === "gap");
+    const cover = first.sections.find((s) => s.key === "identification")!;
+    expect(cover.items.some((i) => i.content.startsWith("Autos:") && i.content.includes("TJSP"))).toBe(true);
+    // Lacuna própria do R1 na capa (o tribunal consta; só a vara falta), listada nas pendências.
+    expect(gaps.find((g) => g.content === "Vara / órgão julgador")?.section).toBe("identification");
+    expect(gaps.some((g) => g.content === "Tribunal" || g.content === "Tribunal e órgão julgador")).toBe(false);
+    expect(gapEntries(first).map((e) => e.text)).toContain(`Vara / órgão julgador: ${GAP_MARKER}`);
+    // A síntese repete o marcador da vara que falta, ligado à lacuna da capa.
+    const instancePoint = first.sections.find((s) => s.key === "synthesis")!.items[0];
+    expect(instancePoint.content).toMatch(/^Fase e instância: .*\(TJSP, vara \/ órgão julgador \[DADO NÃO LOCALIZADO\]\)\.$/);
+    expect(instancePoint.pendingReason).toBeNull();
+    // A lacuna da vara apontada pela análise não é repetida (o R1 marca a dele); a que não corresponde a dado lido pelo R1 entra.
+    expect(gaps.some((g) => g.content.startsWith("Identificação: Vara"))).toBe(false);
+    expect(gaps.map((g) => g.content)).toContain("Telefone do preposto não informado no cadastro (teste) (apontado pela análise preliminar v1, simulação)");
+    const methodology = first.parameters.methodology.join(" ");
+    expect(methodology).toContain(
+      "1 lacuna sobre o cadastro não é repetida, porque este relatório lê o cadastro na data-base e marca o mesmo dado como não localizado no item dele",
+    );
+    expect(methodology).not.toContain("não se aplica mais");
+
+    // Vara registrada depois da análise: o R1 não tem mais a lacuna, e a da análise não conta como repetida (não se aplica mais).
+    await fx.db.update(legalProcesses).set({ courtDivision: "2ª Vara Cível (teste)" }).where(eq(legalProcesses.id, pid));
+    const second = await generatedView(pid);
+    expect(allItems(second).some((i) => i.origin === "gap" && i.content.startsWith("Vara"))).toBe(false);
+    expect(second.sections[0].items.some((i) => i.content.includes("TJSP, 2ª Vara Cível (teste)"))).toBe(true);
+    expect(second.sections.find((s) => s.key === "synthesis")!.items[0].content).toContain("(TJSP, 2ª Vara Cível (teste)).");
+    const methodology2 = second.parameters.methodology.join(" ");
+    expect(methodology2).toContain("1 lacuna sobre o cadastro não se aplica mais, porque o dado consta da base na data-base");
+    expect(methodology2).not.toContain("não é repetida");
+  }, 180_000);
+
+  it("instâncias registradas: tribunal e vara em colunas separadas; a vara que falta numa instância é lacuna própria", async () => {
+    const pid = await makeProcess(fx.ctx.manager, {
+      unitId: fx.unitSp,
+      responsibleId: fx.ctx.lawyer.userId,
+      instance: "second",
+      courtDivision: "3ª Câmara de Direito Privado (teste)",
+    });
+    await fx.db.insert(processInstances).values({
+      organizationId: fx.orgA,
+      processId: pid,
+      instance: "first",
+      court: "TJSP",
+      processClass: "Procedimento comum",
+      phase: "knowledge",
+      isCurrent: false,
+      origin: "imported",
+    });
+    const view = await generatedView(pid);
+    const table = view.sections[0].items.find((i) => i.data?.kind === "table" && i.data.columns[0].header === "Instância");
+    const headers = table?.data?.kind === "table" ? table.data.columns.map((c) => c.header) : [];
+    expect(headers).toEqual(["Instância", "Tribunal", "Vara / órgão julgador", "Cidade/UF", "Classe", "Situação"]);
+    const entries = gapEntries(view).map((e) => e.text);
+    expect(entries).toContain(`Vara / órgão julgador (1º grau): ${GAP_MARKER}`);
+    expect(entries).not.toContain(`Vara / órgão julgador (2º grau): ${GAP_MARKER}`);
+    expect(entries.some((t) => t.startsWith("Tribunal ("))).toBe(false);
+    // A síntese usa a instância atual (com a vara registrada).
+    expect(view.sections.find((s) => s.key === "synthesis")!.items[0].content).toContain(
+      "instância atual 2º grau (TJSP, 3ª Câmara de Direito Privado (teste))",
+    );
+  }, 120_000);
+});
+
+describe("R1: lacunas da análise preliminar sobre o cadastro (REG)", () => {
+  /** Número no padrão CNJ com dígito verificador que não confere. */
+  function invalidCnjNumber(sequence: number): string {
+    for (let d = 0; d < 100; d += 1) {
+      const n = `${String(sequence).padStart(7, "0")}-${String(d).padStart(2, "0")}.2026.8.26.0100`;
+      if (normalizeCnj(n) && !isValidCnj(n)) return n;
+    }
+    throw new Error("sem número inválido");
+  }
+  const REG = [{ ref: "REG", page: null, excerpt: null }];
+  /** Quantas lacunas da análise o R1 conta como marcadas no item do próprio dado. */
+  const markedCount = (v: ReportView) =>
+    Number(/(\d+) lacunas? sobre o cadastro não (?:é|são) repetidas?, porque este relatório lê/.exec(v.parameters.methodology.join(" "))?.[1] ?? 0);
+
+  it("só a chave da identificação ou a frase fixa inteira liga a lacuna a um dado do cadastro; palavra-chave não basta", () => {
+    for (const text of [
+      "Data de admissão do reclamante não informada no cadastro.",
+      "Data de ajuizamento e data de admissão do reclamante não informadas no cadastro.",
+      "Endereço da parte autora não informado no cadastro.",
+      "CPF das partes não informado no cadastro.",
+      "Detalhe da fase (data da sentença) não informado no cadastro.",
+      "Tribunal de origem do recurso não informado.",
+      "Classe do recurso interposto não informada no cadastro.",
+      "Valor da causa atualizado não informado no cadastro.",
+    ]) {
+      expect(recordTopicOf({ text }), text).toBeNull();
+    }
+    for (const [key, text] of Object.entries(SIMULATED_RECORD_GAP_TEXTS)) {
+      expect(recordTopicOf({ text })).toBe(key);
+      // Diferença só de maiúsculas, espaços e ponto final.
+      expect(recordTopicOf({ text: `  ${text.toLocaleUpperCase("pt-BR").replace(/\.$/, "")} ` })).toBe(key);
+    }
+    for (const [key, label] of Object.entries(SIMULATED_RECORD_AMOUNT_LABELS)) expect(recordTopicOf({ label })).toBe(key);
+    expect(recordTopicOf({ label: "Valor da causa atualizado" })).toBeNull();
+    expect(recordTopicOf({ key: "court_division", label: "Vara / órgão julgador" })).toBe("court_division");
+    expect(recordTopicOf({ key: "plaintiffs", label: "Autor(es)" })).toBe("plaintiffs");
+    // Chave que o R1 não lê (área) ou fora do contrato: nenhum dado.
+    expect(recordTopicOf({ key: "legal_area", label: "Área" })).toBeNull();
+    expect(recordTopicOf({ key: "admission_date", label: "Data de ajuizamento" })).toBeNull();
+  });
+
+  it("toda lacuna sobre o cadastro da análise simulada é reconhecida (frases fixas compartilhadas com o provedor)", () => {
+    const brief = buildSimulatedCaseBrief({
+      record: {
+        number: invalidCnjNumber(9_900_001),
+        title: "Processo de teste (fictício)",
+        court: "TJSP",
+        courtDivision: null,
+        city: null,
+        state: null,
+        area: "civil",
+        phase: "knowledge",
+        phaseDetail: null,
+        instance: null,
+        processClass: null,
+        claimAmountCents: null,
+        liquidatedAmountCents: null,
+        filedAt: null,
+        companyName: null,
+        responsibleName: null,
+        parties: [],
+        instances: [],
+        events: [],
+        recordSourceLabel: "Cadastro de teste (fictício)",
+      },
+      documents: [],
+      today: todayISO(),
+    });
+    const items = [...brief.identification, ...brief.amounts, ...brief.gaps].filter(
+      (i) => i.provenance === "missing" && i.citations.some((c) => c.ref === "REG"),
+    );
+    expect(items.length).toBeGreaterThanOrEqual(15);
+    for (const item of items) expect(recordTopicOf(item), JSON.stringify(item)).not.toBeNull();
+  });
+
+  it("lacuna sobre o cadastro editada pelo revisor entra sempre como Lacuna, creditada a quem a editou", async () => {
+    const pid = await makeProcess(fx.ctx.manager, { unitId: fx.unitSp, responsibleId: fx.ctx.lawyer.userId, claimAmountCents: 1_500_000 });
+    const { briefId } = await requestCaseBrief(fx.ctx.lawyer, pid, { inline: true });
+    await runJobs();
+    const before = await generatedView(pid);
+    expect(allItems(before).some((i) => i.origin === "gap" && i.content.includes("data de admissão"))).toBe(false);
+
+    // O advogado edita, no editor da análise, a lacuna simulada sobre a data de ajuizamento (que cita o cadastro).
+    const [b] = await fx.db
+      .select({ content: caseBriefs.content, revision: caseBriefs.currentRevision })
+      .from(caseBriefs)
+      .where(eq(caseBriefs.id, briefId));
+    const content = b.content as StoredCaseBrief;
+    const original = content.gaps.find((g) => g.text === SIMULATED_RECORD_GAP_TEXTS.filed_at);
+    expect(original?.citations.some((c) => c.ref === "REG")).toBe(true);
+    const edited = "Data de ajuizamento e data de admissão do reclamante não informadas no cadastro.";
+    await saveCaseBriefSection(fx.ctx.lawyer, briefId, {
+      section: "gaps",
+      value: content.gaps.map((g) => (g === original ? { ...g, text: edited } : g)),
+      baseRevision: b.revision,
+    });
+    const [b2] = await fx.db.select({ content: caseBriefs.content }).from(caseBriefs).where(eq(caseBriefs.id, briefId));
+    const saved = (b2.content as StoredCaseBrief).gaps.find((g) => g.text === edited);
+    expect(saved?.provenance).toBe("reviewer");
+    expect(saved?.citations.some((c) => c.ref === "REG")).toBe(true);
+
+    const after = await generatedView(pid);
+    const reviewerGap = allItems(after).find(
+      (i) => i.origin === "gap" && i.content.startsWith("Data de ajuizamento e data de admissão do reclamante"),
+    );
+    expect(reviewerGap?.content).toBe(
+      `Data de ajuizamento e data de admissão do reclamante não informadas no cadastro (incluída ou editada na revisão da análise preliminar v1, simulação, por ${fx.ctx.lawyer.name})`,
+    );
+    expect(gapEntries(after).some((e) => e.text.includes("data de admissão do reclamante"))).toBe(true);
+    // Não é contada como repetida (a contagem cai em 1) e a metodologia diz que ela entrou pela revisão.
+    expect(markedCount(after)).toBe(markedCount(before) - 1);
+    expect(after.parameters.methodology.join(" ")).toContain(
+      "das que entram, 1 foi incluída ou editada na revisão (lacuna do revisor entra sempre",
+    );
+
+    // Data de ajuizamento registrada depois: a lacuna do revisor continua (trata também de outro dado); só a da
+    // identificação (chave filed_at) deixa de se aplicar.
+    await fx.db.update(legalProcesses).set({ filedAt: "2026-01-10" }).where(eq(legalProcesses.id, pid));
+    const filled = await generatedView(pid);
+    expect(
+      allItems(filled).some((i) => i.origin === "gap" && i.content.startsWith("Data de ajuizamento e data de admissão do reclamante")),
+    ).toBe(true);
+    expect(filled.parameters.methodology.join(" ")).toContain("1 lacuna sobre o cadastro não se aplica mais, porque o dado consta da base");
+    expect(markedCount(filled)).toBe(markedCount(after) - 1);
+  }, 180_000);
+
+  it("lacuna em texto livre que só menciona um dado lido pelo R1 entra como Lacuna; dígito verificador: problema apontado, não dado não localizado", async () => {
+    const number = invalidCnjNumber(9_900_002);
+    // Sem partes: o R1 marca "Partes do processo"; a lacuna sobre a data de admissão do reclamante não é sobre as partes.
+    const pid = await makeProcess(fx.ctx.manager, { number, unitId: fx.unitSp, responsibleId: fx.ctx.lawyer.userId, claimAmountCents: 1_500_000 });
+    const { briefId } = await requestCaseBrief(fx.ctx.lawyer, pid, { inline: true });
+    await runJobs();
+    const [b] = await fx.db.select({ content: caseBriefs.content }).from(caseBriefs).where(eq(caseBriefs.id, briefId));
+    const content = b.content as StoredCaseBrief;
+    expect(content.gaps.some((g) => g.text === SIMULATED_RECORD_GAP_TEXTS.process_number)).toBe(true);
+    content.gaps.push(
+      { text: "Data de admissão do reclamante não informada no cadastro.", provenance: "missing", citations: REG, note: null },
+      { text: "Detalhe da fase (data da sentença) não informado no cadastro.", provenance: "missing", citations: REG, note: null },
+    );
+    await fx.db.update(caseBriefs).set({ content }).where(eq(caseBriefs.id, briefId));
+
+    const v = await generatedView(pid);
+    const gaps = allItems(v)
+      .filter((i) => i.origin === "gap")
+      .map((i) => i.content);
+    expect(gaps).toContain("Partes do processo");
+    expect(gaps).toContain("Data de admissão do reclamante não informada no cadastro (apontado pela análise preliminar v1, simulação)");
+    expect(gaps).toContain("Detalhe da fase (data da sentença) não informado no cadastro (apontado pela análise preliminar v1, simulação)");
+    // Dígito verificador: o R1 aponta o problema nos pontos de atenção, e a metodologia diz isso (não "não localizado").
+    const attention = v.sections.find((s) => s.key === "attention")!.items.map((i) => i.content);
+    expect(attention.some((t) => t.startsWith("O número do processo no cadastro não passa na validação do dígito verificador"))).toBe(true);
+    expect(v.parameters.methodology.join(" ")).toContain(
+      "1 lacuna sobre o dígito verificador do número do processo não é repetida, porque este relatório confere o número na data-base e aponta o mesmo problema nos pontos de atenção (seção 8)",
+    );
+    expect(gaps.some((t) => t.includes("dígito verificador"))).toBe(false);
+  }, 180_000);
+});
+
+describe("R1: parecer da classificação de risco (item de Análise)", () => {
+  it("o parecer entra inteiro, sem corte no meio de frase; a síntese remete à seção 6", async () => {
+    const pid = await makeProcess(fx.ctx.manager, { unitId: fx.unitSp, responsibleId: fx.ctx.lawyer.userId, claimAmountCents: 3_000_000 });
+    const sentences = Array.from(
+      { length: 9 },
+      (_, i) => `Fundamento ${i + 1} do parecer fictício: a prova documental do processo de teste indica o ponto ${i + 1}, nos termos do art. 818 da CLT e da fl. 12.`,
+    );
+    const opinion = sentences.join(" ");
+    expect(opinion.length).toBeGreaterThan(1000);
+    await addRiskAssessment(fx.ctx.manager, pid, { classification: "possible", opinion, effectiveFrom: todayISO() });
+    const view = await generatedView(pid);
+    const risk = view.sections.find((s) => s.key === "guarantees")!.items.find((i) => i.content.startsWith("Classificação de risco vigente"));
+    expect(risk?.origin).toBe("analysis");
+    expect(risk!.content).toContain(`Parecer: ${opinion}`);
+    expect(risk!.content.endsWith(sentences[8])).toBe(true);
+    expect(risk!.content).not.toContain("…");
+    expect(risk!.content).not.toContain(RISK_OPINION_FULL_TEXT_AT);
+    const synthesis = view.sections.find((s) => s.key === "synthesis")!.items.find((i) => i.content.startsWith("Classificação de risco vigente"));
+    expect(synthesis!.content).toMatch(/\(parecer na seção 6\)\.$/);
+    expect(synthesis!.content).not.toContain("Fundamento 1");
+  }, 120_000);
+
+  it("parecer muito longo: resumido só em fim de frase, com o aviso de onde está o texto completo", async () => {
+    const sentence = (i: number) => `Fundamento ${i} do parecer fictício: a prova do processo de teste indica o ponto ${i}, nos termos do art. 818 da CLT.`;
+    const long = Array.from({ length: 40 }, (_, i) => sentence(i + 1)).join(" ");
+    expect(long.length).toBeGreaterThan(RISK_OPINION_MAX_CHARS);
+    const r = riskOpinionText(long);
+    expect(r.shortened).toBe(true);
+    expect(r.text.length).toBeLessThanOrEqual(RISK_OPINION_MAX_CHARS);
+    expect(long.startsWith(r.text)).toBe(true);
+    // Termina numa frase inteira (nunca no ponto de "art."), e o que vem depois começa uma frase nova.
+    expect(r.text.endsWith("da CLT.")).toBe(true);
+    expect(long.slice(r.text.length)).toMatch(/^ Fundamento \d+ /);
+    // Sem fim de frase dentro do limite (uma frase só): vai inteiro, nunca cortado no meio.
+    const oneSentence = `Parecer fictício ${"com fundamento extenso ".repeat(160)}sem ponto final`;
+    expect(riskOpinionText(oneSentence)).toEqual({ text: oneSentence.replace(/\s+/g, " ").trim(), shortened: false });
+    expect(riskOpinionText("Parecer curto. Segunda frase.")).toEqual({ text: "Parecer curto. Segunda frase.", shortened: false });
+
+    // No R1: parecer acima do limite (aprovação com nota chega a 4.000 caracteres), resumido com o aviso explícito.
+    const pid = await makeProcess(fx.ctx.manager, { unitId: fx.unitSp, responsibleId: fx.ctx.lawyer.userId, claimAmountCents: 3_000_000 });
+    await fx.db.insert(processRiskAssessments).values({
+      organizationId: fx.orgA,
+      processId: pid,
+      classification: "probable",
+      percentageBp: 10_000,
+      opinion: long,
+      effectiveFrom: todayISO(),
+      status: "official",
+      origin: "manual",
+      assessedById: fx.ctx.manager.userId,
+      reviewedById: fx.ctx.manager.userId,
+      reviewedAt: new Date(),
+    });
+    const view = await generatedView(pid);
+    const risk = view.sections.find((s) => s.key === "guarantees")!.items.find((i) => i.content.startsWith("Classificação de risco vigente"));
+    expect(risk?.origin).toBe("analysis");
+    expect(risk!.content).toContain(`Parecer (resumido neste relatório, até o fim de uma frase): ${r.text} ${RISK_OPINION_FULL_TEXT_AT}`);
+    expect(risk!.content).not.toContain("…");
+  }, 120_000);
+});
+
+describe("R1: parecer resumido nunca termina numa abreviação", () => {
+  it("Cia., Exmo., Ilmo., S.A., Ltda. e Dra. não encerram a frase: o resumo termina na frase anterior, inteira", () => {
+    const filler = Array.from({ length: 12 }, (_, i) => `Fundamento ${i + 1} do parecer de teste.`).join(" ");
+    const tails = [
+      "A reclamada, Cia. Brasileira de Teste, alegou o pagamento em dia.",
+      "Encaminhado ao Exmo. Sr. Diretor de Teste para ciência e providências cabíveis.",
+      "Ouvido o Ilmo. Sr. Gerente de Teste, o pagamento foi confirmado.",
+      "A reclamada, Comércio de Teste S.A. Filial Sul, alegou o pagamento em dia.",
+      "A reclamada, Teste Ltda. Filial Sul, alegou o pagamento em dia.",
+      "Conforme a Dra. Maria de Teste, o pagamento ocorreu em dia.",
+    ];
+    for (const tail of tails) {
+      const text = `${filler} ${tail} Outra frase final de teste.`;
+      // Limite logo depois da abreviação e antes do fim da frase em que ela está.
+      const max = filler.length + 1 + 40;
+      expect(tail.length).toBeGreaterThan(41);
+      const r = riskOpinionText(text, max);
+      expect(r, tail).toEqual({ text: filler, shortened: true });
+    }
+  });
 });
 
 describe("R1: valor da causa e valor apurado nunca são somados", () => {

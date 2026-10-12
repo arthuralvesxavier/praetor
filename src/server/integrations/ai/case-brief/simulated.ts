@@ -12,6 +12,8 @@ import {
   type BriefTimelineEvent,
   type CaseBrief,
   type Provenance,
+  SIMULATED_RECORD_AMOUNT_LABELS,
+  SIMULATED_RECORD_GAP_TEXTS,
 } from "@/domain/case-brief";
 import { cnjDigits, isValidCnj, laborCourtFromCnj, normalizeCnj } from "@/domain/cnj";
 import {
@@ -376,7 +378,7 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
   const numberNote = isValidCnj(record.number) ? null : "O dígito verificador do número CNJ não confere: conferir o número nos autos.";
   identification.push(field("process_number", "Número do processo", record.number, "record", reg, numberNote));
   if (!isValidCnj(record.number) && normalizeCnj(record.number)) {
-    gaps.push(item("O número do processo no cadastro não passa na validação do dígito verificador (padrão CNJ).", "missing", reg, "Conferir o número nos autos."));
+    gaps.push(item(SIMULATED_RECORD_GAP_TEXTS.process_number, "missing", reg, "Conferir o número nos autos."));
   }
 
   const docPlaintiff = docs.flatMap((d) => {
@@ -484,12 +486,12 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
       ? field("responsible", "Responsável", record.responsibleName, "record", reg)
       : field("responsible", "Responsável", null, "missing", reg, "Processo sem responsável definido."),
   );
-  if (!record.responsibleName) gaps.push(item("Processo sem advogado responsável no cadastro.", "missing", reg));
-  if (!record.companyName) gaps.push(item("Empresa do grupo não identificada no cadastro.", "missing", reg));
-  if (!record.filedAt) gaps.push(item("Data de ajuizamento não informada no cadastro.", "missing", reg));
-  if (record.claimAmountCents === null) gaps.push(item("Valor da causa não informado no cadastro.", "missing", reg));
+  if (!record.responsibleName) gaps.push(item(SIMULATED_RECORD_GAP_TEXTS.responsible, "missing", reg));
+  if (!record.companyName) gaps.push(item(SIMULATED_RECORD_GAP_TEXTS.company, "missing", reg));
+  if (!record.filedAt) gaps.push(item(SIMULATED_RECORD_GAP_TEXTS.filed_at, "missing", reg));
+  if (record.claimAmountCents === null) gaps.push(item(SIMULATED_RECORD_GAP_TEXTS.claim_amount, "missing", reg));
   if (record.liquidatedAmountCents === null) {
-    gaps.push(item("Valor liquidado não apurado no cadastro (não é zero).", "missing", reg, "Registrar quando houver cálculo homologado ou apuração."));
+    gaps.push(item(SIMULATED_RECORD_GAP_TEXTS.liquidated_amount, "missing", reg, "Registrar quando houver cálculo homologado ou apuração."));
   }
 
   // CNJ numbers quoted in documents.
@@ -683,8 +685,8 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
   }
   amounts.push(
     record.claimAmountCents !== null
-      ? { label: "Valor da causa no cadastro", amountCents: record.claimAmountCents, provenance: "record", citations: reg, note: "Exposição declarada; nunca somada ao valor liquidado." }
-      : { label: "Valor da causa no cadastro", amountCents: null, provenance: "missing", citations: reg, note: "Não informado no cadastro." },
+      ? { label: SIMULATED_RECORD_AMOUNT_LABELS.claim_amount, amountCents: record.claimAmountCents, provenance: "record", citations: reg, note: "Exposição declarada; nunca somada ao valor liquidado." }
+      : { label: SIMULATED_RECORD_AMOUNT_LABELS.claim_amount, amountCents: null, provenance: "missing", citations: reg, note: "Não informado no cadastro." },
   );
   const claimsWithAmount = claimHits.filter((c) => c.cents !== null);
   const claimsTotal = claimsWithAmount.reduce((sum, c) => sum + (c.cents ?? 0), 0);
@@ -719,8 +721,8 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
   }
   amounts.push(
     record.liquidatedAmountCents !== null
-      ? { label: "Valor liquidado / apurado no cadastro", amountCents: record.liquidatedAmountCents, provenance: "record", citations: reg, note: "Mostrado ao lado do valor da causa, nunca somado a ele." }
-      : { label: "Valor liquidado / apurado no cadastro", amountCents: null, provenance: "missing", citations: reg, note: "Não apurado (ausência de valor não é zero)." },
+      ? { label: SIMULATED_RECORD_AMOUNT_LABELS.liquidated_amount, amountCents: record.liquidatedAmountCents, provenance: "record", citations: reg, note: "Mostrado ao lado do valor da causa, nunca somado a ele." }
+      : { label: SIMULATED_RECORD_AMOUNT_LABELS.liquidated_amount, amountCents: null, provenance: "missing", citations: reg, note: "Não apurado (ausência de valor não é zero)." },
   );
 
   if (petitionValue && record.claimAmountCents !== null && Math.abs(petitionValue.cents - record.claimAmountCents) >= 100) {

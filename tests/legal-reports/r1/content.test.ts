@@ -12,7 +12,7 @@
  */
 import { and, count, desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { StoredCaseBrief } from "@/domain/case-brief";
+import { SIMULATED_RECORD_GAP_TEXTS, type StoredCaseBrief } from "@/domain/case-brief";
 import {
   CNPJ_OMITTED,
   CPF_OMITTED,
@@ -82,12 +82,13 @@ beforeAll(async () => {
     instance: "second",
   });
   // Lacunas da análise preliminar em várias seções (a simulação só aponta as que o pacote de documentos não cobre):
-  // documento (sem citação), cadastro (cita REG, não é repetida) e campo da identificação.
+  // documento (sem citação), cadastro (frase fixa da simulação, cita REG: dado que o R1 lê, não é repetida) e campo
+  // da identificação.
   const [b] = await fx.db.select({ content: caseBriefs.content }).from(caseBriefs).where(eq(caseBriefs.id, world.briefId));
   const content = b.content as StoredCaseBrief;
   content.gaps.push(
     { text: "Salário do reclamante não informado nos documentos (teste).", provenance: "missing", citations: [], note: null },
-    { text: "Valor da causa não informado no cadastro (teste).", provenance: "missing", citations: [{ ref: "REG", page: null, excerpt: null }], note: null },
+    { text: SIMULATED_RECORD_GAP_TEXTS.claim_amount, provenance: "missing", citations: [{ ref: "REG", page: null, excerpt: null }], note: null },
   );
   content.identification.push({
     key: "employment_role",
@@ -276,11 +277,15 @@ describe("R1: conteúdo e proveniência", () => {
     }
     expect(gapTexts).toContain("Identificação: Função do reclamante (teste): não informada nos documentos (apontado pela análise preliminar v1, simulação)");
     expect(gapTexts.some((t) => t.startsWith("Valores: Valor do último salário (teste): não localizado"))).toBe(true);
-    expect(gapTexts.some((t) => t.includes("Valor da causa não informado no cadastro (teste)"))).toBe(false);
+    expect(gapTexts.some((t) => t.includes(strip(SIMULATED_RECORD_GAP_TEXTS.claim_amount)))).toBe(false);
     // Todas as lacunas da análise aparecem nas pendências.
     const listed = gapEntries(view).map((e) => e.text);
     for (const g of fromDocs) expect(listed.some((t) => t.includes(strip(g.text).slice(0, 60)))).toBe(true);
-    if (fromRecord.length) expect(view.parameters.methodology.join(" ")).toMatch(/lacunas? sobre o cadastro (não é repetida|não são repetidas)/);
+    // As lacunas do cadastro apontadas pela análise tratam de dados que hoje constam da base (valor da causa e valor
+    // apurado oficiais): não se aplicam mais e não são contadas como repetidas.
+    const methodology = view.parameters.methodology.join(" ");
+    if (fromRecord.length) expect(methodology).toMatch(/lacunas? sobre o cadastro (não se aplica mais|não se aplicam mais), porque o dado consta da base/);
+    expect(methodology).not.toMatch(/sobre o cadastro (não é repetida|não são repetidas)/);
   });
 
   it("notas de fonte: 'sem registros encontrados' só quando a consulta é vazia; ponto de lacunas da síntese é inferência", () => {
@@ -295,6 +300,9 @@ describe("R1: conteúdo e proveniência", () => {
     }
     const summary = view.sections.find((s) => s.key === "synthesis")!.items.find((i) => i.content.startsWith("Principais dados não localizados"));
     expect(summary).toBeTruthy();
+    // A parte que resume as lacunas apontadas pela análise preliminar simulada leva a marca de simulação.
+    expect(summary!.content).toMatch(/como faltantes e \d+ outras? informaç(ão|ões) apontadas? como não localizadas? pela análise preliminar v1 \(simulação\)/);
+    expect(summary!.content).not.toMatch(/pela análise preliminar(?! v1 \(simulação\))/);
     expect(summary!.origin).toBe("inference");
     expect(summary!.pendingReason).toBeNull();
     expect(summary!.derivedFromNumbers.length).toBeGreaterThan(0);

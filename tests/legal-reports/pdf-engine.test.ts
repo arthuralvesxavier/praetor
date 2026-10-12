@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { REPORT_ITEM_ORIGIN_DESCRIPTIONS, REPORT_ITEM_ORIGIN_LABELS } from "@/domain/enums";
-import { renderPdf, sanitizePdfText, type PdfDocumentSpec } from "@/server/pdf";
+import { renderPdf, sanitizePdfText, type PdfBlock, type PdfDocumentSpec } from "@/server/pdf";
 import { BRAND_ARCH_PATH, BRAND_SQUARE_PATH, transformSvgPath } from "@/server/pdf/brand";
+import { NOTE_ONLY_CONTINUATION_CAPTION } from "@/server/pdf/engine";
 import { PAGE } from "@/server/pdf/theme";
 import { fontDictionaries, pageTexts } from "./pdf-inspect";
 
@@ -113,6 +114,53 @@ describe("motor de PDF", () => {
     expect(pages[0]).not.toContain("Título de teste da quebra");
     expect(pages[1]).toContain("Título de teste da quebra");
     expect(pages[1]).toContain("Primeira linha do bloco seguinte");
+  });
+
+  it("tabela curta que não cabe inteira: divide com o cabeçalho repetido quando cabem o cabeçalho e 3 linhas (sem área grande em branco)", async () => {
+    const usable = PAGE.contentTop - PAGE.contentBottom;
+    // Cada linha tem 5 linhas de texto (5 × 10 + 6,8 = 56,8 pt); legenda 17 pt, cabeçalho 18,2 pt, nota 14,2 pt.
+    const table = (n: number): PdfBlock => ({
+      type: "table",
+      caption: "Tabela curta",
+      columns: [{ header: "Linha" }, { header: "Texto", weight: 3 }],
+      rows: Array.from({ length: n }, (_, i) => [`LINHA${i + 1}`, "um\ndois\ntres\nquatro\ncinco"]),
+      note: "Nota da tabela curta.",
+    });
+    const render = async (room: number, rows: number) =>
+      pageTexts((await renderPdf(spec({ sealLegend: undefined, blocks: [{ type: "spacer", height: usable - room }, table(rows)] }))).bytes);
+
+    // Cabem o cabeçalho e 3 das 4 linhas: a tabela começa nesta página e a 4ª linha segue com o cabeçalho repetido.
+    let pages = await render(260, 4);
+    expect(pages[0]).toContain("LINHA3");
+    expect(pages[0]).not.toContain("LINHA4");
+    expect(pages[1]).toContain("Tabela curta (continuação)");
+    expect(pages[1]).toMatch(/Linha Texto/);
+    expect(pages[1]).toContain("LINHA4");
+    expect(pages[1]).toContain("Nota da tabela curta.");
+
+    // Só cabem 2 linhas: a tabela vai inteira para a página seguinte.
+    pages = await render(200, 4);
+    expect(pages[0]).not.toContain("LINHA1");
+    expect(pages[1]).toContain("LINHA1");
+    expect(pages[1]).toContain("LINHA4");
+    expect(pages[1]).not.toContain("(continuação)");
+
+    // Tabela de 3 linhas: todas cabem e só a nota não; a nota segue com a legenda de continuação, sem cabeçalho de colunas.
+    pages = await render(224, 3);
+    expect(pages[0]).toContain("LINHA3");
+    expect(pages[0]).not.toContain("Nota da tabela curta.");
+    expect(pages[1]).toContain("Tabela curta (continuação)");
+    expect(pages[1]).toContain("Nota da tabela curta.");
+    expect(pages[1]).not.toMatch(/LINHA|Linha Texto/);
+
+    // Tabela sem legenda: a nota que segue sozinha leva o título genérico de continuação (nunca fica solta no topo).
+    const uncaptioned: PdfBlock = { ...(table(3) as Extract<PdfBlock, { type: "table" }>), caption: undefined };
+    for (const room of [207, 214]) {
+      pages = await pageTexts((await renderPdf(spec({ sealLegend: undefined, blocks: [{ type: "spacer", height: usable - room }, uncaptioned] }))).bytes);
+      expect(pages[0]).toContain("LINHA3");
+      expect(pages[0]).not.toContain("Nota da tabela curta.");
+      expect(pages[1]).toMatch(new RegExp(`^\\s*${NOTE_ONLY_CONTINUATION_CAPTION.replace(/[()]/g, "\\$&")}\\s+Nota da tabela curta\\.`));
+    }
   });
 
   it("quebra linhas sem hifenizar e sem perder palavras", async () => {

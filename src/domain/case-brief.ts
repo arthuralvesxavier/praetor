@@ -179,6 +179,27 @@ export const CASE_BRIEF_IDENTIFICATION_KEYS = [
   "liquidated_amount",
   "responsible",
 ] as const;
+export type CaseBriefIdentificationKey = (typeof CASE_BRIEF_IDENTIFICATION_KEYS)[number];
+
+/**
+ * Fixed sentences of the simulated provider for gaps about one datum of the process record (they cite "REG"),
+ * by identification key: `gaps` texts and `amounts` labels. A consumer that reads the record directly (the R1)
+ * recognizes only these exact texts as "the same datum"; any other text (live provider, reviewer edit) is a gap
+ * of its own. The simulated provider uses these constants, so they cannot drift apart.
+ */
+export const SIMULATED_RECORD_GAP_TEXTS = {
+  process_number: "O número do processo no cadastro não passa na validação do dígito verificador (padrão CNJ).",
+  responsible: "Processo sem advogado responsável no cadastro.",
+  company: "Empresa do grupo não identificada no cadastro.",
+  filed_at: "Data de ajuizamento não informada no cadastro.",
+  claim_amount: "Valor da causa não informado no cadastro.",
+  liquidated_amount: "Valor liquidado não apurado no cadastro (não é zero).",
+} as const satisfies Partial<Record<CaseBriefIdentificationKey, string>>;
+
+export const SIMULATED_RECORD_AMOUNT_LABELS = {
+  claim_amount: "Valor da causa no cadastro",
+  liquidated_amount: "Valor liquidado / apurado no cadastro",
+} as const satisfies Partial<Record<CaseBriefIdentificationKey, string>>;
 
 /** Sections in display order (keys of CaseBrief). */
 export const CASE_BRIEF_SECTIONS = [
