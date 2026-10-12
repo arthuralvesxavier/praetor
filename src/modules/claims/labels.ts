@@ -16,7 +16,7 @@ export function inForceSourceLabel(link: ClaimRiskLinkKind | null, origin: DataO
   if (link === "override") return "Definida manualmente (diferente da derivada)";
   if (origin === "system") return "Sugestão por regra aprovada";
   if (origin === "imported") return "Importada";
-  return "Registrada na aba de valores e risco";
+  return "Registrada na aba Valores e acordos";
 }
 
 /** How the percentage of the derived classification was obtained (claims panel). */
@@ -28,7 +28,7 @@ export const DERIVED_RATE_BASIS_LABELS: Record<DerivedRateBasis, string> = {
 
 /**
  * Attribution line of a process risk assessment linked to the claims, for the
- * risk history of the "Valores e risco" tab (use it instead of the rule
+ * risk history of the "Valores e acordos" tab (use it instead of the rule
  * suggestion text when `getClaimRiskLinkKinds` returns a kind for the row).
  * A derived row is a calculation from the claim assessments, never a rule
  * suggestion approved by someone.

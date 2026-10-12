@@ -182,7 +182,7 @@ export default async function AlertasPage(props: PageProps<"/alertas">) {
         <Callout tone="info" title="Como os alertas funcionam">
           Os alertas são criados pelas rotinas agendadas (prazos, audiências, contratos, valores e acordos) e pelos módulos
           de entrada de processos e análise preliminar. Resolver um alerta registra quem resolveu, mas não altera o registro
-          de origem: se a condição persistir, a rotina cria um novo alerta. Não há integração com tribunais nesta versão.
+          de origem: se a condição persistir, a rotina cria um novo alerta. As movimentações dos tribunais chegam pela coleta do DataJud (CNJ).
         </Callout>
       </div>
     </>

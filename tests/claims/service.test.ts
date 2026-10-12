@@ -430,7 +430,7 @@ describe("review flags: null is not zero and manual classifications are never un
     expect(overview.risk!.overrideNeedsReview).toBe(true);
     const open = await openReviewAlerts(p);
     expect(open).toHaveLength(1);
-    expect(open[0].message).toContain("aba de valores e risco");
+    expect(open[0].message).toContain("aba Valores e acordos");
 
     // Only an explicit action replaces it.
     expect((await applyDerivedRisk(fx.ctx.lawyer, p)).status).toBe("recorded");

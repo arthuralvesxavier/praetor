@@ -76,7 +76,7 @@ export default async function AudienciasPage(props: PageProps<"/audiencias">) {
     <>
       <PageHeader
         title="Audiências e pauta"
-        description="Agenda das audiências e sessões de julgamento dos processos que você pode acessar. As audiências são cadastradas por pessoas: não há integração com tribunais nesta versão."
+        description="Agenda das audiências e sessões de julgamento dos processos que você pode acessar. As audiências são cadastradas a partir da intimação ou da pauta publicada. A coleta do DataJud avisa quando o tribunal designa uma audiência, mas não informa a data."
         breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Audiências" }]}
         actions={
           canWrite ? (
@@ -161,7 +161,7 @@ export default async function AudienciasPage(props: PageProps<"/audiencias">) {
                 filtered
                   ? "Ajuste ou limpe os filtros para ver outras audiências."
                   : canWrite
-                    ? "Use “Nova audiência” ou a aba Audiências do processo para cadastrar a próxima designação."
+                    ? "Use “Nova audiência” ou a aba Prazos e audiências do processo para cadastrar a próxima designação."
                     : "Quando houver audiências designadas nos processos que você acompanha, elas aparecerão aqui."
               }
             />

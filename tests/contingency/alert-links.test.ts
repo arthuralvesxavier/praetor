@@ -14,26 +14,13 @@ import { ALERT_TYPES, type AlertType, type EntityType } from "@/domain/enums";
 import { todayISO } from "@/lib/format";
 import { alertHref, alertHrefKey, listAlerts, listAlertsPaged, resolveAlertHrefs, upsertAlert } from "@/modules/alerts/service";
 import { RISK_SECTION_ID } from "@/modules/processes/decision-band";
+import { PROCESS_SECTION_IDS, PROCESS_TAB_KEYS } from "@/modules/processes/tabs";
 import { hearings, legalProcesses, processGuarantees, processValuations, settlements } from "@/server/db/schema";
 import { setupFixture, type Fixture } from "../helpers/fixtures";
 
-/** MODULE_CONTRACTS "Process detail tabs". */
-const PROCESS_TABS = [
-  "visao-geral",
-  "partes",
-  "instancias",
-  "movimentacoes",
-  "valores",
-  "acordos",
-  "audiencias",
-  "analise-preliminar",
-  "documentos",
-  "prazos",
-  "emails",
-  "ia",
-  "comentarios",
-  "historico",
-];
+/** MODULE_CONTRACTS "Process detail tabs" (the six tabs of the process page). */
+const PROCESS_TABS: readonly string[] = PROCESS_TAB_KEYS;
+const SECTION_HASHES: readonly string[] = Object.values(PROCESS_SECTION_IDS).map((id) => `#${id}`);
 
 /** Entity types each producer uses for the alert type (a new type must be added here). */
 const PRODUCER_ENTITIES: Record<AlertType, EntityType[]> = {
@@ -64,12 +51,12 @@ const PRODUCER_ENTITIES: Record<AlertType, EntityType[]> = {
 
 /** Expected destination of the `legal_process` alerts (tab and card). */
 const PROCESS_DESTINATION: Partial<Record<AlertType, string>> = {
-  valuation_pending_review: "?aba=valores",
-  enforcement_without_value: "?aba=valores",
-  claims_risk_review: `?aba=valores#${RISK_SECTION_ID}`,
-  snapshot_close_blocked: `?aba=valores#${RISK_SECTION_ID}`,
-  court_movement_relevant: "?aba=movimentacoes",
-  court_hearing_designated: "?aba=audiencias",
+  valuation_pending_review: "?aba=valores-e-acordos",
+  enforcement_without_value: "?aba=valores-e-acordos",
+  claims_risk_review: `?aba=valores-e-acordos#${RISK_SECTION_ID}`,
+  snapshot_close_blocked: `?aba=valores-e-acordos#${RISK_SECTION_ID}`,
+  court_movement_relevant: `?aba=partes-e-andamento#${PROCESS_SECTION_IDS.timeline}`,
+  court_hearing_designated: `?aba=prazos-e-audiencias#${PROCESS_SECTION_IDS.hearings}`,
 };
 
 let f: Fixture;
@@ -127,7 +114,7 @@ function expectValidProcessLink(href: string) {
   expect(url.pathname).toBe(`/processos/${processId}`);
   const tab = url.searchParams.get("aba");
   if (tab !== null) expect(PROCESS_TABS).toContain(tab);
-  if (url.hash) expect(url.hash).toBe(`#${RISK_SECTION_ID}`);
+  if (url.hash) expect(SECTION_HASHES).toContain(url.hash);
 }
 
 describe("alert links", () => {
@@ -192,9 +179,9 @@ describe("alert links", () => {
     }
     const expected = {
       process_needs_verification: `/processos/${p.id}`,
-      court_movement_relevant: `/processos/${p.id}?aba=movimentacoes`,
-      court_hearing_designated: `/processos/${p.id}?aba=audiencias`,
-      claims_risk_review: `/processos/${p.id}?aba=valores#${RISK_SECTION_ID}`,
+      court_movement_relevant: `/processos/${p.id}?aba=partes-e-andamento#${PROCESS_SECTION_IDS.timeline}`,
+      court_hearing_designated: `/processos/${p.id}?aba=prazos-e-audiencias#${PROCESS_SECTION_IDS.hearings}`,
+      claims_risk_review: `/processos/${p.id}?aba=valores-e-acordos#${RISK_SECTION_ID}`,
     };
 
     const listed = (await listAlerts(f.ctx.manager)).filter((a) => a.entityId === p.id);
@@ -212,12 +199,11 @@ describe("alert links", () => {
       { type: "guarantee_idle", entityType: "guarantee", entityId: ids.guarantee! },
       { type: "valuation_pending_review", entityType: "valuation", entityId: ids.valuation! },
     ]);
-    expect(map.get(`hearing:${ids.hearing}`)).toBe(`/processos/${processId}?aba=audiencias`);
-    expect(map.get(`settlement:${ids.settlement}`)).toBe(`/processos/${processId}?aba=acordos`);
-    expect(map.get(`guarantee:${ids.guarantee}`)).toBe(`/processos/${processId}?aba=valores`);
-    expect(map.get(`valuation:${ids.valuation}`)).toBe(`/processos/${processId}?aba=valores`);
-    expect(map.get(alertHrefKey({ type: "hearing_upcoming", entityType: "hearing", entityId: ids.hearing! }))).toBe(
-      `/processos/${processId}?aba=audiencias`,
-    );
+    const hearingHref = `/processos/${processId}?aba=prazos-e-audiencias#${PROCESS_SECTION_IDS.hearings}`;
+    expect(map.get(`hearing:${ids.hearing}`)).toBe(hearingHref);
+    expect(map.get(`settlement:${ids.settlement}`)).toBe(`/processos/${processId}?aba=valores-e-acordos#${PROCESS_SECTION_IDS.settlements}`);
+    expect(map.get(`guarantee:${ids.guarantee}`)).toBe(`/processos/${processId}?aba=valores-e-acordos`);
+    expect(map.get(`valuation:${ids.valuation}`)).toBe(`/processos/${processId}?aba=valores-e-acordos`);
+    expect(map.get(alertHrefKey({ type: "hearing_upcoming", entityType: "hearing", entityId: ids.hearing! }))).toBe(hearingHref);
   });
 });

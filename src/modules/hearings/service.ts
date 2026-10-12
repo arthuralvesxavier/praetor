@@ -4,8 +4,9 @@
  * Rules:
  * - Visibility is inherited from the process (`hearingWhere`, rule 11 of access.ts).
  * - Reads require `process:read`; writes require `process:write` on a visible process.
- * - Hearings are entered by people. There is NO court integration in this version:
- *   nothing is imported from tribunals (DataJud, PJe, MNI: não integrado nesta versão).
+ * - Hearings are entered by people (from the intimação or the published schedule). The
+ *   DataJud collection only raises an alert when a tribunal designates a hearing (the
+ *   date is not provided); PJe and MNI are not integrated.
  * - Date and time are typed in America/Sao_Paulo and stored as a timestamp.
  * - Status flow: scheduled → held (with outcome) | cancelled | rescheduled (the old
  *   hearing is kept as `rescheduled` and a new `scheduled` one is created; both audited).

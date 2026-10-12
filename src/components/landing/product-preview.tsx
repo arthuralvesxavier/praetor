@@ -554,13 +554,12 @@ function ProcessScreen() {
       />
       <MiniTabs
         tabs={[
-          { label: "Visão geral", active: true },
-          { label: "Partes", count: 2 },
-          { label: "Instâncias", count: 1 },
-          { label: "Valores e risco" },
-          { label: "Audiências" },
-          { label: "Análise preliminar" },
-          { label: "Documentos" },
+          { label: "Resumo", active: true },
+          { label: "Partes e andamento" },
+          { label: "Valores e acordos" },
+          { label: "Prazos e audiências" },
+          { label: "Documentos e análises" },
+          { label: "Histórico" },
         ]}
       />
       <div className="grid grid-cols-1 gap-2 @xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">

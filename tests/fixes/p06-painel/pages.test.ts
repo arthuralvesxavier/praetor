@@ -277,9 +277,9 @@ describe("/contingencias/garantias", () => {
     expect(out).toContain("180 dias ou mais");
     // S1 judicial deposit (420 days), R1 surety (300 days), S3 bank guarantee (200 days): 3 rows, oldest first.
     // Phones get a stacked list and larger screens the table: the same rows, in the same order.
-    const links = (html: string) => [...new Set([...html.matchAll(/href="\/processos\/([^"?]+)\?aba=valores"/g)].map((r) => r[1]))];
+    const links = (html: string) => [...new Set([...html.matchAll(/href="\/processos\/([^"?]+)\?aba=valores-e-acordos"/g)].map((r) => r[1]))];
     expect(links(out)).toEqual([ids.S1, ids.R1, ids.S3]);
-    expect(out.match(/href="\/processos\/[^"?]+\?aba=valores"/g)).toHaveLength(6);
+    expect(out.match(/href="\/processos\/[^"?]+\?aba=valores-e-acordos"/g)).toHaveLength(6);
     expect(out).toContain("data do depósito");
     expect(out).toContain('href="/admin/configuracoes#contingencias"');
     const lawyerRe = await render(fx.ctx.lawyerRe, IdleGuaranteesPage as never);

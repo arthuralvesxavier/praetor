@@ -337,7 +337,7 @@ export async function setValuationCorrectionIndex(
         throw new ConflictError(
           `Há outro registro de ${VALUATION_KIND_LABELS[v.kind]} com a mesma data-base (${formatDate(v.baseDate)}) em outra instância. ` +
             "Um novo registro nessa data-base mudaria qual valor está em vigor no processo, por isso a troca do índice foi recusada. " +
-            "Confira os valores dessa data-base na aba Valores e risco.",
+            "Confira os valores dessa data-base na aba Valores e acordos.",
         );
       }
       const superseded = await tx
@@ -394,7 +394,7 @@ export async function setValuationCorrectionIndex(
         // Throwing rolls the whole swap back (nothing superseded, nothing inserted).
         throw new ConflictError(
           "A troca do índice mudaria o valor em vigor do processo, e o valor e a data-base precisam continuar os mesmos. " +
-            "A troca foi recusada. Confira os valores com a mesma data-base na aba Valores e risco.",
+            "A troca foi recusada. Confira os valores com a mesma data-base na aba Valores e acordos.",
         );
       }
       await recordAudit(

@@ -468,8 +468,8 @@ describe("getProcessDecisionBand (row scope and permissions)", () => {
       "Audiência sem desfecho registrado",
       "Garantia parada (fictício)",
     ]);
-    expect(band.pendencies[0].href).toBe(`/processos/${ids.P}?aba=audiencias`);
-    expect(band.pendencies[5].href).toBe(`/processos/${ids.P}?aba=valores`);
+    expect(band.pendencies[0].href).toBe(`/processos/${ids.P}?aba=prazos-e-audiencias#audiencias`);
+    expect(band.pendencies[5].href).toBe(`/processos/${ids.P}?aba=valores-e-acordos`);
     expect(band.valuations).toMatchObject({ total: 2, href: `/contingencias/revisao?item=${ids.valuationOld}` });
     expect(band.valuations?.items.map((v) => v.amountCents)).toEqual([1_234_567, 7_654_321]);
     expect(band.risk).toMatchObject({ classification: "possible", percentageBp: 5000, basis: "official", pendingProposals: 1, canClassify: true });

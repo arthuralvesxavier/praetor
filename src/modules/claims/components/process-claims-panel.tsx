@@ -232,17 +232,17 @@ function RiskStatus({ risk }: { risk: ClaimsRiskState }) {
     return (
       <Callout tone="warning" title="Classificação manual a rever">
         {risk.overrideKind === "outside_panel"
-          ? "A classificação registrada na aba de valores e risco depois da avaliação dos pedidos foi mantida"
+          ? "A classificação registrada na aba Valores e acordos depois da avaliação dos pedidos foi mantida"
           : "A classificação do processo foi definida manualmente e mantida"}
         {d.classification === null
-          ? ", mas nenhum pedido confirmado tem mais avaliação vigente. Avalie os pedidos ou registre nova classificação na aba de valores e risco."
+          ? ", mas nenhum pedido confirmado tem mais avaliação vigente. Avalie os pedidos ou registre nova classificação na aba Valores e acordos."
           : ", mas a avaliação dos pedidos mudou depois dela. Aplique a classificação derivada ou registre nova justificativa."}
       </Callout>
     );
   }
   if (risk.overrideInForce && risk.overrideKind === "outside_panel") {
     return (
-      <Callout tone="info" title="Classificação registrada na aba de valores e risco">
+      <Callout tone="info" title="Classificação registrada na aba Valores e acordos">
         Registrada depois da avaliação dos pedidos e diferente da derivada, com o parecer como justificativa: é mantida e não é
         substituída pela derivada. Será sinalizada para revisão se a avaliação dos pedidos mudar.
       </Callout>
@@ -263,7 +263,7 @@ function RiskStatus({ risk }: { risk: ClaimsRiskState }) {
     return (
       <Callout tone="warning" title="Classificação derivada sem pedidos avaliados">
         A classificação vigente foi derivada dos pedidos, mas nenhum pedido confirmado tem mais avaliação vigente. Avalie os
-        pedidos ou registre nova classificação na aba de valores e risco.
+        pedidos ou registre nova classificação na aba Valores e acordos.
       </Callout>
     );
   }

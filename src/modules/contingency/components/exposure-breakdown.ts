@@ -1,5 +1,5 @@
 /**
- * Breakdown of the net exposure of ONE process for the "Valores e risco" tab and
+ * Breakdown of the net exposure of ONE process for the "Valores e acordos" tab and
  * the overview card (P1.8). Pure and client-safe.
  *
  * - Exposição líquida = valor apurado (official liquidated value in force) −

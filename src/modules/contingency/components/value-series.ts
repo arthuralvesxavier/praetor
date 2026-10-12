@@ -1,5 +1,5 @@
 /**
- * Points of the "Evolução do valor" lists of the "Valores e risco" tab. Pure and
+ * Points of the "Evolução do valor" lists of the "Valores e acordos" tab. Pure and
  * client-safe.
  *
  * "Trocar índice" (P1.7) supersedes an official value with a new official

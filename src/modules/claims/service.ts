@@ -480,15 +480,15 @@ const REVIEW_MESSAGES: Record<ReviewReason, string> = {
     "A classificação definida manualmente foi mantida, mas a avaliação dos pedidos mudou depois dela. " +
     "Confira os pedidos e aplique a classificação derivada ou registre nova justificativa.",
   outside_panel_changed:
-    "A classificação registrada na aba de valores e risco depois da avaliação dos pedidos foi mantida, mas a avaliação " +
+    "A classificação registrada na aba Valores e acordos depois da avaliação dos pedidos foi mantida, mas a avaliação " +
     "dos pedidos mudou depois dela. Confira os pedidos e aplique a classificação derivada ou registre a classificação " +
     "manual com justificativa no painel de pedidos.",
   override_without_claims:
     "A classificação definida manualmente foi mantida, mas nenhum pedido confirmado tem mais avaliação vigente. " +
-    "Avalie os pedidos ou registre nova classificação na aba de valores e risco.",
+    "Avalie os pedidos ou registre nova classificação na aba Valores e acordos.",
   derived_without_claims:
     "A classificação vigente foi derivada dos pedidos, mas nenhum pedido confirmado tem mais avaliação vigente. " +
-    "Avalie os pedidos ou registre nova classificação na aba de valores e risco.",
+    "Avalie os pedidos ou registre nova classificação na aba Valores e acordos.",
   unquantified:
     "A classificação derivada dos pedidos registrou o percentual da organização para a classificação, porque há pedido " +
     "avaliado sem valor (pedido sem valor não vale zero). Quantifique os pedidos ou defina a classificação manualmente com justificativa.",
@@ -896,7 +896,7 @@ export async function getProcessClaims(ctx: AuthContext, processId: string): Pro
 /**
  * Claims link of each process risk assessment of a visible process, keyed by
  * `process_risk_assessments.id` (assessments without a link are absent). For
- * the risk history of the "Valores e risco" tab: a `derived` row has origin
+ * the risk history of the "Valores e acordos" tab: a `derived` row has origin
  * `system` but is NOT a rule suggestion approved by someone (label it with
  * `claimsRiskAttribution` from ../labels).
  */
@@ -1256,7 +1256,7 @@ export async function overrideProcessRisk(
     const d = deriveProcessRisk(await loadDerivationInput(ctx.organizationId, p.id, tx));
     if (d.classification === null) {
       throw new ValidationError(
-        "Nenhum pedido confirmado tem avaliação vigente: não há classificação derivada. Classifique o processo na aba de valores e risco.",
+        "Nenhum pedido confirmado tem avaliação vigente: não há classificação derivada. Classifique o processo na aba Valores e acordos.",
       );
     }
     const derivedBp = derivedProcessRate(d, orgBp(settings))!.bp;

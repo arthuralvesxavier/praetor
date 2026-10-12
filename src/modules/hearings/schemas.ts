@@ -35,7 +35,7 @@ const meetingUrlSchema = z
 
 const notesSchema = z.string().trim().max(5000, "As observações podem ter no máximo 5.000 caracteres.").nullish();
 
-/** Where a hearing record came from (people only: there is no court integration). */
+/** Where a hearing record came from (people; the DataJud collection never creates hearings, it only alerts). */
 export const HEARING_ORIGINS = ["manual", "ai_suggested"] as const;
 
 const hearingFields = {

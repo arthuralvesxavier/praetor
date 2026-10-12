@@ -94,7 +94,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
         </div>
         <p className="relative max-w-md text-xs leading-relaxed text-sidebar-muted">
           Nesta versão, a análise preliminar por IA e o envio de e-mails são simulações demonstrativas (nenhuma
-          mensagem é enviada) e não há integração com tribunais.
+          mensagem é enviada) e o acompanhamento nos tribunais usa a API pública do DataJud (CNJ).
         </p>
       </aside>
 
