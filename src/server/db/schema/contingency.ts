@@ -1,14 +1,16 @@
+import { sql } from "drizzle-orm";
 import { boolean, date, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type {
+  CorrectionIndex,
   DataOrigin,
   GuaranteeKind,
   GuaranteeStatus,
   InstallmentStatus,
   LossProbability,
   ProcessInstance,
-  ProcessPhase,
   SettlementStatus,
   SnapshotStatus,
+  StoredProcessPhase,
   ValuationKind,
   ValuationSource,
   ValuationStatus,
@@ -55,15 +57,34 @@ export const processValuations = pgTable(
     briefId: uuid("brief_id"),
     /** Valoração oficial que esta substituiu. */
     supersedesId: uuid("supersedes_id"),
+    /**
+     * Índice de atualização (P1.7). Null = "sem índice informado" (valores
+     * anteriores ao recurso). Ao inserir sem índice, o gatilho do banco
+     * `process_valuations_default_correction_index` grava o padrão da organização
+     * (`settings.contingency.defaultCorrectionIndex`, "none" se não escolhido).
+     * O valor atualizado é calculado na leitura (`@/modules/indices`), nunca gravado.
+     */
+    correctionIndex: text("correction_index").$type<CorrectionIndex>(),
     createdById: uuid("created_by_id").references(() => users.id),
     reviewedById: uuid("reviewed_by_id").references(() => users.id),
     reviewedAt: ts("reviewed_at"),
     reviewNote: text("review_note"),
+    /**
+     * P0.6: dia em que este valor deixou de valer SEM substituto (valor da causa removido do
+     * cadastro do processo). Gravado pelo serviço de processos nas linhas que a remoção torna
+     * `superseded`. Numa data igual ou posterior a linha não vale mais (o valor fica "não
+     * informado", nunca zero). Null = a linha ainda vale ou foi substituída por outro valor.
+     */
+    clearedOn: date("cleared_on", { mode: "string" }),
     createdAt: createdAt(),
   },
   (t) => [
     index("process_valuations_process_idx").on(t.processId, t.kind, t.createdAt),
     index("process_valuations_org_status_idx").on(t.organizationId, t.status),
+    // P0.6: reversão de importação (apaga por organização + lote).
+    index("process_valuations_import_batch_idx")
+      .on(t.organizationId, t.importBatchId)
+      .where(sql`${t.importBatchId} is not null`),
   ],
 );
 
@@ -206,7 +227,8 @@ export const portfolioSnapshotItems = pgTable(
     unitId: uuid("unit_id").references(() => units.id),
     court: text("court"),
     instance: text("instance").$type<ProcessInstance>(),
-    phase: text("phase").$type<ProcessPhase>(),
+    /** Fase na data-base. Itens de competência FECHADA podem ter fases do modelo anterior (RN-10: nunca reescritos). */
+    phase: text("phase").$type<StoredProcessPhase>(),
     city: text("city"),
     isConfidential: boolean("is_confidential").notNull().default(false),
     classification: text("classification").$type<LossProbability>(),

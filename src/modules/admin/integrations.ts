@@ -114,7 +114,7 @@ export function describeIntegrations(): IntegrationItem[] {
     ),
     notIntegrated(
       "mni",
-      "MNI — Modelo Nacional de Interoperabilidade",
+      "MNI (Modelo Nacional de Interoperabilidade)",
       "Não há envio nem recebimento eletrônico de peças ou intimações com os tribunais.",
     ),
     notIntegrated(
@@ -208,7 +208,7 @@ export function describeIntegrations(): IntegrationItem[] {
           status: "simulated",
           statusText: "Simulado",
           detail:
-            "As mensagens são geradas e guardadas na Central de e-mails, com o aviso “Envio simulado — nenhuma mensagem foi enviada”. Nenhum servidor de e-mail é contatado.",
+            "As mensagens são geradas e guardadas na Central de e-mails, com o aviso “Envio simulado: nenhuma mensagem foi enviada”. Nenhum servidor de e-mail é contatado.",
         }
       : {
           key: "email",

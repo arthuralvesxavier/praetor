@@ -106,7 +106,7 @@ export default async function InteligenciaPreventivaPage(props: PageProps<"/inte
               <dd className="text-slate-900">{intel.filterSummary}</dd>
               <dt className="font-medium text-slate-600">Calculado em</dt>
               <dd className="text-slate-900">
-                {formatDateTime(intel.generatedAt)} — {pluralize(intel.totals.all, "processo", "processos")} (
+                {formatDateTime(intel.generatedAt)}, {pluralize(intel.totals.all, "processo", "processos")} (
                 {formatNumber(intel.totals.active)} na carteira ativa, {formatNumber(intel.totals.closed)} encerrados)
               </dd>
             </dl>
@@ -169,7 +169,7 @@ function ComputedSection({ intel, sp }: { intel: PreventiveIntelligence; sp: Awa
                   <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-amber-700" />
                   <div className="min-w-0 text-sm">
                     <p className="font-semibold text-slate-900">
-                      {f.title} <span className="font-normal text-slate-700">— {f.value}</span>
+                      {f.title}: <span className="font-normal text-slate-700">{f.value}</span>
                     </p>
                     <p className="mt-0.5 text-xs text-muted-foreground">{f.explanation}</p>
                   </div>
@@ -332,17 +332,17 @@ function ComputedSection({ intel, sp }: { intel: PreventiveIntelligence; sp: Awa
         </IndicatorCard>
 
         <IndicatorCard
-          title="Cadastros a verificar"
+          title="Cadastros pendentes de conferência"
           basis={intel.verification.basis}
           headline={`${formatPercent(intel.verification.share, 1)}`}
         >
           <p className="text-sm text-slate-700">
-            {pluralize(intel.verification.count, "processo ativo marcado", "processos ativos marcados")} para verificação (dados
+            {pluralize(intel.verification.count, "processo ativo pendente", "processos ativos pendentes")} de conferência (dados
             incompletos, divergentes ou com pendência na fonte).
           </p>
           {intel.verification.count > 0 ? (
             <Link href={verifyHref} className="mt-2 inline-block text-sm font-medium text-primary underline-offset-4 hover:underline">
-              Ver processos a verificar
+              Ver processos pendentes de conferência
             </Link>
           ) : null}
         </IndicatorCard>
@@ -416,7 +416,7 @@ function ClaimsSection({ intel }: { intel: PreventiveIntelligence }) {
       <SectionHeading
         id="secao-pedidos"
         badge={<DemoDocumentsBadge />}
-        title="Pedidos recorrentes (a partir das análises preliminares — documentos de demonstração)"
+        title="Pedidos recorrentes (a partir das análises preliminares, com documentos de demonstração)"
         description="Agregado dos pedidos com proveniência “Extraído de documento” da análise preliminar mais recente de cada processo visível. As análises preliminares desta versão são SIMULADAS e leem documentos FICTÍCIOS gerados para demonstração: os números ilustram o recurso e não descrevem processos reais."
       />
       <Card className="py-4">
@@ -468,7 +468,7 @@ function ClaimsSection({ intel }: { intel: PreventiveIntelligence }) {
           )}
           <BasisNote
             basis={{
-              formula: `Processos com ao menos um pedido extraído na categoria ÷ processos com análise preliminar considerada. ${pluralize(c.claimsConsidered, "pedido extraído lido", "pedidos extraídos lidos")}; ${pluralize(c.uncategorized, "sem categoria", "sem categoria")}; ${pluralize(c.ignoredNotExtracted, "item não extraído ignorado", "itens não extraídos ignorados")}; ${pluralize(c.excludedSensitive, "pedido sobre dado sensível não agregado", "pedidos sobre dados sensíveis não agregados")} (saúde ou filiação sindical — PD-06).`,
+              formula: `Processos com ao menos um pedido extraído na categoria ÷ processos com análise preliminar considerada. ${pluralize(c.claimsConsidered, "pedido extraído lido", "pedidos extraídos lidos")}; ${pluralize(c.uncategorized, "sem categoria", "sem categoria")}; ${pluralize(c.ignoredNotExtracted, "item não extraído ignorado", "itens não extraídos ignorados")}; ${pluralize(c.excludedSensitive, "pedido sobre dado sensível não agregado", "pedidos sobre dados sensíveis não agregados")} (saúde ou filiação sindical).`,
               population: "Análises preliminares (mais recente por processo; prontas, em revisão ou aprovadas)",
               processCount: c.briefsConsidered,
             }}
@@ -500,7 +500,7 @@ function SuggestionsSection({
         id="secao-sugestoes"
         badge={<IllustrativeBadge />}
         title="Sugestões preventivas ilustrativas"
-        description="Medidas genéricas de gestão disparadas por um indicador calculado. São exemplos para discussão com as áreas responsáveis — não são fatos dos processos, parecer jurídico nem previsão de resultado. Nada é criado automaticamente: ocorrências e tarefas só surgem quando você clicar."
+        description="Medidas genéricas de gestão disparadas por um indicador calculado. São exemplos para discussão com as áreas responsáveis, não fatos dos processos, parecer jurídico nem previsão de resultado. Nada é criado automaticamente: ocorrências e tarefas só surgem quando você clicar."
       />
       {intel.suggestions.length === 0 ? (
         <p className="rounded-md border border-dashed border-border-strong bg-surface px-4 py-6 text-center text-sm text-muted-foreground">

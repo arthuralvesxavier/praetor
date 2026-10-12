@@ -15,7 +15,8 @@ export const APP_LOCALE = "pt-BR";
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DAY_MS = 86_400_000;
-const EMPTY = "—";
+/** Placeholder for a missing value: never an em dash and never zero. */
+const EMPTY = "Não informado";
 
 type DateInput = Date | string | null | undefined;
 

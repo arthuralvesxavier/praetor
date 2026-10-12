@@ -4,6 +4,7 @@ import { HEARING_KIND_LABELS, HEARING_STATUS_LABELS } from "@/domain/enums";
 import { formatDate, formatDateTime, toISODate } from "@/lib/format";
 import type { Option } from "@/lib/options";
 import { cn } from "@/lib/utils";
+import { PROCESS_SECTION_IDS, processTabUrl } from "@/modules/processes/tabs";
 import type { HearingListItem } from "../service";
 import { formatTime, zonedDateAndTime } from "../time";
 import { HearingKindBadge, HearingModeBadge, HearingOriginBadge, HearingStatusBadge } from "./hearing-badges";
@@ -96,7 +97,7 @@ export function HearingRow({
   const current = { mode: item.mode, location: item.location, meetingUrl: item.meetingUrl };
   return (
     <article
-      aria-label={`${label} — ${HEARING_STATUS_LABELS[item.status]}`}
+      aria-label={`${label}, ${HEARING_STATUS_LABELS[item.status].toLowerCase()}`}
       className="flex flex-col gap-3 sm:flex-row sm:items-start"
     >
       <HearingDateTile at={item.scheduledAt} muted={inactive || item.status === "held"} />
@@ -115,12 +116,12 @@ export function HearingRow({
             <>
               <span className="text-muted-foreground"> · </span>
               <Link
-                href={`/processos/${item.processId}?aba=audiencias`}
+                href={processTabUrl(item.processId, "prazos-e-audiencias", PROCESS_SECTION_IDS.hearings)}
                 className="font-medium text-primary-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
               >
                 <span className="font-mono">{item.processNumber}</span>
               </Link>
-              <span className="text-muted-foreground"> — {item.processTitle}</span>
+              <span className="text-muted-foreground"> · {item.processTitle}</span>
             </>
           ) : null}
         </p>

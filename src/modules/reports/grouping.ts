@@ -2,7 +2,15 @@
  * Pure grouping helpers for reports and preventive indicators (client-safe).
  * Money math comes from `@/domain/contingency`; this file only groups.
  */
-import { addToBucket, emptyBucket, type BucketItem, type MoneyBucket } from "@/domain/contingency";
+import {
+  addProvisionBasis,
+  addToBucket,
+  emptyBasisCounts,
+  emptyBucket,
+  type AmountBasisCounts,
+  type BucketItem,
+  type MoneyBucket,
+} from "@/domain/contingency";
 import { normalizeCnj } from "@/domain/cnj";
 import type { BucketRow } from "./types";
 
@@ -53,11 +61,11 @@ export function divisionGroup(
 ): { key: string; label: string } {
   const c = courtGroup(court);
   const d = collapse(division ?? "");
-  if (!d) return { key: `${c.key}|${NONE_KEY}`, label: `Vara não informada — ${c.label}` };
-  return { key: `${c.key}|${textKey(d)}`, label: `${d} — ${c.label}` };
+  if (!d) return { key: `${c.key}|${NONE_KEY}`, label: `Vara não informada (${c.label})` };
+  return { key: `${c.key}|${textKey(d)}`, label: `${d} (${c.label})` };
 }
 
-type Group = { key: string; label: string; numbers: Set<string>; bucket: MoneyBucket };
+type Group = { key: string; label: string; numbers: Set<string>; bucket: MoneyBucket; provisionBasis: AmountBasisCounts };
 
 /**
  * Accumulates BucketItems into labeled groups. Labels keep the first variant
@@ -69,11 +77,12 @@ export class BucketGroups {
   add(key: string, label: string, number: string, item: BucketItem): void {
     let g = this.groups.get(key);
     if (!g) {
-      g = { key, label, numbers: new Set(), bucket: emptyBucket() };
+      g = { key, label, numbers: new Set(), bucket: emptyBucket(), provisionBasis: emptyBasisCounts() };
       this.groups.set(key, g);
     }
     g.numbers.add(cnjKey(number));
     addToBucket(g.bucket, item);
+    addProvisionBasis(g.provisionBasis, item);
   }
 
   get size(): number {
@@ -91,6 +100,7 @@ export class BucketGroups {
       label: g.label,
       processCount: g.numbers.size,
       bucket: g.bucket,
+      provisionBasis: g.provisionBasis,
     }));
     return out.sort(sort ?? ((a, b) => b.processCount - a.processCount || a.label.localeCompare(b.label, "pt-BR")));
   }
@@ -100,7 +110,7 @@ export class BucketGroups {
 export function totalRow(key: string, label: string, items: { number: string; item: BucketItem }[]): BucketRow {
   const g = new BucketGroups();
   for (const { number, item } of items) g.add(key, label, number, item);
-  return g.rows()[0] ?? { key, label, processCount: 0, bucket: emptyBucket() };
+  return g.rows()[0] ?? { key, label, processCount: 0, bucket: emptyBucket(), provisionBasis: emptyBasisCounts() };
 }
 
 /** True when any estimate (RN-07) is part of the bucket. */

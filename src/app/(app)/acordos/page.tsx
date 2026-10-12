@@ -16,6 +16,8 @@ import { listUserOptions } from "@/modules/admin/service";
 import { InstallmentStatusBadge } from "@/modules/contingency/components/badges";
 import { SettlementCard } from "@/modules/contingency/components/process-tabs";
 import { InstallmentPayment, SettlementCreateDialog } from "@/modules/contingency/components/settlement-forms";
+import { listDocumentOptionsForProcesses } from "@/modules/contingency/service";
+import { PROCESS_SECTION_IDS, processTabUrl } from "@/modules/processes/tabs";
 import {
   getSettlementKpis,
   listSettlementProcessOptions,
@@ -44,6 +46,12 @@ export default async function SettlementsPage(props: { searchParams: Promise<Sea
     canWrite ? listSettlementProcessOptions(ctx) : Promise.resolve([]),
     canWrite ? listUserOptions(ctx) : Promise.resolve([]),
   ]);
+  // Documents for the "Registrar quitação" dialog of fulfilled settlements (one batched, visibility-scoped query).
+  const fulfilledProcessIds = canWrite ? result.items.filter((s) => s.status === "fulfilled").map((s) => s.processId) : [];
+  const documentsByProcess =
+    fulfilledProcessIds.length > 0 ? await listDocumentOptionsForProcesses(ctx, fulfilledProcessIds) : {};
+  const documentOptions = (processId: string) =>
+    (documentsByProcess[processId] ?? []).map((d) => ({ value: d.id, label: d.title }));
   const filtered = hasAnyParam(sp, FILTER_KEYS);
   const today = todayISO();
 
@@ -56,7 +64,7 @@ export default async function SettlementsPage(props: { searchParams: Promise<Sea
         actions={
           canWrite ? (
             <SettlementCreateDialog
-              processes={processes.map((p) => ({ value: p.id, label: `${p.number} — ${p.title}` }))}
+              processes={processes.map((p) => ({ value: p.id, label: `${p.number} · ${p.title}` }))}
               users={users.map((u) => ({ value: u.id, label: u.name }))}
             />
           ) : null
@@ -112,7 +120,7 @@ export default async function SettlementsPage(props: { searchParams: Promise<Sea
                       <span className="block text-xs text-muted-foreground">{formatRelativeDays(i.dueDate, today)}</span>
                     </TableCell>
                     <TableCell className="min-w-48">
-                      <Link href={`/processos/${i.processId}?aba=acordos`} className="font-medium tabular-nums text-primary-700 hover:underline">
+                      <Link href={processTabUrl(i.processId, "valores-e-acordos", PROCESS_SECTION_IDS.settlements)} className="font-medium tabular-nums text-primary-700 hover:underline">
                         {i.processNumber}
                       </Link>
                       <span className="block truncate text-xs text-muted-foreground" title={i.processTitle}>
@@ -165,7 +173,16 @@ export default async function SettlementsPage(props: { searchParams: Promise<Sea
             }
           />
         ) : (
-          result.items.map((s) => <SettlementCard key={s.id} s={s} canWrite={canWrite} canApprove={canApprove} documents={[]} showProcess />)
+          result.items.map((s) => (
+            <SettlementCard
+              key={s.id}
+              s={s}
+              canWrite={canWrite}
+              canApprove={canApprove}
+              documents={s.status === "fulfilled" ? documentOptions(s.processId) : []}
+              showProcess
+            />
+          ))
         )}
       </section>
       <Pagination page={result.page} pageSize={result.pageSize} total={result.total} basePath="/acordos" searchParams={sp} />

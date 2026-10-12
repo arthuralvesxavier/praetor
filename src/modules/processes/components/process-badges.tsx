@@ -47,7 +47,7 @@ export function LegalHoldBadge({ className }: { className?: string }) {
 export function VerificationBadge({ className, note }: { className?: string; note?: string | null }) {
   return (
     <Badge tone="warning" icon={<SearchCheck />} className={className} title={note ?? undefined}>
-      Verificar
+      Pendente de conferência
     </Badge>
   );
 }

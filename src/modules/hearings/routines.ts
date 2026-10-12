@@ -1,12 +1,13 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, gte, inArray, ne } from "drizzle-orm";
 import { HEARING_KIND_LABELS, HEARING_MODE_LABELS } from "@/domain/enums";
 import { addDaysISO, daysUntil, formatDate, todayISO } from "@/lib/format";
 import { systemContext } from "@/server/auth/context";
 import { getDb } from "@/server/db/client";
-import { alerts } from "@/server/db/schema";
+import { emailMessages, hearings } from "@/server/db/schema";
 import { logger } from "@/server/lib/logger";
 import type { RoutineContext } from "@/server/jobs/routines";
 import { resolveStaleAlerts, upsertAlert } from "@/modules/alerts/service";
+import { PROCESS_SECTION_IDS, processTabUrl } from "@/modules/processes/tabs";
 import { hearingAlertKey, listScheduledHearingsForAlerts } from "./service";
 import { endOfZonedDayExclusive, formatTime } from "./time";
 
@@ -16,11 +17,21 @@ import { endOfZonedDayExclusive, formatTime } from "./time";
  * - One open `hearing_upcoming` alert per scheduled hearing within
  *   `settings.alerts.upcomingHearingDays` (entity `hearing`, dedupe key
  *   `hearing_upcoming:<id>`); today/tomorrow → critical, otherwise warning.
+ *   Only hearings of processes in the active portfolio (status active or
+ *   suspended) are alerted and reminded: an archived or closed process keeps
+ *   its scheduled hearings on record, without alerts or reminder e-mails.
  * - Alerts of hearings that were held, cancelled, rescheduled, deleted or whose
- *   date has passed are resolved.
- * - When an alert is NEWLY created and the hearing has a responsible person, a
- *   SIMULATED reminder e-mail (template `hearing_reminder`) is generated. E-mail
- *   failures never fail the routine.
+ *   date has passed are resolved, and so are the alerts of hearings whose
+ *   process left the active portfolio (archived or closed).
+ * - A hearing with an active responsible person gets ONE SIMULATED reminder
+ *   e-mail (template `hearing_reminder`). "Already reminded" is read from the
+ *   e-mail table (a non-failed `hearing_reminder` about the hearing generated
+ *   after its last change), not from the open alert: resolving the alert does
+ *   not trigger a second reminder, a run that stopped before sending retries
+ *   the missing ones, a failed generation is retried on the next run, and a
+ *   hearing corrected after the reminder (date, place, responsible…) gets a new
+ *   one with the current data. A rescheduled hearing is a new hearing (new id)
+ *   and is reminded again. E-mail failures never fail the routine.
  */
 export async function runHearingAlertsRoutine(rc: RoutineContext): Promise<string> {
   const db = getDb();
@@ -32,14 +43,28 @@ export async function runHearingAlertsRoutine(rc: RoutineContext): Promise<strin
   const upcoming = await listScheduledHearingsForAlerts(rc.organizationId, now, until);
   const keys = upcoming.map((h) => hearingAlertKey(h.id));
 
-  // Which of them already have an open alert (to send the reminder only once).
-  const existing = keys.length
+  // Which of them were already reminded since their last change (see header).
+  const hearingIds = upcoming.map((h) => h.id);
+  const reminded = hearingIds.length
     ? await db
-        .select({ key: alerts.dedupeKey })
-        .from(alerts)
-        .where(and(eq(alerts.organizationId, rc.organizationId), isNull(alerts.resolvedAt), inArray(alerts.dedupeKey, keys)))
+        .selectDistinct({ id: emailMessages.entityId })
+        .from(emailMessages)
+        .innerJoin(
+          hearings,
+          and(eq(hearings.id, emailMessages.entityId), eq(hearings.organizationId, rc.organizationId)),
+        )
+        .where(
+          and(
+            eq(emailMessages.organizationId, rc.organizationId),
+            eq(emailMessages.template, "hearing_reminder"),
+            eq(emailMessages.entityType, "hearing"),
+            inArray(emailMessages.entityId, hearingIds),
+            ne(emailMessages.status, "failed"),
+            gte(emailMessages.createdAt, hearings.updatedAt),
+          ),
+        )
     : [];
-  const alreadyOpen = new Set(existing.map((r) => r.key));
+  const alreadyReminded = new Set(reminded.map((r) => r.id));
 
   const toNotify: typeof upcoming = [];
   for (const h of upcoming) {
@@ -56,13 +81,13 @@ export async function runHearingAlertsRoutine(rc: RoutineContext): Promise<strin
       organizationId: rc.organizationId,
       type: "hearing_upcoming",
       severity: days <= 1 ? "critical" : "warning",
-      title: clip(`Audiência ${relative}: ${h.processNumber} — ${when}`, 300),
-      message: clip(`${kind} (${mode}) em ${when} no processo ${h.processNumber} — ${h.processTitle}.${where}${who}`, 2000),
+      title: clip(`Audiência ${relative}: ${h.processNumber}, ${when}`, 300),
+      message: clip(`${kind} (${mode}) em ${when} no processo ${h.processNumber} (${h.processTitle}).${where}${who}`, 2000),
       entityType: "hearing",
       entityId: h.id,
       dedupeKey: key,
     });
-    if (!alreadyOpen.has(key) && h.responsibleId && h.responsibleActive) toNotify.push(h);
+    if (!alreadyReminded.has(h.id) && h.responsibleId && h.responsibleActive) toNotify.push(h);
   }
 
   const resolved = await resolveStaleAlerts(rc.organizationId, ["hearing_upcoming"], keys);
@@ -91,7 +116,7 @@ export async function runHearingAlertsRoutine(rc: RoutineContext): Promise<strin
             scheduledAt: h.scheduledAt.toISOString(),
             location: h.location,
           },
-          linkPath: `/processos/${h.processId}?aba=audiencias`,
+          linkPath: processTabUrl(h.processId, "prazos-e-audiencias", PROCESS_SECTION_IDS.hearings),
           processId: h.processId,
           entity: { type: "hearing", id: h.id },
         });

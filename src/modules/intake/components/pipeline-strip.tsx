@@ -1,11 +1,10 @@
 import { ChevronRight } from "lucide-react";
 import Link from "next/link";
-import { INTAKE_STATUS_LABELS, type IntakeStatus } from "@/domain/enums";
 import { formatNumber } from "@/lib/format";
 import { buildHref, type SearchParams } from "@/lib/search-params";
 import { TONE_CLASSES } from "@/lib/tones";
 import { cn } from "@/lib/utils";
-import { INTAKE_STATUS_TONES, PIPELINE_STATUSES } from "../status";
+import { EFFECTIVE_INTAKE_STATUS_LABELS, INTAKE_STATUS_TONES, PIPELINE_STATUSES, type EffectiveIntakeStatus } from "../status";
 
 function Chip({
   href,
@@ -50,8 +49,8 @@ export function PipelineStrip({
   active,
   sp,
 }: {
-  counts: Record<IntakeStatus, number>;
-  active: IntakeStatus | undefined;
+  counts: Record<EffectiveIntakeStatus, number>;
+  active: EffectiveIntakeStatus | undefined;
   sp: SearchParams;
 }) {
   const total = Object.entries(counts)
@@ -68,7 +67,7 @@ export function PipelineStrip({
             {i > 0 ? <ChevronRight aria-hidden="true" className="size-3.5 text-slate-400" /> : <span aria-hidden="true" className="mx-1 h-4 w-px bg-border" />}
             <Chip
               href={buildHref("/entrada", sp, { status: s, pagina: null })}
-              label={INTAKE_STATUS_LABELS[s]}
+              label={EFFECTIVE_INTAKE_STATUS_LABELS[s]}
               count={counts[s] ?? 0}
               active={active === s}
               tone={INTAKE_STATUS_TONES[s]}
@@ -78,8 +77,17 @@ export function PipelineStrip({
         <li className="flex items-center gap-1.5">
           <span aria-hidden="true" className="mx-1 h-4 w-px bg-border" />
           <Chip
+            href={buildHref("/entrada", sp, { status: "brief_rejected", pagina: null })}
+            label={EFFECTIVE_INTAKE_STATUS_LABELS.brief_rejected}
+            count={counts.brief_rejected ?? 0}
+            active={active === "brief_rejected"}
+            tone={INTAKE_STATUS_TONES.brief_rejected}
+          />
+        </li>
+        <li className="flex items-center gap-1.5">
+          <Chip
             href={buildHref("/entrada", sp, { status: "failed", pagina: null })}
-            label={INTAKE_STATUS_LABELS.failed}
+            label={EFFECTIVE_INTAKE_STATUS_LABELS.failed}
             count={counts.failed ?? 0}
             active={active === "failed"}
             tone="danger"

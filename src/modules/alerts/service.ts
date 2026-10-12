@@ -1,22 +1,29 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, notInArray, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import type { AlertSeverity, AlertType, EntityType } from "@/domain/enums";
 import { ALERT_SEVERITIES, ALERT_TYPES, ENTITY_TYPES } from "@/domain/enums";
 import { entityHref, normalizePage, type EntityRef, type Page, type Paginated } from "@/domain/entities";
 import type { AuthContext } from "@/server/auth/context";
-import { entityReferenceWhere } from "@/server/auth/access";
-import { assertCan, can } from "@/server/auth/permissions";
+import { entityReferenceWhere, REFERENCE_ENTITY_TYPES, type ReferenceEntityType } from "@/server/auth/access";
+import { assertCan, can, type Permission } from "@/server/auth/permissions";
 import { getDb, type DbOrTx } from "@/server/db/client";
 import { alerts, hearings, processGuarantees, processValuations, settlements, users } from "@/server/db/schema";
 import { recordAudit } from "@/server/services/audit";
 import { NotFoundError, ValidationError } from "@/server/lib/errors";
+import {
+  PROCESS_SECTION_IDS,
+  processTabUrl,
+  type ProcessSectionId,
+  type ProcessTabKey,
+} from "@/modules/processes/tabs";
 import { ALERT_AREAS, ALERT_TYPES_BY_AREA, alertAreaOf, type AlertArea } from "./areas";
 
 /**
  * Preventive alerts and the "painel de pendências" (TE-05). Created by routines
  * and services through `upsertAlert` (system), deduplicated while open by
- * `dedupeKey`. Visibility follows the referenced entity (entityReferenceWhere).
+ * `dedupeKey`. Visibility follows the referenced entity (entityReferenceWhere)
+ * AND the read permission of its module (`visibleAlertsWhere`).
  */
 
 export type AlertItem = {
@@ -63,29 +70,46 @@ const DIRECT_LINKABLE: ReadonlySet<string> = new Set([
   "analysis",
 ]);
 
-/** Process-owned entities: the alert links to a tab of the process page. */
-const PROCESS_CHILD_TABS: Partial<Record<EntityType, string>> = {
-  hearing: "audiencias",
-  settlement: "acordos",
-  guarantee: "valores",
-  valuation: "valores",
+/** Tab of the process page and, when the content is not at its top, the section anchor. */
+type ProcessTabTarget = { tab: ProcessTabKey; section: ProcessSectionId | null };
+
+/**
+ * Process-owned entities: the alert links to the tab (and section) of the process
+ * page that shows the entity (keys of MODULE_CONTRACTS "Process detail tabs").
+ */
+const PROCESS_CHILD_TABS: Partial<Record<EntityType, ProcessTabTarget>> = {
+  hearing: { tab: "prazos-e-audiencias", section: PROCESS_SECTION_IDS.hearings },
+  settlement: { tab: "valores-e-acordos", section: PROCESS_SECTION_IDS.settlements },
+  // Values (with the guarantees and the valuation history) open the "Valores e acordos" tab.
+  guarantee: { tab: "valores-e-acordos", section: null },
+  valuation: { tab: "valores-e-acordos", section: null },
 };
 
-/** Alert types about a process whose natural destination is a specific process tab. */
-const PROCESS_TAB_BY_ALERT_TYPE: Partial<Record<AlertType, string>> = {
-  valuation_pending_review: "valores",
-  enforcement_without_value: "valores",
+/**
+ * Alert types about a process whose natural destination is a specific tab (and
+ * section) of the process page. Other `legal_process` alerts open the default tab.
+ */
+const PROCESS_TAB_BY_ALERT_TYPE: Partial<Record<AlertType, ProcessTabTarget>> = {
+  valuation_pending_review: { tab: "valores-e-acordos", section: null },
+  enforcement_without_value: { tab: "valores-e-acordos", section: null },
+  // The alert asks to review the risk classification: its card in "Valores e acordos"
+  // (the claims panel that changed it is in the same tab, `#pedidos`).
+  claims_risk_review: { tab: "valores-e-acordos", section: PROCESS_SECTION_IDS.risk },
+  snapshot_close_blocked: { tab: "valores-e-acordos", section: PROCESS_SECTION_IDS.risk },
+  court_movement_relevant: { tab: "partes-e-andamento", section: PROCESS_SECTION_IDS.timeline },
+  court_hearing_designated: { tab: "prazos-e-audiencias", section: PROCESS_SECTION_IDS.hearings },
 };
 
 /**
  * Link of an alert whose entity has its own route (no database lookup).
  * Returns null for process-owned entities (hearing, settlement, guarantee,
- * valuation) — those are resolved in batch by `resolveAlertHrefs`.
+ * valuation): those are resolved in batch by `resolveAlertHrefs`.
  */
 export function alertHref(entityType: EntityType, entityId: string, type?: AlertType): string | null {
   if (entityType === "legal_process") {
-    const tab = type ? PROCESS_TAB_BY_ALERT_TYPE[type] : undefined;
-    return tab ? `/processos/${entityId}?aba=${tab}` : `/processos/${entityId}`;
+    const target = type ? PROCESS_TAB_BY_ALERT_TYPE[type] : undefined;
+    if (!target) return `/processos/${entityId}`;
+    return processTabUrl(entityId, target.tab, target.section);
   }
   if (entityType === "deadline" && type === "deadline_pending_validation") return `/prazos?aba=validacao&prazo=${entityId}`;
   if (entityType === "case_brief") return `/analises-preliminares/${entityId}`;
@@ -94,25 +118,54 @@ export function alertHref(entityType: EntityType, entityId: string, type?: Alert
   return null;
 }
 
+export type AlertLinkRow = { type: AlertType; entityType: EntityType; entityId: string };
+
+/**
+ * Key of ONE alert's link in the map returned by `resolveAlertHrefs`. The link
+ * depends on the alert type (a process with a relevant movement and a
+ * designated hearing has two alerts that open different tabs), so callers look
+ * links up by this key, never by the entity alone.
+ */
+export function alertHrefKey(r: AlertLinkRow): string {
+  return `${r.type}@${r.entityType}:${r.entityId}`;
+}
+
 /**
  * Links for a batch of alerts: one query per process-owned entity type present
  * (hearing / settlement / guarantee / valuation → process id), scoped to the
- * organization. Keyed by `${entityType}:${entityId}`.
+ * organization. Read each alert's link with `alertHrefKey(row)`.
+ *
+ * Also keyed by `${entityType}:${entityId}` (deprecated, for callers not yet
+ * migrated): the link shared by every alert of that entity in the batch or,
+ * when they differ, the entity's own link without a tab (`alertHref` without
+ * type), never the tab of another alert type.
  */
 export async function resolveAlertHrefs(
   organizationId: string,
-  rows: { type: AlertType; entityType: EntityType; entityId: string }[],
+  rows: readonly AlertLinkRow[],
   db: DbOrTx = getDb(),
 ): Promise<Map<string, string | null>> {
   const out = new Map<string, string | null>();
   const pending: Partial<Record<EntityType, Set<string>>> = {};
+  const childRows: AlertLinkRow[] = [];
+  /** Entity key -> link of each of its alerts (direct links). */
+  const byEntity = new Map<string, Set<string | null>>();
   for (const r of rows) {
-    const key = `${r.entityType}:${r.entityId}`;
     if (PROCESS_CHILD_TABS[r.entityType]) {
       (pending[r.entityType] ??= new Set()).add(r.entityId);
+      childRows.push(r);
       continue;
     }
-    if (!out.has(key)) out.set(key, alertHref(r.entityType, r.entityId, r.type));
+    const href = alertHref(r.entityType, r.entityId, r.type);
+    out.set(alertHrefKey(r), href);
+    const entityKey = `${r.entityType}:${r.entityId}`;
+    let links = byEntity.get(entityKey);
+    if (!links) byEntity.set(entityKey, (links = new Set()));
+    links.add(href);
+  }
+  for (const [entityKey, links] of byEntity) {
+    const [entityType, entityId] = entityKey.split(":") as [EntityType, string];
+    out.set(entityKey, links.size === 1 ? [...links][0] : alertHref(entityType, entityId));
   }
 
   const lookups: { type: EntityType; run: (ids: string[]) => Promise<{ id: string; processId: string }[]> }[] = [
@@ -156,12 +209,15 @@ export async function resolveAlertHrefs(
       if (!ids || ids.size === 0) return;
       const found = await run([...ids]);
       const byId = new Map(found.map((f) => [f.id, f.processId]));
+      const target = PROCESS_CHILD_TABS[type]!;
       for (const id of ids) {
         const processId = byId.get(id);
-        out.set(`${type}:${id}`, processId ? `/processos/${processId}?aba=${PROCESS_CHILD_TABS[type]}` : null);
+        out.set(`${type}:${id}`, processId ? processTabUrl(processId, target.tab, target.section) : null);
       }
     }),
   );
+  // Process-owned entities: the tab depends on the entity type only.
+  for (const r of childRows) out.set(alertHrefKey(r), out.get(`${r.entityType}:${r.entityId}`) ?? null);
   return out;
 }
 
@@ -171,8 +227,49 @@ export async function resolveAlertHrefs(
 
 const resolverUser = alias(users, "alert_resolver");
 
-function visibleAlertsWhere(ctx: AuthContext): SQL {
-  return and(eq(alerts.organizationId, ctx.organizationId), entityReferenceWhere(ctx, alerts.entityType, alerts.entityId))!;
+/**
+ * Read permission required to see an alert about each entity type (rule 9 of
+ * access.ts): the alert title and message describe the referenced record, so
+ * a role without access to the module (e.g. the accountant and contracts,
+ * deadlines, tasks and AI analyses; the executive and preliminary analyses)
+ * does not see its alerts. Types missing here are never visible.
+ */
+export const ALERT_ENTITY_READ_PERMISSION: Readonly<Record<ReferenceEntityType, Permission>> = {
+  legal_process: "process:read",
+  hearing: "process:read",
+  intake: "process:read",
+  occurrence: "occurrence:read",
+  contract: "contract:read",
+  document: "document:read",
+  task: "task:read",
+  deadline: "deadline:read",
+  analysis: "analysis:read",
+  case_brief: "brief:read",
+  valuation: "contingency:read",
+  guarantee: "contingency:read",
+  settlement: "contingency:read",
+};
+
+/** Entity types whose alerts `ctx` may see (by module read permission). */
+export function alertEntityTypesFor(ctx: AuthContext): ReferenceEntityType[] {
+  return REFERENCE_ENTITY_TYPES.filter((type) => can(ctx, ALERT_ENTITY_READ_PERMISSION[type]));
+}
+
+/**
+ * Alerts visible to `ctx`: organization + read permission on the referenced
+ * module + row visibility of the referenced entity. Every alert read (center,
+ * area counts, header bell, daily digest, dashboard) must use it so the
+ * numbers agree. `onlyTypes` narrows the entity types further (e.g. to the
+ * types present among the open alerts) without ever widening them.
+ */
+export function visibleAlertsWhere(ctx: AuthContext, onlyTypes?: readonly EntityType[]): SQL {
+  const permitted = alertEntityTypesFor(ctx);
+  const types = onlyTypes ? permitted.filter((t) => onlyTypes.includes(t)) : permitted;
+  return and(
+    eq(alerts.organizationId, ctx.organizationId),
+    types.length ? inArray(alerts.entityType, types) : sql`false`,
+    entityReferenceWhere(ctx, alerts.entityType, alerts.entityId, { types }),
+  )!;
 }
 
 const SEVERITY_RANK = sql`case ${alerts.severity} when 'critical' then 0 when 'warning' then 1 else 2 end`;
@@ -204,7 +301,7 @@ async function mapAlertRows(ctx: AuthContext, rows: AlertRow[]): Promise<AlertIt
     message: a.message,
     entityType: a.entityType,
     entityId: a.entityId,
-    href: hrefs.get(`${a.entityType}:${a.entityId}`) ?? null,
+    href: hrefs.get(alertHrefKey(a)) ?? null,
     createdAt: a.createdAt,
     resolvedAt: a.resolvedAt,
     resolvedByName: resolvedByName ?? null,
@@ -344,13 +441,7 @@ export async function resolveAlert(ctx: AuthContext, id: string): Promise<void> 
     const [alert] = await tx
       .select()
       .from(alerts)
-      .where(
-        and(
-          eq(alerts.id, parsed.data),
-          eq(alerts.organizationId, ctx.organizationId),
-          entityReferenceWhere(ctx, alerts.entityType, alerts.entityId),
-        ),
-      );
+      .where(and(eq(alerts.id, parsed.data), visibleAlertsWhere(ctx)));
     if (!alert) throw new NotFoundError("Alerta não encontrado ou sem permissão de acesso.");
     if (alert.resolvedAt) return;
     await tx
@@ -382,7 +473,11 @@ const upsertSchema = z.object({
   dedupeKey: z.string().trim().min(1).max(300),
 });
 
-/** System: creates the alert, or refreshes title/message/severity of the open alert with the same dedupe key. */
+/**
+ * System: creates the alert, or refreshes title/message/severity/type of the
+ * open alert with the same dedupe key. An open alert whose content did not
+ * change is not rewritten (daily routines re-upsert every condition).
+ */
 export async function upsertAlert(
   input: {
     organizationId: string;
@@ -406,7 +501,17 @@ export async function upsertAlert(
       target: [alerts.organizationId, alerts.dedupeKey],
       targetWhere: sql`resolved_at is null`,
       set: { title: v.title, message: v.message, severity: v.severity, type: v.type },
+      setWhere: sql`alerts.title is distinct from excluded.title or alerts.message is distinct from excluded.message or alerts.severity is distinct from excluded.severity or alerts.type is distinct from excluded.type`,
     });
+}
+
+/**
+ * `column IN (<keys>)` with the whole list bound as ONE jsonb parameter: a
+ * bound `IN ($1, …, $n)` list fails above 65,535 items (16-bit parameter
+ * count of the PostgreSQL wire protocol), which a large portfolio can reach.
+ */
+function inKeyList(column: typeof alerts.dedupeKey, keys: readonly string[]): SQL {
+  return sql`${column} in (select jsonb_array_elements_text(${JSON.stringify(keys)}::jsonb))`;
 }
 
 /** System: resolves the open alerts with the given dedupe keys. Returns how many were resolved. */
@@ -419,7 +524,7 @@ export async function resolveAlertsByDedupeKeys(
   const rows = await db
     .update(alerts)
     .set({ resolvedAt: new Date() })
-    .where(and(eq(alerts.organizationId, organizationId), inArray(alerts.dedupeKey, keys), isNull(alerts.resolvedAt)))
+    .where(and(eq(alerts.organizationId, organizationId), isNull(alerts.resolvedAt), inKeyList(alerts.dedupeKey, keys)))
     .returning({ id: alerts.id });
   return rows.length;
 }
@@ -442,22 +547,37 @@ export async function resolveStaleAlerts(
         eq(alerts.organizationId, organizationId),
         inArray(alerts.type, types),
         isNull(alerts.resolvedAt),
-        keepKeys.length ? notInArray(alerts.dedupeKey, keepKeys) : undefined,
+        keepKeys.length ? sql`not (${inKeyList(alerts.dedupeKey, keepKeys)})` : undefined,
       ),
     )
     .returning({ id: alerts.id });
   return rows.length;
 }
 
-/** Open alerts visible to ctx (header bell). */
+/**
+ * Open alerts visible to ctx (header bell, rendered on every page of the app,
+ * and the daily digest). Same scope as the alerts center; to keep it cheap the
+ * visibility condition is built only for the entity types that actually have
+ * open alerts in the organization (and that ctx may read).
+ */
 export async function countOpenAlerts(ctx: AuthContext): Promise<{ total: number; critical: number }> {
   if (!can(ctx, "dashboard:read")) return { total: 0, critical: 0 };
-  const [row] = await getDb()
+  const permitted = alertEntityTypesFor(ctx);
+  if (permitted.length === 0) return { total: 0, critical: 0 };
+  const db = getDb();
+  const present = await db
+    .selectDistinct({ type: alerts.entityType })
+    .from(alerts)
+    .where(
+      and(eq(alerts.organizationId, ctx.organizationId), isNull(alerts.resolvedAt), inArray(alerts.entityType, permitted)),
+    );
+  if (present.length === 0) return { total: 0, critical: 0 };
+  const [row] = await db
     .select({
       total: sql<number>`count(*)::int`,
       critical: sql<number>`count(*) filter (where ${alerts.severity} = 'critical')::int`,
     })
     .from(alerts)
-    .where(and(visibleAlertsWhere(ctx), isNull(alerts.resolvedAt)));
+    .where(and(isNull(alerts.resolvedAt), visibleAlertsWhere(ctx, present.map((p) => p.type))));
   return { total: row?.total ?? 0, critical: row?.critical ?? 0 };
 }

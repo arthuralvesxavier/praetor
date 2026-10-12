@@ -277,7 +277,8 @@ function ImportScreen() {
         </ul>
       </MiniCard>
       <div className="flex flex-wrap items-center justify-between gap-1.5">
-        <p className="text-[9px] text-muted-foreground">Erro: linha não importada. Alerta: conferir.</p>
+        {/* A repeated number is a warning in the parser, but its line is skipped like an error. */}
+        <p className="text-[9px] text-muted-foreground">Erro e número repetido: linha não importada. Demais alertas: conferir.</p>
         <span className="flex gap-1.5">
           <MiniButton variant="outline">Exportar CSV</MiniButton>
           <MiniButton>Confirmar importação</MiniButton>
@@ -532,7 +533,7 @@ function ClosingScreen() {
           hint={`Apurado em ${SAMPLE_TOTALS.assessed} de ${SAMPLE_TOTALS.processes}`}
           tone="primary"
         />
-        <MiniStat label="Provisão oficial" value="R$ 97.450,00" hint="Classificação provável" tone="danger" />
+        <MiniStat label="Provisão apurada" value="R$ 97.450,00" hint="Classificação provável" tone="danger" />
       </div>
       <MiniCard>
         <MiniCardHeader title="Movimentação desde 08/2026" />

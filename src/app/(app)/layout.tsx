@@ -4,10 +4,11 @@ import type { ReactNode } from "react";
 import { LogoMark } from "@/components/brand/logo";
 import { DemoBanner } from "@/components/layout/demo-banner";
 import { GlobalSearch } from "@/components/layout/global-search";
-import { AiModeIndicator, AlertsBell, SimulatedEmailBadge } from "@/components/layout/header-indicators";
+import { AlertsBell, SimulationsMenu } from "@/components/layout/header-indicators";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { filterNavGroups } from "@/components/layout/nav-utils";
 import { loadShellData } from "@/components/layout/shell-data";
+import { simulationItems } from "@/components/layout/shell-format";
 import { Sidebar, SidebarContent, type ShellNavGroup } from "@/components/layout/sidebar";
 import { SkipLink } from "@/components/layout/skip-link";
 import { UserMenu } from "@/components/layout/user-menu";
@@ -41,12 +42,14 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       </span>
       <span className="mt-0.5 block">
         {ctx.isDemoOrganization
-          ? "Ambiente demonstrativo · dados fictícios · IA e e-mail simulados"
+          ? "Ambiente de demonstração · dados fictícios"
           : "Praetor · gestão jurídica corporativa"}
       </span>
     </>
   );
   const canSearch = can(ctx, "process:read");
+  // One "Simulações" badge for every simulated provider; links only to screens the user can open.
+  const simulations = simulationItems(shell, (p) => can(ctx, p));
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -62,7 +65,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             </MobileNav>
             <Link
               href="/dashboard"
-              aria-label="Praetor — ir para o painel executivo"
+              aria-label="Praetor: ir para o painel executivo"
               className="inline-flex shrink-0 rounded-md p-1 focus-visible:outline-2 focus-visible:outline-ring lg:hidden"
             >
               <LogoMark className="size-6" />
@@ -86,16 +89,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
                   <Search aria-hidden="true" className="size-5" />
                 </Link>
               ) : null}
-              {shell.aiMode ? (
-                <AiModeIndicator
-                  mode={shell.aiMode}
-                  linked={can(ctx, "analysis:read")}
-                  className="hidden xl:inline-flex"
-                />
-              ) : null}
-              {shell.emailMode ? (
-                <SimulatedEmailBadge mode={shell.emailMode} className="hidden xl:inline-flex" />
-              ) : null}
+              {simulations.length > 0 ? <SimulationsMenu items={simulations} /> : null}
               {shell.alerts ? <AlertsBell counts={shell.alerts} /> : null}
               <UserMenu
                 name={ctx.name}

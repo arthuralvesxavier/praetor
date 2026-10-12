@@ -29,7 +29,7 @@ export const BRAZILIAN_STATES = [
   ["TO", "Tocantins"],
 ] as const;
 
-export const STATE_OPTIONS = BRAZILIAN_STATES.map(([value, name]) => ({ value, label: `${value} — ${name}` }));
+export const STATE_OPTIONS = BRAZILIAN_STATES.map(([value, name]) => ({ value, label: `${value} (${name})` }));
 
 /** "Palmas" + "TO" -> "Palmas/TO"; missing parts are omitted. */
 export function cityWithState(city: string | null | undefined, state: string | null | undefined): string | null {

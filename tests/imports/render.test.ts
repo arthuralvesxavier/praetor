@@ -138,7 +138,7 @@ describe("pages", () => {
     const list = await render(ImportBatchesPage as unknown as AnyPage);
     expect(list).toContain("Importação de planilhas");
     expect(list).toContain("carteira-ficticia.xlsx");
-    expect(list).toContain("Analisada — aguardando confirmação");
+    expect(list).toContain("Analisada, aguardando confirmação");
     const form = await render(NewImportPage as unknown as AnyPage);
     expect(form).toContain("Planilha da carteira");
     expect(form).toContain(DEMO_CLIENT);
@@ -150,7 +150,7 @@ describe("pages", () => {
     session.current = fx.ctx.admin;
     const page = ImportBatchPage as unknown as AnyPage;
     const summary = await render(page, { id: batchId });
-    expect(summary).toContain("Análise concluída — nada foi gravado na carteira ainda");
+    expect(summary).toContain("Análise concluída: nada foi gravado na carteira ainda");
     expect(summary).toContain("Confirmar importação");
     expect(summary).toContain("Processos detectados");
     expect(summary).toContain("Abas detectadas");
@@ -162,14 +162,20 @@ describe("pages", () => {
     const rows = await render(page, { id: batchId }, { aba: "linhas" });
     expect(rows).toContain("Valor liquidado");
     expect(rows).toContain("Não apurado");
-    expect(rows).toContain("Com erro — não importada");
+    expect(rows).toContain("Com erro (não importada)");
     const errorsOnly = await render(page, { id: batchId }, { aba: "linhas", nivel: "error" });
-    expect(errorsOnly).toContain("Com erro — não importada");
-    expect(errorsOnly).toMatch(/Exibindo <span[^>]*>1<\/span>–<span[^>]*>1<\/span> de <span[^>]*>1<\/span>/);
+    expect(errorsOnly).toContain("Com erro (não importada)");
+    expect(errorsOnly).toMatch(/Exibindo <span[^>]*>1<\/span> a <span[^>]*>1<\/span> de <span[^>]*>1<\/span>/);
 
     const issues = await render(page, { id: batchId }, { aba: "inconsistencias", codigo: "city_non_geographic" });
     expect(issues).toContain("Exportar CSV");
     expect(issues).toContain("não é um município");
+
+    // Audited downloads are plain browser downloads (`download`): a next/link click would request the route twice.
+    const fileLink = summary.match(new RegExp(`<a[^>]*href="/api/imports/${batchId}/file"[^>]*>`))?.[0];
+    expect(fileLink).toContain('download=""');
+    const csvLink = issues.match(new RegExp(`<a[^>]*href="/api/imports/${batchId}/issues[^"]*"[^>]*>`))?.[0];
+    expect(csvLink).toContain('download=""');
 
     const divergences = await render(page, { id: batchId }, { aba: "divergencias" });
     expect(divergences).toContain("A aba consolidada é a base oficial");

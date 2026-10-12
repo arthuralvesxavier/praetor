@@ -126,7 +126,7 @@ beforeAll(async () => {
     number: "0000105-11.2023.5.10.0001",
     processClass: "ATOrd",
     status: "closed",
-    phase: "closed",
+    phase: "knowledge",
     closureReason: "lost_patronage",
     closedAt: "2026-01-10",
   });
@@ -316,7 +316,7 @@ describe("illustrative suggestions", () => {
     const { occurrenceId } = await createOccurrenceFromSuggestion(fx.ctx.admin, "jornada");
     const occ = await getOccurrence(fx.ctx.admin, occurrenceId);
     expect(occ.category).toBe("labor");
-    expect(occ.title).toBe("Inteligência preventiva — Revisão dos controles de jornada");
+    expect(occ.title).toBe("Inteligência preventiva: Revisão dos controles de jornada");
     expect(occ.facts).toContain("[ref: pi:jornada]");
     expect(occ.facts).toContain("Indicador: Pedidos de horas extras ou de intervalos aparecem em 3 processos");
     expect(occ.preventiveOrigin).toEqual({ key: "jornada", indicator: expect.stringContaining("horas extras") });

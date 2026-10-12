@@ -5,6 +5,7 @@ import type { ExposureResult, ProvisionResult } from "@/domain/contingency";
 import type { LossProbability } from "@/domain/enums";
 import { formatMoneyCents } from "@/lib/format";
 import { bool, int, moneyCents, str, strOrNull, strings } from "@/lib/form";
+import { pinnedCorrectionIndex } from "@/modules/indices/policy";
 import { requireActionContext } from "@/server/auth/session";
 import { AppError, toActionError, type ActionResult } from "@/server/lib/errors";
 import { logger } from "@/server/lib/logger";
@@ -107,11 +108,17 @@ export async function reviewValuationAction(_prev: ActionResult | null, formData
     const valuationId = id(formData);
     const decision = (str(formData, "decision") ?? "") as ReviewDecision;
     const processId = await getValuationProcessId(ctx, valuationId);
-    const result = await reviewValuation(ctx, valuationId, {
-      decision,
-      correctedAmountCents: decision === "correct" ? moneyCents(formData, "correctedAmount") : null,
-      note: strOrNull(formData, "note"),
-    });
+    const result = await reviewValuation(
+      ctx,
+      valuationId,
+      {
+        decision,
+        correctedAmountCents: decision === "correct" ? moneyCents(formData, "correctedAmount") : null,
+        note: strOrNull(formData, "note"),
+      },
+      // P1.7: the correction index shown to the reviewer (refused if it changed since).
+      { expectedCorrectionIndex: pinnedCorrectionIndex(formData.get("expectedCorrectionIndex")) },
+    );
     revalidateProcess(processId);
     revalidatePath("/contingencias/revisao");
     const message =
@@ -132,7 +139,13 @@ export async function bulkApproveValuationsAction(_prev: ActionResult | null, fo
   try {
     const ctx = await requireActionContext("contingency:approve");
     const ids = strings(formData, "ids");
-    const result = await bulkApproveValuations(ctx, ids);
+    // P1.7: the correction index shown for each selected row (refused if it changed since).
+    const expected: Record<string, string | null> = {};
+    for (const valuationId of ids) {
+      const pinned = pinnedCorrectionIndex(formData.get(`expectedCorrectionIndex:${valuationId}`));
+      if (pinned !== undefined) expected[valuationId] = pinned;
+    }
+    const result = await bulkApproveValuations(ctx, ids, expected);
     revalidatePath("/contingencias/revisao");
     revalidatePath("/contingencias");
     revalidatePath("/processos/[id]", "page");
@@ -160,13 +173,13 @@ export async function registerExtinctionAction(_prev: ActionResult | null, formD
     revalidateProcess(processId);
     revalidatePath("/contingencias/revisao");
     revalidatePath("/acordos");
-    return {
-      ok: true,
-      message:
-        result.status === "proposed"
-          ? "Quitação proposta: aguarda conferência para zerar o valor liquidado."
-          : "Quitação registrada: valor liquidado oficial zerado (histórico preservado).",
+    const messages: Record<typeof result.outcome, string> = {
+      proposed: "Quitação proposta: aguarda conferência para zerar o valor liquidado.",
+      zeroed: "Quitação registrada: valor liquidado oficial zerado (histórico preservado).",
+      already_zero: "Quitação registrada no histórico: o valor liquidado oficial já era R$ 0,00.",
+      history_only: "Quitação registrada no histórico, sem alterar o valor liquidado em vigor. Confira os valores oficiais do processo.",
     };
+    return { ok: true, message: messages[result.outcome] };
   } catch (err) {
     return fail("registerExtinction", err);
   }
@@ -421,13 +434,26 @@ export async function generateSnapshotAction(_prev: ActionResult | null, formDat
   }
 }
 
+/**
+ * Closes a competência. The "Fechar com justificativa" dialog sends `mode=justified` and the
+ * `justification` field (validated by the service, min. 20 characters); the normal dialog sends
+ * neither, so the close gate (processes without official risk classification) applies.
+ */
 export async function closeSnapshotAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   try {
     const ctx = await requireActionContext("snapshot:close");
     const period = str(formData, "period") ?? "";
-    await closeSnapshot(ctx, period);
+    const justified = str(formData, "mode") === "justified";
+    const result = await closeSnapshot(ctx, period, justified ? { justification: str(formData, "justification") ?? "" } : {});
     revalidatePath("/contingencias/provisao");
-    return { ok: true, message: `Competência ${formatPeriod(period)} fechada. A partir de agora ela é imutável.` };
+    revalidatePath("/alertas");
+    return {
+      ok: true,
+      message: result.override
+        ? `Competência ${formatPeriod(period)} fechada com justificativa (${result.override.unclassifiedCount} processo(s) sem ` +
+          "classificação de risco registrados no fechamento). A partir de agora ela é imutável."
+        : `Competência ${formatPeriod(period)} fechada. A partir de agora ela é imutável.`,
+    };
   } catch (err) {
     return fail("closeSnapshot", err);
   }

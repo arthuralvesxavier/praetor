@@ -18,6 +18,12 @@
  * `--reset` truncates EVERY application table (all organizations) and deletes
  * their stored files before seeding again. All dates are relative to today.
  * The AI runs in demo mode unless SEED_USE_LIVE_AI=true.
+ *
+ * v2: risk classifications (and therefore the computed provision, RN-05) are
+ * registered through the contingency service, and closed processes carry a
+ * closure reason (RN-12). The v2 demo (companies, law firm, spreadsheet
+ * portfolio, contingencies, hearings, intakes, simulated e-mails) is added on
+ * top of this by `npm run db:seed:v2` (scripts/seed-v2.ts).
  */
 import "dotenv/config";
 import "./seed-data/env-setup";
@@ -42,6 +48,8 @@ import {
   occurrences,
   organizations,
   processEvents,
+  processRiskAssessments,
+  processValuations,
   scheduledRoutines,
   tasks,
   teamMembers,
@@ -63,6 +71,8 @@ import {
   reviewAnalysis,
 } from "@/modules/analyses/service";
 import { addComment } from "@/modules/comments/service";
+import { addRiskAssessment } from "@/modules/contingency/risk-service";
+import { reviewValuation } from "@/modules/contingency/service";
 import { addObligation, createContract } from "@/modules/contracts/service";
 import { addDocumentVersion, uploadDocument } from "@/modules/documents/service";
 import { createOccurrence } from "@/modules/occurrences/service";
@@ -263,9 +273,10 @@ async function seedAurora(): Promise<AuroraIds> {
 
   // --- Processes ------------------------------------------------------------
   const processIds = {} as Record<ProcessKey, string>;
+  let approvedClaims = 0;
   for (const p of AURORA_PROCESSES) {
     const actor = ctx(p.createdBy);
-    const { id, occurrenceLinkError } = await createProcess(actor, {
+    const { id, occurrenceLinkError, claimValuationStatus } = await createProcess(actor, {
       number: p.number,
       title: p.title,
       court: p.court,
@@ -273,22 +284,30 @@ async function seedAurora(): Promise<AuroraIds> {
       jurisdiction: p.jurisdiction,
       area: p.area,
       phase: p.phase,
+      instance: p.instance ?? null,
       status: p.status,
       filedAt: rel(p.filedAt),
       closedAt: p.closedAt !== undefined ? rel(p.closedAt) : null,
       unitId: unitIds[p.unit],
       responsibleId: uid(p.responsible),
       claimAmountCents: brl(p.claim),
-      provisionAmountCents: brl(p.provision),
       riskLevel: p.riskLevel,
-      lossProbability: p.lossProbability ?? "",
       riskRationale: p.riskRationale,
+      closureReason: p.closureReason ?? null,
       description: p.description,
       isConfidential: p.isConfidential ?? false,
       fromOccurrenceId: p.fromOccurrence ? occurrenceIds[p.fromOccurrence] : null,
     });
     if (occurrenceLinkError) throw new Error(`Falha ao vincular a ocorrência ao processo ${p.number}: ${occurrenceLinkError}`);
     processIds[p.key] = id;
+    // P0.6: a lawyer's valor da causa is only a proposal (the record stays without it). The gestor
+    // confers it right away, before the risk classification, so the provision is computed from it.
+    if (claimValuationStatus === "proposed") {
+      await approveCreatedClaim(ctx("gestor"), id, p.number);
+      approvedClaims++;
+    }
+    // Risk classification with the responsible lawyer's opinion; the provision follows (RN-05).
+    await seedRiskAssessment(ctx(p.responsible), id, p);
 
     for (const party of p.parties) {
       await addParty(actor, id, {
@@ -308,7 +327,14 @@ async function seedAurora(): Promise<AuroraIds> {
     }
     if (p.imported) await markImported(userContext(userMap.admin), id, p);
   }
-  log(`${AURORA_PROCESSES.length} processos criados (com partes e movimentações).`);
+  log(`${AURORA_PROCESSES.length} processos criados (com partes, movimentações e classificação de risco).`);
+  if (approvedClaims > 0) {
+    log(
+      approvedClaims === 1
+        ? "1 valor da causa informado por advogado foi conferido e oficializado pelo gestor jurídico."
+        : `${approvedClaims} valores da causa informados por advogados foram conferidos e oficializados pelo gestor jurídico.`,
+    );
+  }
 
   // --- Contracts --------------------------------------------------------------
   const contractIds = {} as Record<ContractKey, string>;
@@ -449,6 +475,68 @@ async function markImported(actor: ReturnType<typeof userContext>, processId: st
       },
       tx,
     );
+  });
+}
+
+/**
+ * Approves, as the legal manager, the valor da causa that a lawyer informed when creating a seeded
+ * process (P0.6: it is a PROPOSED claim valuation and the record stays without it until a review).
+ * The review queue does the same (`reviewValuation`): the proposal becomes official with the gestor
+ * as the identified reviewer and `syncProcessMirrors` fills the record.
+ *
+ * The service dates the proposal "today". The demo dates it from the filing BEFORE the review, so
+ * the review's audit entry ("... (data-base <filing>) conferido e oficializado", tab "Histórico")
+ * agrees with the value history; `backdateRecords` then dates its creation and review from the
+ * filing like any other manual claim valuation.
+ */
+async function approveCreatedClaim(reviewer: ReturnType<typeof userContext>, processId: string, number: string) {
+  const db = getDb();
+  const proposals = await db
+    .select({ id: processValuations.id, baseDate: processValuations.baseDate, filedAt: legalProcesses.filedAt })
+    .from(processValuations)
+    .innerJoin(legalProcesses, eq(legalProcesses.id, processValuations.processId))
+    .where(
+      and(
+        eq(processValuations.organizationId, reviewer.organizationId),
+        eq(processValuations.processId, processId),
+        eq(processValuations.kind, "claim"),
+        eq(processValuations.status, "proposed"),
+      ),
+    );
+  if (proposals.length !== 1) {
+    throw new Error(`Esperada 1 proposta de valor da causa no processo ${number}, encontrada(s) ${proposals.length}.`);
+  }
+  const { id, baseDate, filedAt } = proposals[0];
+  if (filedAt && filedAt < baseDate) {
+    await db
+      .update(processValuations)
+      .set({ baseDate: filedAt })
+      .where(and(eq(processValuations.id, id), eq(processValuations.organizationId, reviewer.organizationId)));
+  }
+  const result = await reviewValuation(reviewer, id, {
+    decision: "approve",
+    note: "Conferido na carga de demonstração (dados fictícios).",
+  });
+  if (result.status !== "official") {
+    throw new Error(`O valor da causa do processo ${number} não ficou oficial na conferência (situação "${result.status}").`);
+  }
+}
+
+/**
+ * Official risk classification of a seeded process (contingency service), in
+ * force since the filing date, with the seed's risk rationale as the opinion.
+ * The service computes the provision mirror from it (RN-05).
+ */
+async function seedRiskAssessment(
+  actor: ReturnType<typeof userContext>,
+  processId: string,
+  p: Pick<ProcessSeed, "lossProbability" | "riskRationale" | "filedAt">,
+) {
+  if (!p.lossProbability) return;
+  await addRiskAssessment(actor, processId, {
+    classification: p.lossProbability,
+    opinion: `${p.riskRationale} (parecer fictício de demonstração)`,
+    effectiveFrom: rel(Math.min(0, p.filedAt)),
   });
 }
 
@@ -614,6 +702,26 @@ async function backdateRecords(organizationId: string) {
   await db.execute(sql`
     update ${contracts} set created_at = least(coalesce(${ts("start_date")}, now() - interval '20 days'), now())
     where organization_id = ${organizationId}`);
+  // The valor da causa typed in the process form is dated "today" by the service (a lawyer's value is
+  // also reviewed "today" by the gestor; approveCreatedClaim already moved its data-base to the
+  // filing); date it, its creation and its review from the filing so past positions and monthly
+  // closes see it (same backdating as created_at above). A row still waiting for review keeps no
+  // review date.
+  await db.execute(sql`
+    update ${processValuations} v
+    set base_date = p.filed_at,
+        created_at = p.created_at,
+        reviewed_at = case when v.reviewed_at is null then null else p.created_at end
+    from ${legalProcesses} p
+    where v.process_id = p.id and v.organization_id = ${organizationId} and p.organization_id = ${organizationId}
+      and v.kind = 'claim' and v.source = 'manual' and p.filed_at is not null
+      and v.base_date >= p.filed_at and v.created_at > p.created_at`);
+  await db.execute(sql`
+    update ${processRiskAssessments} r
+    set created_at = p.created_at, reviewed_at = p.created_at
+    from ${legalProcesses} p
+    where r.process_id = p.id and r.organization_id = ${organizationId} and p.organization_id = ${organizationId}
+      and r.effective_from = p.filed_at`);
 }
 
 // ---------------------------------------------------------------------------
@@ -657,17 +765,18 @@ async function seedOutra(): Promise<string> {
       jurisdiction: p.jurisdiction,
       area: p.area,
       phase: p.phase,
+      instance: p.instance ?? null,
       status: p.status,
       filedAt: rel(p.filedAt),
       unitId: unit.id,
       responsibleId: admin.id,
       claimAmountCents: brl(p.claim),
-      provisionAmountCents: brl(p.provision),
       riskLevel: p.riskLevel,
-      lossProbability: p.lossProbability ?? "",
       riskRationale: p.riskRationale,
+      closureReason: p.closureReason ?? null,
       description: p.description,
     });
+    await seedRiskAssessment(ctx, id, p);
     for (const party of p.parties) {
       await addParty(ctx, id, { name: party.name, role: party.role, isClient: party.isClient ?? false });
     }
@@ -709,8 +818,11 @@ async function printSummary(auroraId: string, outraId: string) {
     ["Usuários", await n(db.select({ n: count() }).from(users).where(eq(users.organizationId, org)))],
     ["Equipes", await n(db.select({ n: count() }).from(teams).where(eq(teams.organizationId, org)))],
     ["Processos", await countWhere(legalProcesses, org)],
+    ["  com valor da causa", await n(db.select({ n: count() }).from(legalProcesses).where(and(eq(legalProcesses.organizationId, org), isNull(legalProcesses.deletedAt), sql`${legalProcesses.claimAmountCents} is not null`)))],
     ["  importados", await n(db.select({ n: count() }).from(legalProcesses).where(and(eq(legalProcesses.organizationId, org), eq(legalProcesses.dataOrigin, "imported"))))],
     ["  confidenciais", await n(db.select({ n: count() }).from(legalProcesses).where(and(eq(legalProcesses.organizationId, org), eq(legalProcesses.isConfidential, true))))],
+    ["  com classificação de risco", await n(db.select({ n: count() }).from(processRiskAssessments).where(and(eq(processRiskAssessments.organizationId, org), eq(processRiskAssessments.status, "official"))))],
+    ["  com provisão calculada", await n(db.select({ n: count() }).from(legalProcesses).where(and(eq(legalProcesses.organizationId, org), sql`${legalProcesses.provisionAmountCents} is not null`)))],
     ["Movimentações", await n(db.select({ n: count() }).from(processEvents).where(eq(processEvents.organizationId, org)))],
     ["Ocorrências", await countWhere(occurrences, org)],
     ["Contratos", await countWhere(contracts, org)],
@@ -732,19 +844,24 @@ async function printSummary(auroraId: string, outraId: string) {
 
   const ai = getAiRuntimeInfo();
   console.log("");
-  console.log(`Resumo — ${AURORA_ORG.name}`);
+  console.log(`Resumo: ${AURORA_ORG.name}`);
   for (const [label, value] of lines) console.log(`  ${label.padEnd(32, ".")} ${value}`);
-  console.log(`Resumo — ${OUTRA_ORG.name}: ${outraProcesses} processos, 1 ocorrência, 1 documento.`);
+  console.log(`Resumo: ${OUTRA_ORG.name}, ${outraProcesses} processos, 1 ocorrência, 1 documento.`);
   console.log(
     `IA: ${ai.mode === "demo" ? "modo demonstrativo (regras simples, sem IA real; resultados identificados como demonstrativos)" : `${ai.provider} (${ai.model})`}.`,
   );
   console.log("");
-  console.log(`Contas de demonstração (senha para todas: ${DEMO_PASSWORD})`);
+  console.log(`Contas de demonstração criadas (senha para todas: ${DEMO_PASSWORD})`);
   for (const a of DEMO_ACCOUNTS) {
+    if (!(a.email in AURORA_USERS) && a.email !== OUTRA_ADMIN_EMAIL) continue;
     console.log(`  ${a.email.padEnd(38)} ${ROLE_LABELS[a.role].padEnd(16)} ${a.description}`);
   }
   console.log("");
-  console.log("Todos os dados são fictícios. Para recriar do zero: npm run db:seed -- --reset");
+  console.log("Para a demonstração da v2 (carteira da planilha fictícia, contingências, audiências, entrada de processos");
+  console.log("e e-mails simulados, com as contas de contabilidade, auditoria, escritório externo e advogados regionais):");
+  console.log("  npm run db:seed:v2   (o npm run db:setup já executa os dois)");
+  console.log("");
+  console.log("Todos os dados são fictícios. Para recriar do zero: npm run db:seed -- --reset && npm run db:seed:v2");
 }
 
 // ---------------------------------------------------------------------------

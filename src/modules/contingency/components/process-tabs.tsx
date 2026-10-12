@@ -6,13 +6,18 @@ import { Callout } from "@/components/ui/callout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { OriginBadge } from "@/components/ui/origin-badge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatBp } from "@/domain/contingency";
 import {
+  CLAIM_RISK_LINK_KIND_LABELS,
+  CORRECTION_INDEX_LABELS,
   GUARANTEE_KIND_LABELS,
   PROCESS_INSTANCE_LABELS,
   VALUATION_KIND_LABELS,
   VALUATION_SOURCE_LABELS,
+  type ClaimRiskLinkKind,
+  type CorrectionIndex,
 } from "@/domain/enums";
 import { formatDate, formatDateTime, formatMoneyCents, todayISO } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -20,6 +25,14 @@ import type { AuthContext } from "@/server/auth/context";
 import { can } from "@/server/auth/permissions";
 import { NotFoundError } from "@/server/lib/errors";
 import { listUserOptions } from "@/modules/admin/service";
+import { claimsRiskAttribution } from "@/modules/claims/labels";
+import { getClaimRiskLinkKinds } from "@/modules/claims/service";
+import { CorrectionIndexDialog } from "@/modules/indices/components/correction-index-dialog";
+import { ValuationOriginalValue, ValuationUpdatedValue } from "@/modules/indices/components/valuation-values";
+import { correctionIndexChangeFor } from "@/modules/indices/policy";
+import { RISK_SECTION_ID } from "@/modules/processes/decision-band";
+import { PROCESS_SECTION_IDS, processTabUrl } from "@/modules/processes/tabs";
+import { getValuationUpdates } from "@/modules/indices/service";
 import { listGuarantees } from "../guarantee-service";
 import { NOT_INFORMED } from "../labels";
 import { listRiskAssessments, type RiskAssessmentItem } from "../risk-service";
@@ -31,6 +44,7 @@ import {
   listProcessDocumentOptions,
   listValuations,
   type ProcessContingencySummary,
+  type ValuationItem,
 } from "../service";
 import { listProcessSettlements, type SettlementItem } from "../settlement-service";
 import { InlineAction } from "./action-dialog";
@@ -59,6 +73,9 @@ import {
   SettlementTermsDialog,
 } from "./settlement-forms";
 import { ExtinctionDialog, PositionAtForm, ValuationDialog } from "./valuation-forms";
+import { exposureBreakdown } from "./exposure-breakdown";
+import { NetExposurePanel } from "./net-exposure";
+import { collapseIndexSwaps, type ValueSeriesMeta, type ValueSeriesPoint } from "./value-series";
 import { suggestRiskAssessmentAction } from "../actions";
 
 /**
@@ -98,12 +115,6 @@ function Tile({ label, children, hint, className }: { label: string; children: R
   );
 }
 
-function exposureHint(s: ProcessContingencySummary): string {
-  if (s.exposure.basis === "liquidated") return "Valor liquidado − garantias vinculadas.";
-  if (s.exposure.basis === "claim_weighted") return "Sem valor liquidado: valor da causa × % de risco − garantias (RN-04).";
-  return "Sem valor liquidado e sem classificação de risco: não calculada.";
-}
-
 function provisionHint(s: ProcessContingencySummary): string {
   if (s.provision.base === "net_liquidated") return `Base ${formatMoneyCents(s.provision.baseCents)} × ${formatBp(s.percentageBp)}.`;
   if (s.provision.base === "claim") return `Base = valor da causa ${formatMoneyCents(s.provision.baseCents)} × ${formatBp(s.percentageBp)} (estimativa).`;
@@ -122,7 +133,7 @@ function SummaryTiles({ s }: { s: ProcessContingencySummary }) {
             </p>
           </div>
           <div className="p-4">
-            <p className="text-xs font-medium text-muted-foreground">Valor liquidado / apurado (oficial)</p>
+            <p className="text-xs font-medium text-muted-foreground">Valor liquidado / apurado (em vigor)</p>
             <p className="mt-1 text-lg font-semibold text-slate-900">
               <Money cents={s.liquidatedCents} />
             </p>
@@ -132,18 +143,14 @@ function SummaryTiles({ s }: { s: ProcessContingencySummary }) {
           </div>
         </div>
         <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
-          Grandezas diferentes, exibidas lado a lado e nunca somadas (RN-02). “Não apurado” não significa zero (RN-03).
+          Grandezas diferentes, exibidas lado a lado e nunca somadas. “Não apurado” não significa zero.
         </p>
       </div>
-      <Tile label="Garantias vinculadas" hint="Só garantias vinculadas abatem a exposição (RN-04).">
+      <Tile label="Garantias vinculadas" hint="Só garantias vinculadas abatem a exposição.">
         <Money cents={s.linkedGuaranteesCents} />
       </Tile>
       <Tile label="Classificação de risco" hint={s.classification ? "Classificação oficial vigente." : "Classifique para calcular a provisão."}>
         <ClassificationBadge classification={s.classification} percentageBp={s.percentageBp} />
-      </Tile>
-      <Tile label="Exposição líquida" hint={exposureHint(s)}>
-        <Money cents={s.exposure.exposureCents} fallback="Sem base" />
-        {s.exposure.isEstimate ? <EstimateBadge /> : null}
       </Tile>
       <Tile label="Provisão" hint={provisionHint(s)}>
         <Money cents={s.provision.provisionCents} fallback="Não calculada" />
@@ -154,36 +161,48 @@ function SummaryTiles({ s }: { s: ProcessContingencySummary }) {
 }
 
 // ---------------------------------------------------------------------------
-// "Valores e risco" tab
+// "Valores, garantias e risco" section of the "Valores e acordos" tab (#valores)
 // ---------------------------------------------------------------------------
 
-/** "Valores e risco": valuations history, guarantees, risk classification, exposure and provision. */
+/** Section #valores of the "Valores e acordos" tab: valuations history, guarantees, risk classification, exposure and provision. */
 export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthContext; processId: string }) {
   if (!can(ctx, "contingency:read")) return <NoAccess />;
   const summary = await safe(() => getProcessContingencySummary(ctx, processId));
   if (!summary) return <NoAccess />;
-  const [valuations, timeline, guarantees, risks, documents, params] = await Promise.all([
+  const [valuations, timeline, guarantees, risks, documents, params, valueUpdates, claimLinks] = await Promise.all([
     listValuations(ctx, processId),
     getValuationTimeline(ctx, processId),
     listGuarantees(ctx, processId),
     listRiskAssessments(ctx, processId),
     listProcessDocumentOptions(ctx, processId),
     getContingencyParams(ctx),
+    // P1.7: updated value by the valuation's index, computed on read (never stored).
+    getValuationUpdates(ctx, processId),
+    // P1.6: risk assessments derived from (or overriding) the claims, for the attribution line.
+    getClaimRiskLinkKinds(ctx, processId),
   ]);
   const canWrite = can(ctx, "contingency:write");
   const canApprove = can(ctx, "contingency:approve");
   const docOptions = documents.map((d) => ({ value: d.id, label: d.title }));
-  const claimSeries = timeline.find((t) => t.kind === "claim")?.points ?? [];
-  const liquidatedSeries = timeline.find((t) => t.kind === "liquidated")?.points ?? [];
+  // "Trocar índice" keeps the value: its two records are one point of the value series.
+  const seriesMeta = new Map<string, ValueSeriesMeta>(
+    valuations.map((v) => [
+      v.id,
+      { supersedesId: v.supersedesId, correctionIndex: valueUpdates.byId[v.id]?.correctionIndex ?? null, reviewedAt: v.reviewedAt },
+    ]),
+  );
+  const claimSeries = collapseIndexSwaps(timeline.find((t) => t.kind === "claim")?.points ?? [], seriesMeta);
+  const liquidatedSeries = collapseIndexSwaps(timeline.find((t) => t.kind === "liquidated")?.points ?? [], seriesMeta);
 
   return (
     <div className="space-y-6">
+      <NetExposurePanel breakdown={exposureBreakdown(summary, guarantees)} headingId={`exposicao-liquida-${processId}`} />
       <SummaryTiles s={summary} />
 
       {summary.pendingReviewCount > 0 ? (
         <Callout tone="warning" title={`${summary.pendingReviewCount} valor(es) aguardando conferência`}>
-          Valores propostos (planilha, documento, extração simulada ou lançamento de advogado) só entram nos totais oficiais
-          depois de conferidos por uma pessoa autorizada (RN-11).{" "}
+          Valores propostos (planilha, documento, extração simulada ou lançamento de advogado) só entram nos totais
+          depois de conferidos por uma pessoa autorizada.{" "}
           {canApprove ? <Link href="/contingencias/revisao">Abrir a fila de conferência</Link> : null}
         </Callout>
       ) : null}
@@ -199,10 +218,11 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
             ) : null
           }
         >
-          <CardTitle>Histórico de valores (RF-09)</CardTitle>
+          <CardTitle>Histórico de valores</CardTitle>
           <CardDescription>
-            Append-only: cada apuração é um novo registro; o valor oficial anterior passa a “substituído”. Propostos e rejeitados
-            não entram nos totais.
+            Nenhum valor é sobrescrito: cada apuração é um novo registro e o valor oficial anterior passa a “substituído”. Propostos e rejeitados
+            não entram nos totais. O valor atualizado é calculado na consulta pelo índice de cada valor (séries mensais do Banco
+            Central), não é gravado, não substitui o valor original e não entra nos totais.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -223,7 +243,8 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
               <TableRow>
                 <TableHead>Data-base</TableHead>
                 <TableHead>Tipo</TableHead>
-                <TableHead className="text-right">Valor</TableHead>
+                <TableHead className="text-right">Valor original</TableHead>
+                <TableHead className="text-right">Valor atualizado</TableHead>
                 <TableHead>Situação</TableHead>
                 <TableHead>Origem</TableHead>
                 <TableHead>Registro e conferência</TableHead>
@@ -232,7 +253,7 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
             <TableBody>
               {valuations.length === 0 ? (
                 <TableEmpty
-                  colSpan={6}
+                  colSpan={7}
                   message="Nenhum valor registrado."
                   description="Registre o valor da causa, o valor liquidado ou outros valores com a data-base do cálculo."
                 />
@@ -247,8 +268,16 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
                       {VALUATION_KIND_LABELS[v.kind]}
                       {v.isEstimate ? <EstimateBadge className="mt-1" /> : null}
                     </TableCell>
-                    <TableCell className={cn("text-right whitespace-nowrap tabular-nums", v.status === "rejected" && "line-through")}>
-                      {formatMoneyCents(v.amountCents)}
+                    <TableCell>
+                      <ValuationOriginalValue amountCents={v.amountCents} baseDate={v.baseDate} struck={v.status === "rejected"} />
+                    </TableCell>
+                    <TableCell className="min-w-48">
+                      <ValuationUpdatedValue update={valueUpdates.byId[v.id]} />
+                      <IndexChangeControl
+                        valuation={v}
+                        current={valueUpdates.byId[v.id]?.correctionIndex}
+                        perms={{ write: canWrite, approve: canApprove }}
+                      />
                     </TableCell>
                     <TableCell>
                       <ValuationStatusBadge status={v.status} />
@@ -299,7 +328,7 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
 
       <Card>
         <CardHeader actions={canWrite ? <GuaranteeDialog processId={processId} documents={docOptions} /> : null}>
-          <CardTitle>Garantias e deduções (RF-10)</CardTitle>
+          <CardTitle>Garantias e deduções</CardTitle>
           <CardDescription>
             Depósitos, penhoras e seguros vinculados abatem a exposição; liberados ao autor ou devolvidos à empresa deixam de abater.
           </CardDescription>
@@ -324,7 +353,9 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
                   <TableRow key={g.id}>
                     <TableCell className="whitespace-nowrap">{GUARANTEE_KIND_LABELS[g.kind]}</TableCell>
                     <TableCell className="text-right whitespace-nowrap tabular-nums">{formatMoneyCents(g.amountCents)}</TableCell>
-                    <TableCell className="whitespace-nowrap tabular-nums">{formatDate(g.depositedAt)}</TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums">
+                      {g.depositedAt ? formatDate(g.depositedAt) : <span className="text-muted-foreground">Não informada</span>}
+                    </TableCell>
                     <TableCell>
                       <GuaranteeStatusBadge status={g.status} />
                       {g.statusChangedAt ? (
@@ -342,7 +373,7 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
                         )
                       ) : null}
                       {g.description ? <span className="block text-xs text-slate-600">{g.description}</span> : null}
-                      {!g.documentId && !g.description ? <span className="text-muted-foreground">—</span> : null}
+                      {!g.documentId && !g.description ? <span className="text-muted-foreground">Não informado</span> : null}
                     </TableCell>
                     {canWrite ? (
                       <TableCell className="text-right">
@@ -373,7 +404,8 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
         </CardContent>
       </Card>
 
-      <Card>
+      {/* Anchor of the "Classificar" link of the process decision band (P0.4). */}
+      <Card id={RISK_SECTION_ID} className="scroll-mt-4">
         <CardHeader
           actions={
             canWrite ? (
@@ -389,11 +421,11 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
             ) : null
           }
         >
-          <CardTitle>Classificação de risco (RF-11)</CardTitle>
+          <CardTitle>Classificação de risco</CardTitle>
           <CardDescription>
             Percentuais da organização: remota {params.riskPercentages.remote}%, possível {params.riskPercentages.possible}%, provável{" "}
             {params.riskPercentages.probable}% (versão {params.rulesVersion}). A sugestão por regra considera fase, instância,
-            encerramento e valor liquidado e nunca vale sem aprovação humana (RF-12).
+            encerramento e valor liquidado e nunca vale sem aprovação humana.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -419,12 +451,18 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
                     <ValuationStatusBadge status={r.status} />
                     {r.inForce ? <span className="text-xs font-medium text-emerald-800">Em vigor</span> : null}
                     <OriginBadge origin={r.origin} />
+                    {claimLinks[r.id] ? (
+                      <StatusBadge
+                        label={CLAIM_RISK_LINK_KIND_LABELS[claimLinks[r.id]]}
+                        tone={claimLinks[r.id] === "derived" ? "info" : "neutral"}
+                      />
+                    ) : null}
                     <span className="text-xs text-muted-foreground">
                       Vigência desde {formatDate(r.effectiveFrom)} · regras v{r.rulesVersion}
                     </span>
                   </div>
                   <p className="mt-2 text-sm whitespace-pre-line text-slate-800">{r.opinion}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{riskAttribution(r)}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{riskAttribution(r, claimLinks[r.id])}</p>
                   {r.status === "proposed" && canWrite ? (
                     <div className="mt-2 flex flex-wrap gap-2">
                       <RiskProposalReview id={r.id} decision="approve" />
@@ -441,7 +479,10 @@ export async function ProcessContingencyTab({ ctx, processId }: { ctx: AuthConte
   );
 }
 
-function riskAttribution(r: RiskAssessmentItem): string {
+function riskAttribution(r: RiskAssessmentItem, claimLink: ClaimRiskLinkKind | undefined): string {
+  // Derived from (or overriding) the claims: a calculation or a justified decision, never a rule
+  // suggestion approved by someone (P1.6).
+  if (claimLink) return claimsRiskAttribution(claimLink, r);
   const parts: string[] = [];
   if (r.origin === "system") {
     parts.push(`Sugestão automática por regra${r.assessedByName ? ` solicitada por ${r.assessedByName}` : ""} em ${formatDateTime(r.createdAt)}`);
@@ -454,13 +495,40 @@ function riskAttribution(r: RiskAssessmentItem): string {
   return parts.join(" · ");
 }
 
-function Series({
-  title,
-  points,
+function indexText(index: CorrectionIndex | null): string {
+  return index ? CORRECTION_INDEX_LABELS[index] : "sem índice informado";
+}
+
+/**
+ * "Informar índice" / "Trocar índice" of a valuation (P1.7), only when the profile may use it
+ * (`correctionIndexChangeFor`); the service enforces the same rule.
+ */
+function IndexChangeControl({
+  valuation: v,
+  current,
+  perms,
 }: {
-  title: string;
-  points: { id: string; baseDate: string; amountCents: number; status: string }[];
+  valuation: Pick<ValuationItem, "id" | "kind" | "status" | "amountCents" | "baseDate">;
+  /** Undefined when the updated value of this row was not loaded (row not visible): no control. */
+  current: CorrectionIndex | null | undefined;
+  perms: { write: boolean; approve: boolean };
 }) {
+  if (current === undefined) return null;
+  const mode = correctionIndexChangeFor({ status: v.status, correctionIndex: current }, perms);
+  if (!mode) return null;
+  return (
+    <div className="mt-1">
+      <CorrectionIndexDialog
+        valuationId={v.id}
+        current={current}
+        valueLabel={`${VALUATION_KIND_LABELS[v.kind]} de ${formatMoneyCents(v.amountCents)} (data-base ${formatDate(v.baseDate)})`}
+        mode={mode}
+      />
+    </div>
+  );
+}
+
+function Series({ title, points }: { title: string; points: ValueSeriesPoint[] }) {
   return (
     <div className="rounded-md border border-border">
       <p className="border-b border-border bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">{title}</p>
@@ -469,12 +537,20 @@ function Series({
       ) : (
         <ol className="divide-y divide-border text-sm">
           {points.map((p, i) => (
-            <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
-              <span className="tabular-nums text-slate-600">{formatDate(p.baseDate)}</span>
-              <span className="flex items-center gap-3">
-                <span className="font-medium tabular-nums text-slate-900">{formatMoneyCents(p.amountCents)}</span>
-                {i > 0 ? <Delta cents={p.amountCents - points[i - 1].amountCents} className="text-xs" /> : null}
-              </span>
+            <li key={p.id} className="px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="tabular-nums text-slate-600">{formatDate(p.baseDate)}</span>
+                <span className="flex items-center gap-3">
+                  <span className="font-medium tabular-nums text-slate-900">{formatMoneyCents(p.amountCents)}</span>
+                  {i > 0 ? <Delta cents={p.amountCents - points[i - 1].amountCents} className="text-xs" /> : null}
+                </span>
+              </div>
+              {p.indexChanges.map((c, j) => (
+                <p key={j} className="mt-0.5 text-xs text-muted-foreground">
+                  Troca de índice de atualização: de {indexText(c.from)} para {indexText(c.to)}
+                  {c.at ? ` em ${formatDate(c.at)}` : ""}, com o mesmo valor e a mesma data-base.
+                </p>
+              ))}
             </li>
           ))}
         </ol>
@@ -484,10 +560,10 @@ function Series({
 }
 
 // ---------------------------------------------------------------------------
-// "Acordos" tab
+// "Acordos" section of the "Valores e acordos" tab (#acordos)
 // ---------------------------------------------------------------------------
 
-/** "Acordos": settlements and installments of the process. */
+/** Section #acordos of the "Valores e acordos" tab: settlements and installments of the process. */
 export async function ProcessSettlementsTab({ ctx, processId }: { ctx: AuthContext; processId: string }) {
   if (!can(ctx, "contingency:read")) return <NoAccess />;
   const settlements = await safe(() => listProcessSettlements(ctx, processId));
@@ -506,7 +582,7 @@ export async function ProcessSettlementsTab({ ctx, processId }: { ctx: AuthConte
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-2xl text-sm text-muted-foreground">
           Valores de acordo são uma grandeza própria: não se somam ao valor da causa nem ao liquidado. Ao cumprir o acordo,
-          registre a quitação (RN-06) para zerar o valor liquidado mantendo o histórico.
+          registre a quitação para zerar o valor liquidado mantendo o histórico.
         </p>
         {canWrite ? <SettlementCreateDialog processId={processId} users={userOptions} /> : null}
       </div>
@@ -570,13 +646,13 @@ export function SettlementCard({
         <CardDescription>
           {showProcess ? (
             <>
-              <Link href={`/processos/${s.processId}?aba=acordos`} className="font-medium text-primary-600 hover:underline">
+              <Link href={processTabUrl(s.processId, "valores-e-acordos", PROCESS_SECTION_IDS.settlements)} className="font-medium text-primary-600 hover:underline">
                 {s.processNumber}
               </Link>{" "}
               · {s.processTitle} ·{" "}
             </>
           ) : null}
-          Proposta {formatDate(s.proposedAt)}
+          {s.proposedAt ? `Proposta ${formatDate(s.proposedAt)}` : "Data da proposta não informada"}
           {s.signedAt ? ` · firmado ${formatDate(s.signedAt)}` : ""}
           {s.homologatedAt ? ` · homologado ${formatDate(s.homologatedAt)}` : ""}
           {s.responsibleName ? ` · responsável ${s.responsibleName}` : ""}
@@ -590,7 +666,7 @@ export function SettlementCard({
       {s.status === "fulfilled" && canWrite ? (
         <CardContent>
           <Callout tone="success" title="Acordo cumprido">
-            Registre a quitação (RN-06) para que o valor liquidado oficial passe a R$ 0,00, mantendo o histórico.
+            Registre a quitação para que o valor liquidado oficial passe a R$ 0,00, mantendo o histórico.
           </Callout>
         </CardContent>
       ) : null}
@@ -618,13 +694,15 @@ export function SettlementCard({
                   <TableCell>
                     <InstallmentStatusBadge status={i.status} overdue={i.dueDate < today} />
                   </TableCell>
-                  <TableCell className="whitespace-nowrap tabular-nums">{formatDate(i.paidAt)}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">
+                    {i.paidAt ? formatDate(i.paidAt) : <span className="text-muted-foreground">Não pago</span>}
+                  </TableCell>
                   {canWrite ? (
                     <TableCell className="text-right">
                       {i.status !== "cancelled" && s.status !== "cancelled" && !(s.status === "fulfilled" && i.status === "paid") ? (
                         <InstallmentPayment id={i.id} number={i.number} amountCents={i.amountCents} paid={i.status === "paid"} />
                       ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
+                        <span className="text-xs text-muted-foreground">Nenhuma ação</span>
                       )}
                     </TableCell>
                   ) : null}
@@ -651,20 +729,22 @@ export async function ProcessValuesSummary({ ctx, processId }: { ctx: AuthContex
   if (!can(ctx, "contingency:read")) return null;
   const s = await safe(() => getProcessContingencySummary(ctx, processId));
   if (!s) return null;
+  const guarantees = await listGuarantees(ctx, processId);
   return (
     <Card>
       <CardHeader
         actions={
-          <ButtonLink href={`/processos/${processId}?aba=valores`} variant="ghost" size="sm">
-            Valores e risco
+          <ButtonLink href={processTabUrl(processId, "valores-e-acordos")} variant="ghost" size="sm">
+            Valores e acordos
             <ArrowRight aria-hidden="true" />
           </ButtonLink>
         }
       >
         <CardTitle>Valores e provisão</CardTitle>
-        <CardDescription>Valor da causa e valor liquidado são grandezas diferentes — nunca somadas (RN-02).</CardDescription>
+        <CardDescription>Valor da causa e valor apurado são grandezas diferentes, nunca somadas.</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        <NetExposurePanel breakdown={exposureBreakdown(s, guarantees)} compact headingId={`exposicao-liquida-resumo-${processId}`} />
         <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
           <div>
             <dt className="text-xs text-muted-foreground">Valor da causa</dt>
@@ -673,19 +753,12 @@ export async function ProcessValuesSummary({ ctx, processId }: { ctx: AuthContex
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-muted-foreground">Valor liquidado</dt>
+            <dt className="text-xs text-muted-foreground">Valor liquidado / apurado</dt>
             <dd className="font-semibold text-slate-900">
               <Money cents={s.liquidatedCents} />
               {s.liquidatedBaseDate ? (
                 <span className="ml-1 text-xs font-normal text-muted-foreground">({formatDate(s.liquidatedBaseDate)})</span>
               ) : null}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-muted-foreground">Exposição líquida</dt>
-            <dd className="flex flex-wrap items-center gap-2 font-semibold text-slate-900">
-              <Money cents={s.exposure.exposureCents} fallback="Sem base" />
-              {s.exposure.isEstimate ? <EstimateBadge /> : null}
             </dd>
           </div>
           <div>
@@ -695,7 +768,7 @@ export async function ProcessValuesSummary({ ctx, processId }: { ctx: AuthContex
               {s.provision.isEstimate ? <EstimateBadge /> : null}
             </dd>
           </div>
-          <div className="sm:col-span-2">
+          <div>
             <dt className="text-xs text-muted-foreground">Classificação de risco</dt>
             <dd className="mt-0.5">
               <ClassificationBadge classification={s.classification} percentageBp={s.percentageBp} />

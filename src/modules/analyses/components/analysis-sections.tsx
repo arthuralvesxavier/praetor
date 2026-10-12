@@ -26,7 +26,7 @@ export function PromptInjectionNotice({ result, className }: { result: AnalysisR
 export function DemoNotice({ mode, className }: { mode: AiMode; className?: string }) {
   if (mode !== "demo") return null;
   return (
-    <Callout tone="warning" title="Resultado demonstrativo — não é uma análise real" className={className}>
+    <Callout tone="warning" title="Resultado demonstrativo: não é uma análise real" className={className}>
       {DEMO_MODE_NOTICE}
     </Callout>
   );

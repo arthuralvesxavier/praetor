@@ -24,7 +24,8 @@ export async function ProcessBriefTab({ ctx, processId }: { ctx: AuthContext; pr
     return <p className="text-sm text-muted-foreground">Seu perfil não tem acesso às análises preliminares.</p>;
   }
   const list = await listCaseBriefs(ctx, { processId, pageSize: 20 });
-  const canRequest = can(ctx, "brief:review") || can(ctx, "intake:manage");
+  // A new version supersedes the current review: only reviewers request it here (analysts use the intake page).
+  const canRequest = can(ctx, "brief:review");
   const latestItem = list.items[0] ?? null;
   let latest: CaseBriefDetail | null = null;
   if (latestItem) {
@@ -47,7 +48,10 @@ export async function ProcessBriefTab({ ctx, processId }: { ctx: AuthContext; pr
             action={canRequest ? <RequestBriefButton processId={processId} label="Gerar análise preliminar (simulação)" /> : null}
           />
           {!canRequest ? (
-            <p className="text-center text-xs text-muted-foreground">Seu perfil pode consultar, mas não solicitar análises preliminares.</p>
+            <p className="text-center text-xs text-muted-foreground">
+              Seu perfil pode consultar, mas não solicitar análises preliminares
+              {can(ctx, "intake:manage") ? " por aqui. Em processos recebidos, gere a análise na página da entrada." : "."}
+            </p>
           ) : null}
         </CardContent>
       </Card>
@@ -66,7 +70,7 @@ export async function ProcessBriefTab({ ctx, processId }: { ctx: AuthContext; pr
             </div>
           }
         >
-          <CardTitle>Análise preliminar — versão {latest.version}</CardTitle>
+          <CardTitle>Análise preliminar, versão {latest.version}</CardTitle>
           <CardDescription>
             {latest.generatedAt ? `Gerada em ${formatDateTime(latest.generatedAt)}` : `Solicitada em ${formatDateTime(latest.createdAt)}`}
             {latest.requestedByName ? ` por ${latest.requestedByName}` : ""}
@@ -147,10 +151,13 @@ export async function ProcessBriefTab({ ctx, processId }: { ctx: AuthContext; pr
                       </Link>
                     </TableCell>
                     <TableCell>
-                      <BriefStatusBadge status={b.status} />
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <BriefStatusBadge status={b.status} />
+                        {b.superseded ? <span className="text-xs text-muted-foreground">Substituída por versão mais recente</span> : null}
+                      </span>
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">{b.generatedAt ? formatDateTime(b.generatedAt) : "—"}</TableCell>
-                    <TableCell className="text-right tabular-nums">{b.currentRevision || "—"}</TableCell>
+                    <TableCell className="whitespace-nowrap">{b.generatedAt ? formatDateTime(b.generatedAt) : <span className="text-muted-foreground">Não gerada</span>}</TableCell>
+                    <TableCell className="text-right tabular-nums">{b.currentRevision || <span className="text-muted-foreground">Nenhuma</span>}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

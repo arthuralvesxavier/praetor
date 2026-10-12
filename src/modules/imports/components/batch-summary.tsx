@@ -37,7 +37,7 @@ const FIELD_ORDER = [
 ] as const;
 
 function baseDateText(batch: ImportBatchDetail): string {
-  if (!batch.baseDate) return "Não informada — será pedida na confirmação";
+  if (!batch.baseDate) return "Não informada: será pedida na confirmação";
   const date = formatDate(batch.baseDate);
   if (batch.status !== "analyzed") return `${date} (confirmada na importação)`;
   if (batch.baseDateSource === "file" && batch.baseDateHint) return `${date} (sugerida pela planilha: ${batch.baseDateHint.source})`;
@@ -61,7 +61,7 @@ export function BatchSummary({ batch }: { batch: ImportBatchDetail }) {
             value={formatNumber(s.processesDetected)}
             tone="primary"
             icon={<Scale />}
-            hint="Um por número CNJ — instâncias não somam"
+            hint="Um por número CNJ; instâncias não somam"
           />
           <StatCard
             label={pending ? "Novos (a criar)" : "Novos"}
@@ -99,7 +99,7 @@ export function BatchSummary({ batch }: { batch: ImportBatchDetail }) {
             value={formatNumber(s.warnings)}
             tone={s.warnings > 0 ? "warning" : "neutral"}
             icon={<AlertTriangle />}
-            hint="Importadas — conferir"
+            hint="Importadas, conferir"
             href={tab({ aba: "inconsistencias", nivel: "warning" })}
           />
           <StatCard
@@ -129,10 +129,10 @@ export function BatchSummary({ batch }: { batch: ImportBatchDetail }) {
             <DescriptionList
               columns={1}
               items={[
-                { label: "Empresa da carteira", value: batch.companyName ?? "—" },
+                { label: "Empresa da carteira", value: batch.companyName },
                 { label: "Unidade padrão", value: batch.defaultUnitName ?? "Sem unidade" },
                 { label: "Data-base dos valores", value: baseDateText(batch) },
-                { label: "Distribuição após confirmar", value: batch.distributeAfterCommit ? "Sim — processos novos sem responsável" : "Não" },
+                { label: "Distribuição após confirmar", value: batch.distributeAfterCommit ? "Sim, para processos novos sem responsável" : "Não" },
                 {
                   label: "Arquivo",
                   value: (
@@ -144,9 +144,9 @@ export function BatchSummary({ batch }: { batch: ImportBatchDetail }) {
                     </span>
                   ),
                 },
-                { label: "Enviada por", value: `${batch.createdByName ?? "—"} em ${formatDateTime(batch.createdAt)}` },
-                batch.committedAt ? { label: "Confirmada por", value: `${batch.committedByName ?? "—"} em ${formatDateTime(batch.committedAt)}` } : null,
-                batch.rolledBackAt ? { label: "Desfeita por", value: `${batch.rolledBackByName ?? "—"} em ${formatDateTime(batch.rolledBackAt)}` } : null,
+                { label: "Enviada por", value: `${batch.createdByName ?? "Usuário não informado"} em ${formatDateTime(batch.createdAt)}` },
+                batch.committedAt ? { label: "Confirmada por", value: `${batch.committedByName ?? "Usuário não informado"} em ${formatDateTime(batch.committedAt)}` } : null,
+                batch.rolledBackAt ? { label: "Desfeita por", value: `${batch.rolledBackByName ?? "Usuário não informado"} em ${formatDateTime(batch.rolledBackAt)}` } : null,
               ]}
             />
           </CardContent>
@@ -161,11 +161,11 @@ export function BatchSummary({ batch }: { batch: ImportBatchDetail }) {
             <ul className="list-disc space-y-1.5 pl-5 text-sm text-slate-700">
               <li>O número CNJ é a chave: um processo por número; cada instância vira um vínculo de instância.</li>
               <li>A aba consolidada é a base oficial; as abas por instância servem para conferência.</li>
-              <li>Valores divergentes entre abas viram valores propostos para conferência — nunca sobrescrevem o oficial.</li>
+              <li>Valores divergentes entre abas viram valores propostos para conferência e nunca sobrescrevem o oficial.</li>
               <li>Linhas de TOTAL são ignoradas e a leitura continua nas linhas seguintes.</li>
-              <li>Valor vazio é “não informado/não apurado” — nunca zero. Causa e liquidado nunca são somados.</li>
+              <li>Valor vazio é “não informado” ou “não apurado”, nunca zero. Causa e liquidado nunca são somados.</li>
               <li>Dígito verificador inválido é apontado para conferência; o número nunca é corrigido.</li>
-              <li>“VERIFICAR” ou “saiu do acervo” marcam o processo para verificação, sem encerrá-lo.</li>
+              <li>“VERIFICAR” ou “saiu do acervo” deixam o processo pendente de conferência, sem encerrá-lo.</li>
               <li>Nenhum andamento processual é criado a partir da planilha.</li>
             </ul>
           </CardContent>
@@ -205,10 +205,10 @@ export function BatchSummary({ batch }: { batch: ImportBatchDetail }) {
                       {SHEET_ROLE_LABELS[sh.role]}
                     </Badge>
                   </TableCell>
-                  <TableCell>{sh.instance ? PROCESS_INSTANCE_LABELS[sh.instance] : sh.role === "consolidated" ? "Todas (coluna Instância)" : "—"}</TableCell>
-                  <TableCell className="text-right">{sh.headerRow ? `linha ${sh.headerRow}` : "—"}</TableCell>
-                  <TableCell className="text-right">{sh.role === "ignored" ? "—" : formatNumber(sh.rowCount)}</TableCell>
-                  <TableCell className="min-w-56 text-sm text-muted-foreground">{sh.note ?? "—"}</TableCell>
+                  <TableCell>{sh.instance ? PROCESS_INSTANCE_LABELS[sh.instance] : sh.role === "consolidated" ? "Todas (coluna Instância)" : <span className="text-muted-foreground">Não se aplica</span>}</TableCell>
+                  <TableCell className="text-right">{sh.headerRow ? `linha ${sh.headerRow}` : <span className="text-muted-foreground">Não encontrado</span>}</TableCell>
+                  <TableCell className="text-right">{sh.role === "ignored" ? <span className="text-muted-foreground">Não lida</span> : formatNumber(sh.rowCount)}</TableCell>
+                  <TableCell className="min-w-56 text-sm text-muted-foreground">{sh.note ?? "Sem observação"}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

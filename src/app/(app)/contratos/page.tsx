@@ -83,7 +83,7 @@ export default async function ContractsPage(props: PageProps<"/contratos">) {
       <PageHeader
         title="Contratos"
         description="Vigência, avisos de renovação ou rescisão, obrigações e responsáveis pelos contratos da organização."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Contratos" }]}
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Contratos" }]}
         actions={
           canWrite ? (
             <ButtonLink href="/contratos/novo">
@@ -216,7 +216,7 @@ export default async function ContractsPage(props: PageProps<"/contratos">) {
                     <span className="block text-sm tabular-nums text-slate-800">
                       {c.startDate || c.endDate ? (
                         <>
-                          {formatDate(c.startDate)} – {c.endDate ? formatDate(c.endDate) : "indeterminado"}
+                          {formatDate(c.startDate, "Início não informado")} a {c.endDate ? formatDate(c.endDate) : "prazo indeterminado"}
                         </>
                       ) : (
                         <span className="text-muted-foreground">Datas não informadas</span>
@@ -227,9 +227,11 @@ export default async function ContractsPage(props: PageProps<"/contratos">) {
                   <TableCell className="min-w-44">
                     <NoticeCell contract={c} />
                   </TableCell>
-                  <TableCell className="text-right whitespace-nowrap tabular-nums">{formatMoneyCents(c.valueCents)}</TableCell>
+                  <TableCell className="text-right whitespace-nowrap tabular-nums">
+                    {c.valueCents === null ? <span className="text-muted-foreground">Não informado</span> : formatMoneyCents(c.valueCents)}
+                  </TableCell>
                   <TableCell className="whitespace-nowrap">
-                    {c.responsibleName ?? <span className="text-muted-foreground">—</span>}
+                    {c.responsibleName ?? <span className="text-muted-foreground">Sem responsável</span>}
                   </TableCell>
                   <TableCell className="min-w-52">
                     <NextObligationCell contract={c} />
@@ -262,7 +264,7 @@ function NoticeCell({ contract: c }: { contract: ContractListItem }) {
       {c.notice.date ? (
         <span className="block tabular-nums text-slate-800">{formatDate(c.notice.date)}</span>
       ) : (
-        <span className="block text-muted-foreground">{c.renewalNoticeDays ? "—" : "Antecedência não informada"}</span>
+        <span className="block text-muted-foreground">{c.renewalNoticeDays ? "Sem data-limite" : "Antecedência não informada"}</span>
       )}
       <span className="flex items-center gap-1 text-xs text-muted-foreground">
         <Repeat aria-hidden="true" className="size-3" />

@@ -7,9 +7,10 @@ import { Pagination } from "@/components/ui/pagination";
 import { StatCard } from "@/components/ui/stat-card";
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow, tableLinkClasses } from "@/components/ui/table";
 import { formatBp } from "@/domain/contingency";
-import { PROCESS_INSTANCE_LABELS, PROCESS_PHASE_LABELS } from "@/domain/enums";
+import { PROCESS_INSTANCE_LABELS, processPhaseLabel } from "@/domain/enums";
 import { formatDate, formatDateTime, formatMoneyCents, formatMonthYear, formatNumber, pluralize } from "@/lib/format";
-import type { SearchParams } from "@/lib/search-params";
+import { buildHref, type SearchParams } from "@/lib/search-params";
+import { cn } from "@/lib/utils";
 import {
   CLASSIFICATION_LABELS,
   MOVEMENT_EVENT_LABELS,
@@ -17,12 +18,14 @@ import {
   type AuditLetterReport,
   type ExposureReport,
   type ExposureRow,
+  type MovementEventKind,
   type MovementReport,
   type PortfolioReport,
   type ProvisionReport,
   type ResponsibleRow,
   type ResponsiblesReport,
 } from "../types";
+import { exposureAmounts, previousExposureAmounts, provisionAmountsOn, variationOf, type BasisAmounts } from "../comparison";
 import { BucketTable } from "./bucket-table";
 import {
   CountCell,
@@ -30,10 +33,12 @@ import {
   DeltaMoney,
   EstimateBadge,
   EstimateMoneyCell,
+  ExposureEstimateCell,
   MoneyGroupCell,
   MoneyValueCell,
   NumCell,
   NumHead,
+  VariationLines,
 } from "./report-cells";
 
 function monthLabel(period: string): string {
@@ -52,10 +57,15 @@ function SectionCard({ title, description, children }: { title: string; descript
   );
 }
 
+/** Muted text of a cell without value (never a dash; never zero). */
+function EmptyValue({ children }: { children: ReactNode }) {
+  return <span className="text-muted-foreground">{children}</span>;
+}
+
 function EstimatesCallout() {
   return (
-    <Callout tone="warning" title="Há valores estimados (RN-07)">
-      Exposições e provisões calculadas sobre o valor da causa — quando não há valor liquidado — aparecem nas colunas
+    <Callout tone="warning" title="Há valores estimados">
+      Exposições e provisões calculadas sobre o valor da causa, quando não há valor liquidado, aparecem nas colunas
       “estimada” e não devem ser lidas como valor apurado.
     </Callout>
   );
@@ -67,7 +77,7 @@ function EstimatesCallout() {
 
 export function PortfolioReportView({ report }: { report: PortfolioReport }) {
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-1 gap-6">
       {report.hasEstimates ? <EstimatesCallout /> : null}
       <SectionCard title="Por empresa" description="Processos da carteira ativa por empresa do grupo.">
         <BucketTable label="Carteira por empresa" groupHeader="Empresa" rows={report.byCompany} totals={report.totals} />
@@ -94,12 +104,66 @@ export function PortfolioReportView({ report }: { report: PortfolioReport }) {
 // Exposição
 // ---------------------------------------------------------------------------
 
+/**
+ * Variation of an exposure against the previous competência, under the amount in the same
+ * cell: the previous amount and the difference, only when both sides were calculated on that
+ * basis. A group that had no process in the previous competência reads "antes sem processos";
+ * one without valor apurado there, "antes não apurada" (RN-03).
+ */
+function ExposureVariation({ row, kind }: { row: ExposureRow; kind: "official" | "estimate" }) {
+  if (!row.previous) return <ComparisonMissing />;
+  const cur = exposureAmounts(row.bucket)[kind];
+  const prev = previousExposureAmounts(row.previous)[kind];
+  const previousEmpty = row.previous.processCount === 0 ? "sem processos" : kind === "official" ? "não apurada" : "sem estimativa";
+  return <VariationLines previous={prev} previousEmpty={previousEmpty} delta={variationOf(cur, prev)} compact />;
+}
+
+/** Process count of the previous competência and the difference (a count of zero is a value). */
+function CountVariation({ row }: { row: ExposureRow }) {
+  if (!row.previous) return <ComparisonMissing />;
+  return (
+    <>
+      <span className="mt-1 block text-xs font-normal text-muted-foreground">antes {formatNumber(row.previous.processCount)}</span>
+      <span className="block text-xs font-normal">
+        {row.processCount === row.previous.processCount ? (
+          <EmptyValue>sem variação</EmptyValue>
+        ) : (
+          <DeltaCount delta={row.processCount - row.previous.processCount} />
+        )}
+      </span>
+    </>
+  );
+}
+
+function ComparisonMissing() {
+  return <span className="mt-1 block text-xs font-normal text-muted-foreground">Sem comparação</span>;
+}
+
+/** Column header; with the comparison, a second line says the cell also carries the variation. */
+function ExposureHead({ children, compare }: { children: ReactNode; compare: boolean }) {
+  return (
+    <NumHead className={compare ? "h-auto py-2 align-bottom" : undefined}>
+      {children}
+      {compare ? <span className="block text-[11px] font-normal text-muted-foreground">antes e variação</span> : null}
+    </NumHead>
+  );
+}
+
+/**
+ * Exposure by group. With a comparison, the previous competência and the variation go under
+ * each amount (processes, exposição apurada, exposição estimada) instead of three more columns,
+ * so the table keeps six columns and fits its card on a desktop (it scrolls inside the card on
+ * a phone).
+ */
 function ExposureTable({ label, header, rows, totals, compare }: { label: string; header: string; rows: ExposureRow[]; totals: ExposureRow; compare: boolean }) {
   const line = (r: ExposureRow, isTotal = false) => (
-    <TableRow key={r.key} className={isTotal ? "bg-slate-50 font-semibold" : undefined}>
+    // With the comparison every cell starts at the top, so the amounts of a row share one line.
+    <TableRow key={r.key} className={cn(compare && "[&>td]:align-top", isTotal && "bg-slate-50 font-semibold")}>
       <TableCell className="min-w-44 max-w-72">{r.label}</TableCell>
-      <CountCell value={r.processCount} />
-      {compare ? <NumCell>{r.previous ? <DeltaCount delta={r.processCount - r.previous.processCount} /> : "—"}</NumCell> : null}
+      <NumCell>
+        {formatNumber(r.processCount)}
+        {compare ? <CountVariation row={r} /> : null}
+      </NumCell>
       <MoneyGroupCell
         cents={r.bucket.claimCents}
         count={r.bucket.count}
@@ -119,61 +183,30 @@ function ExposureTable({ label, header, rows, totals, compare }: { label: string
       <MoneyGroupCell
         cents={r.bucket.exposureCents}
         count={r.bucket.count}
-        unknown={r.bucket.exposureUnknown}
-        unknownLabel="Não calculável"
-        unknownSingular="não calculável"
-        unknownPlural="não calculáveis"
+        unknown={r.bucket.liquidatedUnknown}
+        unknownLabel="Não apurada"
+        unknownSingular="sem valor apurado"
+        unknownPlural="sem valor apurado"
+        showUnknownCount={false}
+        footer={compare ? <ExposureVariation row={r} kind="official" /> : null}
       />
-      {compare ? (
-        <NumCell>
-          {r.previous ? (
-            <>
-              <span className="block text-xs text-muted-foreground">antes {formatMoneyCents(r.previous.exposureCents)}</span>
-              <DeltaMoney delta={r.bucket.exposureCents - r.previous.exposureCents} />
-            </>
-          ) : (
-            "—"
-          )}
-        </NumCell>
-      ) : null}
-      <EstimateMoneyCell cents={r.bucket.exposureEstimateCents} />
-      {compare ? (
-        <NumCell>
-          {r.previous ? (
-            <>
-              <span className="block text-xs text-muted-foreground">antes {formatMoneyCents(r.previous.exposureEstimateCents)}</span>
-              <DeltaMoney delta={r.bucket.exposureEstimateCents - r.previous.exposureEstimateCents} />
-            </>
-          ) : (
-            "—"
-          )}
-        </NumCell>
-      ) : null}
+      <ExposureEstimateCell bucket={r.bucket} footer={compare ? <ExposureVariation row={r} kind="estimate" /> : null} />
     </TableRow>
   );
   return (
     <Table aria-label={label}>
       <TableHeader>
         <TableRow>
-          <TableHead>{header}</TableHead>
-          <NumHead>Processos</NumHead>
-          {compare ? <NumHead>Var. processos</NumHead> : null}
-          <NumHead>Valor da causa</NumHead>
-          <NumHead>Valor liquidado</NumHead>
-          <NumHead>Exposição oficial</NumHead>
-          {compare ? <NumHead>Var. exposição oficial</NumHead> : null}
-          <NumHead>
-            Exposição estimada <span className="font-normal">(RN-07)</span>
-          </NumHead>
-          {compare ? <NumHead>Var. exposição estimada</NumHead> : null}
+          <TableHead className={compare ? "h-auto py-2 align-bottom" : undefined}>{header}</TableHead>
+          <ExposureHead compare={compare}>Processos</ExposureHead>
+          <NumHead className={compare ? "h-auto py-2 align-bottom" : undefined}>Valor da causa</NumHead>
+          <NumHead className={compare ? "h-auto py-2 align-bottom" : undefined}>Valor liquidado</NumHead>
+          <ExposureHead compare={compare}>Exposição apurada</ExposureHead>
+          <ExposureHead compare={compare}>Exposição estimada</ExposureHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {rows.length === 0 ? (
-          <TableEmpty colSpan={compare ? 9 : 6} message="Nenhum processo com estes filtros." />
-        ) : (
-          rows.map((r) => line(r))
-        )}
+        {rows.length === 0 ? <TableEmpty colSpan={6} message="Nenhum processo com estes filtros." /> : rows.map((r) => line(r))}
         {rows.length > 0 ? line(totals, true) : null}
       </TableBody>
     </Table>
@@ -183,7 +216,7 @@ function ExposureTable({ label, header, rows, totals, compare }: { label: string
 export function ExposureReportView({ report }: { report: ExposureReport }) {
   const compare = report.comparison !== null;
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-1 gap-6">
       {report.comparison ? (
         <Callout tone={report.comparison.status === "closed" ? "info" : "warning"} title="Comparação mensal">
           Variações calculadas contra o fechamento de {monthLabel(report.comparison.period)} (data-base{" "}
@@ -211,21 +244,75 @@ export function ExposureReportView({ report }: { report: ExposureReport }) {
 // Provisão
 // ---------------------------------------------------------------------------
 
+/** Text of a provision that does not exist (RN-03): never R$ 0,00. */
+function provisionEmptyLabel(processCount: number, liquidatedCount: number | undefined, unclassified = false): string {
+  if (processCount === 0) return "Sem processos";
+  return unclassified || (liquidatedCount ?? 0) > 0 ? "Não calculada" : "Não apurada";
+}
+
+/**
+ * Variation of a classification against the previous closed competência: the provision on the
+ * valor apurado, then the estimated one. Each difference needs both sides calculated.
+ */
+function ProvisionVariationCell({ current, previous }: { current: BasisAmounts; previous: BasisAmounts }) {
+  const official = variationOf(current.official, previous.official);
+  const estimate = variationOf(current.estimate, previous.estimate);
+  const hasEstimate = current.estimate !== null || previous.estimate !== null;
+  return (
+    <NumCell>
+      {official === null ? <EmptyValue>sem base de comparação</EmptyValue> : <DeltaMoney delta={official} />}
+      {hasEstimate ? (
+        <span className="block text-xs font-normal">
+          <span className="text-muted-foreground">estimada: </span>
+          {estimate === null ? <EmptyValue>sem base de comparação</EmptyValue> : <DeltaMoney delta={estimate} />}
+        </span>
+      ) : null}
+    </NumCell>
+  );
+}
+
+/** Opening or closing balance of the movement table, with the same reading as the classification table. */
+function BalanceCells({
+  amounts,
+  basis,
+  processCount,
+  liquidatedCount,
+}: {
+  amounts: { provisionCents: number; provisionEstimateCents: number };
+  basis: ProvisionReport["totals"]["currentBasis"];
+  processCount: number;
+  liquidatedCount: number | undefined;
+}) {
+  const on = provisionAmountsOn(amounts, basis, processCount);
+  return (
+    <>
+      <NumCell>
+        {on.official === null ? <EmptyValue>{provisionEmptyLabel(processCount, liquidatedCount)}</EmptyValue> : formatMoneyCents(on.official)}
+      </NumCell>
+      <EstimateMoneyCell
+        cents={amounts.provisionEstimateCents}
+        count={on.estimate === null ? 0 : basis?.estimate}
+        emptyLabel={processCount === 0 ? "Sem processos" : "Sem estimativa"}
+      />
+    </>
+  );
+}
+
 export function ProvisionReportView({ report }: { report: ProvisionReport }) {
   const snap = report.snapshot;
   if (!snap) return null;
   const hasPrev = report.previous !== null;
   return (
-    <div className="grid gap-6">
-      <Callout tone="info" title={`Competência ${monthLabel(snap.period)} — fechada`}>
+    <div className="grid grid-cols-1 gap-6">
+      <Callout tone="info" title={`Competência ${monthLabel(snap.period)} fechada`}>
         Data-base {formatDate(snap.referenceDate)}
         {snap.closedAt ? `, fechada em ${formatDateTime(snap.closedAt)}` : ""}
-        {snap.closedByName ? ` por ${snap.closedByName}` : ""}. Valores lidos do fechamento (imutável, RN-10), com os
+        {snap.closedByName ? ` por ${snap.closedByName}` : ""}. Valores lidos do fechamento (imutável), com os
         percentuais da época: provável {snap.params.riskPercentages.probable}%, possível {snap.params.riskPercentages.possible}%,
         remota {snap.params.riskPercentages.remote}% (versão {snap.params.rulesVersion} das regras).
       </Callout>
       {report.hasEstimates ? (
-        <Callout tone="warning" title="Ressalva — provisões estimadas (RN-07)">
+        <Callout tone="warning" title="Ressalva: provisões estimadas">
           Parte da provisão foi calculada sobre o valor da causa, por falta de valor liquidado. Esses valores estão na coluna
           “Provisão estimada” e não devem ser contabilizados sem ressalva.
         </Callout>
@@ -239,9 +326,7 @@ export function ProvisionReportView({ report }: { report: ProvisionReport }) {
               <NumHead>Percentual</NumHead>
               <NumHead>Processos</NumHead>
               <NumHead>Provisão</NumHead>
-              <NumHead>
-                Provisão estimada <span className="font-normal">(RN-07)</span>
-              </NumHead>
+              <NumHead>Provisão estimada</NumHead>
               {hasPrev ? <NumHead>Provisão em {monthLabel(report.previous!.period)}</NumHead> : null}
               {hasPrev ? <NumHead>Variação</NumHead> : null}
             </TableRow>
@@ -249,35 +334,69 @@ export function ProvisionReportView({ report }: { report: ProvisionReport }) {
           <TableBody>
             {[...report.byClassification, report.totals].map((c, i, all) => {
               const isTotal = i === all.length - 1;
-              const prevTotal = c.previous ? c.previous.provisionCents + c.previous.provisionEstimateCents : 0;
-              const curTotal = c.current.provisionCents + c.current.provisionEstimateCents;
+              const unclassified = !isTotal && c.key === "unclassified";
+              // Without a classification the provision is never calculated (rows built without counts included).
+              const notCalculated = { official: 0, estimate: 0, none: c.processCount };
+              const curBasis = c.currentBasis ?? (unclassified ? notCalculated : undefined);
+              const cur = provisionAmountsOn(c.current, curBasis, c.processCount);
+              const prev = c.previous
+                ? provisionAmountsOn(c.previous, c.previous.basis ?? (unclassified ? notCalculated : undefined), c.previous.processCount)
+                : null;
               return (
                 <TableRow key={isTotal ? "total" : c.key} className={isTotal ? "bg-slate-50 font-semibold" : undefined}>
                   <TableCell>{isTotal ? c.label : CLASSIFICATION_LABELS[c.key]}</TableCell>
-                  <NumCell>{c.percentageBp === null ? "—" : formatBp(c.percentageBp)}</NumCell>
+                  <NumCell>{c.percentageBp === null ? <EmptyValue>Não se aplica</EmptyValue> : formatBp(c.percentageBp)}</NumCell>
                   <CountCell value={c.processCount} />
-                  <NumCell>{formatMoneyCents(c.current.provisionCents)}</NumCell>
-                  <EstimateMoneyCell cents={c.current.provisionEstimateCents} />
+                  <NumCell>
+                    {cur.official === null ? (
+                      <EmptyValue>{provisionEmptyLabel(c.processCount, c.currentLiquidatedCount, unclassified)}</EmptyValue>
+                    ) : (
+                      formatMoneyCents(cur.official)
+                    )}
+                  </NumCell>
+                  <EstimateMoneyCell
+                    cents={c.current.provisionEstimateCents}
+                    count={cur.estimate === null ? 0 : curBasis?.estimate}
+                    emptyLabel={c.processCount === 0 ? "Sem processos" : unclassified ? "Não calculada" : "Sem estimativa"}
+                    note={
+                      !unclassified && curBasis && curBasis.none > 0 && !isTotal
+                        ? pluralize(curBasis.none, "sem base de cálculo", "sem base de cálculo")
+                        : null
+                    }
+                  />
                   {hasPrev ? (
-                    <NumCell>
-                      {c.previous ? (
-                        <>
-                          {formatMoneyCents(c.previous.provisionCents)}
-                          {c.previous.provisionEstimateCents > 0 ? (
-                            <span className="block text-xs text-amber-900">
-                              + {formatMoneyCents(c.previous.provisionEstimateCents)} estimada
-                            </span>
-                          ) : null}
-                        </>
-                      ) : (
-                        "—"
-                      )}
-                    </NumCell>
+                    c.previous && prev ? (
+                      <NumCell>
+                        {prev.official === null ? (
+                          <EmptyValue>{provisionEmptyLabel(c.previous.processCount, c.previous.liquidatedCount, unclassified)}</EmptyValue>
+                        ) : (
+                          formatMoneyCents(prev.official)
+                        )}
+                        {prev.estimate !== null && (c.previous.basis || prev.estimate > 0) ? (
+                          <span className="block text-xs text-amber-900">
+                            {prev.official === null ? "" : "+ "}
+                            {formatMoneyCents(prev.estimate)} estimada
+                          </span>
+                        ) : null}
+                      </NumCell>
+                    ) : (
+                      <NumCell>
+                        <EmptyValue>Sem comparação</EmptyValue>
+                      </NumCell>
+                    )
                   ) : null}
                   {hasPrev ? (
-                    <NumCell>
-                      <DeltaMoney delta={curTotal - prevTotal} />
-                    </NumCell>
+                    c.previous && c.processCount === 0 && c.previous.processCount === 0 ? (
+                      <NumCell>
+                        <EmptyValue>Sem processos</EmptyValue>
+                      </NumCell>
+                    ) : prev ? (
+                      <ProvisionVariationCell current={cur} previous={prev} />
+                    ) : (
+                      <NumCell>
+                        <EmptyValue>Sem comparação</EmptyValue>
+                      </NumCell>
+                    )
                   ) : null}
                 </TableRow>
               );
@@ -307,9 +426,15 @@ export function ProvisionReportView({ report }: { report: ProvisionReport }) {
             <TableBody>
               <TableRow>
                 <TableCell>Saldo em {monthLabel(report.previous!.period)}</TableCell>
-                <NumCell>—</NumCell>
-                <NumCell>{formatMoneyCents(report.movement.opening.provisionCents)}</NumCell>
-                <EstimateMoneyCell cents={report.movement.opening.provisionEstimateCents} />
+                <NumCell>
+                  <EmptyValue>Não se aplica</EmptyValue>
+                </NumCell>
+                <BalanceCells
+                  amounts={report.movement.opening}
+                  basis={report.totals.previous?.basis}
+                  processCount={report.totals.previous?.processCount ?? 0}
+                  liquidatedCount={report.totals.previous?.liquidatedCount}
+                />
               </TableRow>
               {report.movement.rows.map((m) => (
                 <TableRow key={m.kind}>
@@ -325,9 +450,15 @@ export function ProvisionReportView({ report }: { report: ProvisionReport }) {
               ))}
               <TableRow className="bg-slate-50 font-semibold">
                 <TableCell>Saldo em {monthLabel(snap.period)}</TableCell>
-                <NumCell>—</NumCell>
-                <NumCell>{formatMoneyCents(report.movement.closing.provisionCents)}</NumCell>
-                <EstimateMoneyCell cents={report.movement.closing.provisionEstimateCents} />
+                <NumCell>
+                  <EmptyValue>Não se aplica</EmptyValue>
+                </NumCell>
+                <BalanceCells
+                  amounts={report.movement.closing}
+                  basis={report.totals.currentBasis}
+                  processCount={report.totals.processCount}
+                  liquidatedCount={report.totals.currentLiquidatedCount}
+                />
               </TableRow>
             </TableBody>
           </Table>
@@ -349,13 +480,38 @@ export function ProvisionReportView({ report }: { report: ProvisionReport }) {
 // Carta de auditoria
 // ---------------------------------------------------------------------------
 
-export function AuditLetterView({ report }: { report: AuditLetterReport }) {
+/** Rows per screen page of the audit letter; the print version and the exports carry every row. */
+export const AUDIT_LETTER_PAGE_SIZE = 200;
+
+export function AuditLetterView({
+  report,
+  page = 1,
+  sp = {},
+  printAll = false,
+}: {
+  report: AuditLetterReport;
+  page?: number;
+  sp?: SearchParams;
+  /** "Versão para impressão": render every row (no pagination). */
+  printAll?: boolean;
+}) {
   const t = report.totals;
+  // Null is not zero: totals without any known value read "Não informado" / "Não apurado" / "Não calculada", never R$ 0,00.
+  const claimUnknown = t.processCount > 0 && t.claimUnknown >= t.processCount;
+  const liquidatedUnknown = t.processCount > 0 && t.liquidatedUnknown >= t.processCount;
+  const provisionNotCalculated = report.rows.length > 0 && report.rows.every((r) => r.provisionCents === null);
+  const paginated = !printAll && report.rows.length > AUDIT_LETTER_PAGE_SIZE;
+  const pageCount = Math.max(1, Math.ceil(report.rows.length / AUDIT_LETTER_PAGE_SIZE));
+  const current = Math.min(Math.max(1, page), pageCount);
+  const start = (current - 1) * AUDIT_LETTER_PAGE_SIZE;
+  const rows = paginated ? report.rows.slice(start, start + AUDIT_LETTER_PAGE_SIZE) : report.rows;
+  const printHref = buildHref("/relatorios", sp, { impressao: "1", pagina: null });
+  const screenHref = buildHref("/relatorios", sp, { impressao: null, pagina: null });
   return (
     <article className="rounded-lg border border-border bg-white p-5 shadow-xs sm:p-8 print:border-0 print:p-0 print:shadow-none" aria-label="Carta de auditoria">
       <header className="border-b border-slate-300 pb-4">
         <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">{report.organizationName}</p>
-        <h2 className="mt-1 text-xl font-semibold text-slate-900">Carta de auditoria — relação de processos judiciais</h2>
+        <h2 className="mt-1 text-xl font-semibold text-slate-900">Carta de auditoria: relação de processos judiciais</h2>
         <dl className="mt-3 grid gap-x-8 gap-y-1 text-sm sm:grid-cols-2">
           <div className="flex gap-2">
             <dt className="font-medium text-slate-600">Data-base:</dt>
@@ -390,26 +546,48 @@ export function AuditLetterView({ report }: { report: AuditLetterReport }) {
           <SummaryItem label="Processos (CNJ únicos)" value={formatNumber(t.processCount)} />
           <SummaryItem
             label="Valor da causa"
-            value={formatMoneyCents(t.claimCents)}
-            hint={t.claimUnknown > 0 ? `+ ${pluralize(t.claimUnknown, "sem valor informado", "sem valor informado")}` : undefined}
+            value={claimUnknown ? "Não informado" : formatMoneyCents(t.claimCents)}
+            unknown={claimUnknown}
+            hint={
+              t.claimUnknown > 0 && t.claimUnknown < t.processCount
+                ? `+ ${pluralize(t.claimUnknown, "sem valor informado", "sem valor informado")}`
+                : undefined
+            }
           />
           <SummaryItem
             label="Valor liquidado"
-            value={t.processCount > 0 && t.liquidatedUnknown >= t.processCount ? "Não apurado" : formatMoneyCents(t.liquidatedCents)}
-            hint={t.liquidatedUnknown > 0 ? `${pluralize(t.liquidatedUnknown, "não apurado", "não apurados")}` : undefined}
+            value={liquidatedUnknown ? "Não apurado" : formatMoneyCents(t.liquidatedCents)}
+            unknown={liquidatedUnknown}
+            hint={t.liquidatedUnknown > 0 && !liquidatedUnknown ? `${pluralize(t.liquidatedUnknown, "não apurado", "não apurados")}` : undefined}
           />
           <SummaryItem
             label="Provisão"
-            value={formatMoneyCents(t.provisionCents)}
-            hint={t.provisionEstimateCents > 0 ? `+ ${formatMoneyCents(t.provisionEstimateCents)} estimada (RN-07)` : undefined}
+            value={provisionNotCalculated ? "Não calculada" : formatMoneyCents(t.provisionCents)}
+            unknown={provisionNotCalculated}
+            hint={t.provisionEstimateCents > 0 ? `+ ${formatMoneyCents(t.provisionEstimateCents)} estimada` : undefined}
           />
         </dl>
         <p className="mt-2 text-xs text-muted-foreground">
           Por classificação: provável {t.byClassification.probable} · possível {t.byClassification.possible} · remota{" "}
           {t.byClassification.remote} · sem classificação {t.byClassification.unclassified}. Valor da causa e valor liquidado
-          não são somados (RN-02).
+          não são somados.
         </p>
       </section>
+
+      {paginated ? (
+        <Callout tone="info" title="Relação paginada" className="mt-5">
+          Exibindo os processos {formatNumber(start + 1)} a {formatNumber(start + rows.length)} de{" "}
+          {formatNumber(report.rows.length)}. A impressão desta tela inclui somente a página exibida; para imprimir ou salvar
+          em PDF a relação completa, abra a <Link href={printHref}>versão para impressão</Link>. As exportações CSV/XLSX
+          trazem todos os processos.
+        </Callout>
+      ) : null}
+      {printAll && report.rows.length > AUDIT_LETTER_PAGE_SIZE ? (
+        <p className="mt-5 text-sm text-muted-foreground print:hidden">
+          Versão para impressão: relação completa ({formatNumber(report.rows.length)} processos).{" "}
+          <Link href={screenHref}>Voltar à relação paginada</Link>.
+        </p>
+      ) : null}
 
       <div className="mt-5 -mx-5 sm:-mx-8 print:mx-0">
         <Table aria-label="Relação de processos na data-base">
@@ -428,32 +606,45 @@ export function AuditLetterView({ report }: { report: AuditLetterReport }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {report.rows.length === 0 ? (
+            {rows.length === 0 ? (
               <TableEmpty colSpan={10} message="Nenhum processo na data-base com estes filtros." />
             ) : (
-              report.rows.map((r) => (
+              rows.map((r) => (
                 <TableRow key={r.processId}>
                   <TableCell className="min-w-56 align-top">
-                    <Link href={`/processos/${r.processId}`} className={tableLinkClasses}>
-                      {r.number}
-                    </Link>
+                    {r.deletedAfterClose ? (
+                      <>
+                        <span className="font-medium tabular-nums text-slate-900">{r.number}</span>
+                        <Badge tone="neutral" className="ml-1 align-middle">
+                          Excluído após o fechamento
+                        </Badge>
+                      </>
+                    ) : (
+                      <Link href={`/processos/${r.processId}`} className={tableLinkClasses}>
+                        {r.number}
+                      </Link>
+                    )}
                     <span className="block max-w-72 truncate text-xs text-muted-foreground" title={r.title}>
                       {r.title}
                     </span>
                   </TableCell>
                   <TableCell className="min-w-40 align-top text-sm">
-                    {r.court ?? "—"}
+                    {r.court ?? <EmptyValue>Não informado</EmptyValue>}
                     {r.courtDivision ? <span className="block text-xs text-muted-foreground">{r.courtDivision}</span> : null}
                     {r.instance ? (
                       <span className="block text-xs text-muted-foreground">{PROCESS_INSTANCE_LABELS[r.instance]}</span>
                     ) : null}
                   </TableCell>
-                  <TableCell className="align-top whitespace-nowrap text-sm">{r.phase ? PROCESS_PHASE_LABELS[r.phase] : "—"}</TableCell>
+                  <TableCell className="align-top whitespace-nowrap text-sm">{processPhaseLabel(r.phase) ?? <EmptyValue>Não informado</EmptyValue>}</TableCell>
                   <TableCell className="align-top whitespace-nowrap">{CLASSIFICATION_LABELS[r.classification ?? "unclassified"]}</TableCell>
-                  <NumCell className="align-top">{r.percentageBp === null ? "—" : formatBp(r.percentageBp)}</NumCell>
+                  <NumCell className="align-top">
+                    {r.percentageBp === null ? <EmptyValue>Não se aplica</EmptyValue> : formatBp(r.percentageBp)}
+                  </NumCell>
                   <MoneyValueCell cents={r.claimCents} nullLabel="Não informado" className="align-top" />
                   <MoneyValueCell cents={r.liquidatedCents} nullLabel="Não apurado" className="align-top" />
-                  <NumCell className="align-top">{r.guaranteesCents ? formatMoneyCents(r.guaranteesCents) : "—"}</NumCell>
+                  <NumCell className="align-top">
+                    {r.guaranteesCents ? formatMoneyCents(r.guaranteesCents) : <EmptyValue>Sem garantias</EmptyValue>}
+                  </NumCell>
                   <MoneyValueCell
                     cents={r.provisionCents}
                     nullLabel="Não calculada"
@@ -462,7 +653,7 @@ export function AuditLetterView({ report }: { report: AuditLetterReport }) {
                   />
                   <TableCell className="min-w-56 align-top text-xs text-slate-700">
                     {r.caveats.length === 0 ? (
-                      <span className="text-muted-foreground">—</span>
+                      <EmptyValue>Sem ressalvas</EmptyValue>
                     ) : (
                       <ul className="list-disc space-y-0.5 pl-4">
                         {r.caveats.map((c) => (
@@ -477,6 +668,11 @@ export function AuditLetterView({ report }: { report: AuditLetterReport }) {
           </TableBody>
         </Table>
       </div>
+      {paginated ? (
+        <div className="mt-3 print:hidden">
+          <Pagination page={current} pageSize={AUDIT_LETTER_PAGE_SIZE} total={report.rows.length} basePath="/relatorios" searchParams={sp} />
+        </div>
+      ) : null}
 
       <section className="print-avoid-break mt-6" aria-label="Ressalvas gerais">
         <h3 className="text-sm font-semibold text-slate-900">Ressalvas gerais</h3>
@@ -498,11 +694,11 @@ export function AuditLetterView({ report }: { report: AuditLetterReport }) {
   );
 }
 
-function SummaryItem({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function SummaryItem({ label, value, hint, unknown = false }: { label: string; value: string; hint?: string; unknown?: boolean }) {
   return (
     <div className="rounded-md border border-border bg-surface-muted px-3 py-2">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="font-semibold text-slate-900 tabular-nums">{value}</dd>
+      <dd className={unknown ? "font-medium text-muted-foreground" : "font-semibold text-slate-900 tabular-nums"}>{value}</dd>
       {hint ? <dd className="text-xs text-muted-foreground">{hint}</dd> : null}
     </div>
   );
@@ -529,16 +725,36 @@ function SignatureLine({ title, lines }: { title: string; lines: string[] }) {
 
 export const MOVEMENT_PAGE_SIZE = 100;
 
+/** Badge tone of each movement kind (an index swap keeps value and base date: neutral). */
+const MOVEMENT_EVENT_TONES: Record<MovementEventKind, "neutral" | "info" | "primary" | "warning"> = {
+  added: "info",
+  closed: "neutral",
+  value_change: "primary",
+  index_change: "neutral",
+  phase_change: "warning",
+  status_change: "warning",
+};
+
 export function MovementReportView({ report, page, sp }: { report: MovementReport; page: number; sp: SearchParams }) {
   const s = report.summary;
   const start = (page - 1) * MOVEMENT_PAGE_SIZE;
   const visible = report.events.slice(start, start + MOVEMENT_PAGE_SIZE);
+  const indexChanges = s.indexChanges ?? report.events.filter((e) => e.kind === "index_change").length;
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-1 gap-6">
       <section aria-label="Resumo da movimentação" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Entradas na carteira" value={formatNumber(s.added)} tone="info" hint="Processos cadastrados no período" />
         <StatCard label="Encerramentos" value={formatNumber(s.closed)} tone="neutral" hint="Pela data de encerramento" />
-        <StatCard label="Alterações de valor oficial" value={formatNumber(s.valueChanges)} tone="primary" hint="Valores oficializados no período" />
+        <StatCard
+          label="Alterações de valor oficial"
+          value={formatNumber(s.valueChanges)}
+          tone="primary"
+          hint={
+            indexChanges > 0
+              ? `Trocas de índice: ${formatNumber(indexChanges)} (sem mudança de valor)`
+              : "Valores oficializados no período"
+          }
+        />
         <StatCard label="Mudanças de fase" value={formatNumber(s.phaseChanges)} tone="warning" hint={`${pluralize(s.statusChanges, "mudança", "mudanças")} de situação`} />
       </section>
 
@@ -567,7 +783,7 @@ export function MovementReportView({ report, page, sp }: { report: MovementRepor
         <Callout tone="info" title="Valores aguardando conferência">
           {pluralize(report.pendingProposedValuations, "valor proposto", "valores propostos")} no período ainda não{" "}
           {report.pendingProposedValuations === 1 ? "foi oficializado" : "foram oficializados"} e não{" "}
-          {report.pendingProposedValuations === 1 ? "aparece" : "aparecem"} como alteração (RN-11).{" "}
+          {report.pendingProposedValuations === 1 ? "aparece" : "aparecem"} como alteração.{" "}
           <Link href="/contingencias/revisao">Abrir a fila de conferência</Link>.
         </Callout>
       ) : null}
@@ -600,9 +816,7 @@ export function MovementReportView({ report, page, sp }: { report: MovementRepor
                 <TableRow key={`${e.kind}-${e.processId}-${e.date}-${start + i}`}>
                   <TableCell className="whitespace-nowrap tabular-nums">{formatDate(e.date)}</TableCell>
                   <TableCell className="whitespace-nowrap">
-                    <Badge tone={e.kind === "closed" ? "neutral" : e.kind === "added" ? "info" : e.kind === "value_change" ? "primary" : "warning"}>
-                      {MOVEMENT_EVENT_LABELS[e.kind]}
-                    </Badge>
+                    <Badge tone={MOVEMENT_EVENT_TONES[e.kind]}>{MOVEMENT_EVENT_LABELS[e.kind]}</Badge>
                   </TableCell>
                   <TableCell className="min-w-56">
                     <Link href={`/processos/${e.processId}`} className={tableLinkClasses}>
@@ -622,12 +836,12 @@ export function MovementReportView({ report, page, sp }: { report: MovementRepor
                   </TableCell>
                   <NumCell>
                     {e.kind === "value_change" ? (
-                      e.previousCents === null ? <span className="text-muted-foreground">Sem valor anterior</span> : formatMoneyCents(e.previousCents)
+                      e.previousCents === null ? <EmptyValue>Sem valor anterior</EmptyValue> : formatMoneyCents(e.previousCents)
                     ) : (
-                      "—"
+                      <EmptyValue>Não se aplica</EmptyValue>
                     )}
                   </NumCell>
-                  <NumCell>{e.newCents === null ? "—" : formatMoneyCents(e.newCents)}</NumCell>
+                  <NumCell>{e.newCents === null ? <EmptyValue>Não se aplica</EmptyValue> : formatMoneyCents(e.newCents)}</NumCell>
                 </TableRow>
               ))
             )}
@@ -657,7 +871,7 @@ export function MovementReportView({ report, page, sp }: { report: MovementRepor
 export function ResponsiblesReportView({ report }: { report: ResponsiblesReport }) {
   const extra = [{ header: "Sem classificação", cell: (r: ResponsibleRow) => formatNumber(r.unclassified) }];
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-1 gap-6">
       {report.hasEstimates ? <EstimatesCallout /> : null}
       <SectionCard title="Por advogado responsável" description="Responsável cadastrado em cada processo da carteira ativa.">
         <BucketTable label="Carteira por advogado responsável" groupHeader="Advogado" rows={report.lawyers} totals={report.totals} extra={extra} />

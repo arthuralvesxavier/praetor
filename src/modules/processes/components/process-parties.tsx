@@ -8,17 +8,20 @@ import { LIABILITY_NATURE_LABELS, PARTY_ROLE_LABELS } from "@/domain/enums";
 import { maskDocument } from "@/lib/format";
 import { addPartyAction, removePartyAction, updatePartyAction } from "../actions";
 import type { ProcessDetail } from "../service";
+import { PROCESS_SECTION_IDS } from "../tabs";
 import { PartyDialog } from "./party-dialog";
+
+const NotInformed = () => <span className="text-muted-foreground">Não informado</span>;
 
 export function ProcessParties({ process: p }: { process: ProcessDetail }) {
   const canEdit = p.permissions.canEdit;
   const cols = canEdit ? 6 : 5;
   return (
-    <Card className="pb-0">
+    <Card id={PROCESS_SECTION_IDS.parties} aria-labelledby="partes-titulo" className="scroll-mt-4 pb-0">
       <CardHeader
         actions={canEdit ? <PartyDialog mode="add" action={addPartyAction} hiddenFields={{ processId: p.id }} /> : null}
       >
-        <CardTitle>Partes</CardTitle>
+        <CardTitle id="partes-titulo">Partes</CardTitle>
         <CardDescription>
           Polos do processo (inclusive Ministério Público e terceiros). CPF aparece mascarado nesta lista.
         </CardDescription>
@@ -59,10 +62,12 @@ export function ProcessParties({ process: p }: { process: ProcessDetail }) {
                   </TableCell>
                   <TableCell className="whitespace-nowrap">{PARTY_ROLE_LABELS[party.role]}</TableCell>
                   <TableCell className="whitespace-nowrap">
-                    {party.liabilityNature ? LIABILITY_NATURE_LABELS[party.liabilityNature] : "—"}
+                    {party.liabilityNature ? LIABILITY_NATURE_LABELS[party.liabilityNature] : <NotInformed />}
                   </TableCell>
-                  <TableCell className="font-mono text-xs tabular-nums">{maskDocument(party.documentNumber)}</TableCell>
-                  <TableCell>{party.counselName ?? "—"}</TableCell>
+                  <TableCell className="font-mono text-xs tabular-nums">
+                    {party.documentNumber ? maskDocument(party.documentNumber) : <span className="font-sans text-sm text-muted-foreground">Não informado</span>}
+                  </TableCell>
+                  <TableCell>{party.counselName ?? <NotInformed />}</TableCell>
                   {canEdit ? (
                     <TableCell className="text-right whitespace-nowrap">
                       <PartyDialog

@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { LinkTabs } from "@/components/ui/tabs";
 import { SNAPSHOT_STATUS_LABELS } from "@/domain/enums";
 import { formatDateTime, formatMonthYear, todayISO } from "@/lib/format";
-import { buildHref, hasAnyParam, pageParam, param } from "@/lib/search-params";
+import { buildHref, flagParam, hasAnyParam, pageParam, param } from "@/lib/search-params";
 import { cn } from "@/lib/utils";
 import { can } from "@/server/auth/permissions";
 import { requirePageContext } from "@/server/auth/session";
@@ -45,7 +45,7 @@ function periodOptions(snapshots: ReportFilterOptions["snapshots"], closedOnly: 
     .filter((s) => !closedOnly || s.status === "closed")
     .map((s) => ({
       value: s.period,
-      label: `${formatMonthYear(`${s.period}-01`)}${closedOnly ? "" : ` — ${SNAPSHOT_STATUS_LABELS[s.status].toLowerCase()}`}`,
+      label: `${formatMonthYear(`${s.period}-01`)}${closedOnly ? "" : ` (${SNAPSHOT_STATUS_LABELS[s.status].toLowerCase()})`}`,
     }));
 }
 
@@ -224,7 +224,7 @@ function ReportMeta({ report }: { report: ReportData }) {
   return (
     <div className="rounded-lg border border-border bg-surface-muted px-4 py-3 text-sm">
       <p className="hidden text-base font-semibold text-slate-900 print:block">
-        {report.organizationName} — {REPORT_TYPE_LABELS[report.type]}
+        {report.organizationName}: {REPORT_TYPE_LABELS[report.type]}
       </p>
       <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-[auto_1fr]">
         <dt className="font-medium text-slate-600">Escopo</dt>
@@ -247,7 +247,7 @@ function ReportBody({ report, page, sp }: { report: ReportData; page: number; sp
     case "provisao":
       return <ProvisionReportView report={report} />;
     case "auditoria":
-      return <AuditLetterView report={report} />;
+      return <AuditLetterView report={report} page={page} sp={sp} printAll={flagParam(sp, "impressao")} />;
     case "movimentacao":
       return <MovementReportView report={report} page={page} sp={sp} />;
     case "responsaveis":

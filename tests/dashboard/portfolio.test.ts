@@ -1,36 +1,44 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { netExposure, provisionFor } from "@/domain/contingency";
-import type { BiFilters } from "@/modules/dashboard/bi-filters";
+import { processesHref, type BiFilters } from "@/modules/dashboard/bi-filters";
 import {
   bucketFromSnapshotItems,
   bucketOf,
+  coveragePercent,
+  coverageStatement,
   delta,
+  exposureBasisCounts,
   groupRows,
+  liquidatedCoverage,
   rankGroups,
+  splitUnknownKey,
   uniqueProcessCount,
   type PortfolioRowLike,
 } from "@/modules/dashboard/portfolio";
-import { getFollowUpPanel, getPortfolioPanel, type PortfolioData } from "@/modules/dashboard/portfolio-service";
+import { DIMENSIONS, getFollowUpPanel, getPortfolioPanel, type PortfolioData } from "@/modules/dashboard/portfolio-service";
+import { processFiltersFromSearchParams } from "@/modules/processes/filters";
 import { getPortfolioExposure, type PortfolioExposureRow } from "@/modules/contingency/service";
-import { listUpcomingHearings } from "@/modules/hearings/service";
-import { getIntakeCounts } from "@/modules/intake/service";
+import { getIntakeStatusCounts } from "@/modules/intake/service";
 import type { AuthContext } from "@/server/auth/context";
-import { alerts, caseBriefs, legalProcesses, portfolioSnapshotItems, portfolioSnapshots } from "@/server/db/schema";
+import {
+  alerts,
+  caseBriefs,
+  legalProcesses,
+  portfolioSnapshotItems,
+  portfolioSnapshots,
+  processGuarantees,
+} from "@/server/db/schema";
 import { setupFixture, type Fixture } from "../helpers/fixtures";
 
-// The contingency, hearings and intake modules are other packages: their cross-module
+// The contingency and intake modules are other packages: their cross-module
 // functions are mocked so this suite tests the dashboard's own scoping and aggregation.
 vi.mock("@/modules/contingency/service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/modules/contingency/service")>();
   return { ...actual, getPortfolioExposure: vi.fn() };
 });
-vi.mock("@/modules/hearings/service", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/modules/hearings/service")>();
-  return { ...actual, listUpcomingHearings: vi.fn() };
-});
 vi.mock("@/modules/intake/service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/modules/intake/service")>();
-  return { ...actual, getIntakeCounts: vi.fn() };
+  return { ...actual, getIntakeStatusCounts: vi.fn() };
 });
 
 const TODAY = "2026-10-11";
@@ -114,6 +122,105 @@ describe("portfolio aggregation (pure)", () => {
     expect(uniqueProcessCount([{ number: "1" }, { number: "1" }, { number: "2" }])).toBe(2);
     expect(delta(110, 100)).toMatchObject({ diff: 10, ratio: 0.1 });
     expect(delta(5, 0).ratio).toBeNull();
+  });
+
+  it("measures the coverage of the official liquidated value: zero is assessed, null is not (RN-03)", () => {
+    const rows = [
+      row({ number: "1", liquidatedCents: 0 }), // assessed as zero (e.g. paid off): covered
+      row({ number: "2", liquidatedCents: 500 }),
+      row({ number: "3", liquidatedCents: null, claimCents: 1_000, percentageBp: 5_000 }),
+      row({ number: "4", liquidatedCents: null }),
+    ];
+    const c = liquidatedCoverage(bucketOf(rows));
+    expect(c).toEqual({ assessed: 2, total: 4, ratio: 0.5 });
+    expect(coverageStatement(c)).toBe("valor apurado em 2 de 4 processos (50%)");
+    // Treating null as zero would claim full coverage; the real figure does not.
+    expect(liquidatedCoverage(bucketOf(rows.map((r) => ({ ...r, liquidatedCents: r.liquidatedCents ?? 0 }))))).toMatchObject({
+      assessed: 4,
+    });
+    expect(liquidatedCoverage(bucketOf(rows.filter((r) => r.liquidatedCents === null)))).toEqual({ assessed: 0, total: 2, ratio: 0 });
+
+    // Empty set and rounding edges: never "100%" while one is missing, never "0%" when one is covered.
+    expect(liquidatedCoverage(bucketOf([]))).toEqual({ assessed: 0, total: 0, ratio: null });
+    expect(coverageStatement(liquidatedCoverage(bucketOf([])))).toBe("nenhum processo na carteira ativa");
+    expect(coveragePercent({ assessed: 999, total: 1_000, ratio: 0.999 })).toBe("mais de 99%");
+    expect(coveragePercent({ assessed: 1, total: 1_000, ratio: 0.001 })).toBe("menos de 1%");
+    expect(coveragePercent({ assessed: 1, total: 1, ratio: 1 })).toBe("100%");
+    expect(coverageStatement({ assessed: 1, total: 1, ratio: 1 })).toBe("valor apurado em 1 de 1 processo (100%)");
+
+    // A closed snapshot's coverage comes from its stored items (null stays não apurado).
+    const stored = bucketFromSnapshotItems([
+      {
+        claimAmountCents: 1,
+        liquidatedAmountCents: 0,
+        guaranteesCents: 0,
+        exposureCents: 0,
+        exposureIsEstimate: false,
+        provisionCents: 0,
+        provisionIsEstimate: false,
+      },
+      {
+        claimAmountCents: 1,
+        liquidatedAmountCents: null,
+        guaranteesCents: 0,
+        exposureCents: null,
+        exposureIsEstimate: false,
+        provisionCents: null,
+        provisionIsEstimate: false,
+      },
+    ]);
+    expect(liquidatedCoverage(stored)).toEqual({ assessed: 1, total: 2, ratio: 0.5 });
+  });
+
+  it("splits exposure by basis so a group without valor apurado is never an official R$ 0 (RN-03, RN-04)", () => {
+    const rows = [
+      row({ number: "1", liquidatedCents: 0 }), // apurado as zero: official exposure of R$ 0 is a real value
+      row({ number: "2", liquidatedCents: null, claimCents: 1_000, percentageBp: 5_000 }), // estimate
+      row({ number: "3", liquidatedCents: null, claimCents: null, percentageBp: 5_000 }), // no basis
+      row({ number: "4", liquidatedCents: null, claimCents: 1_000, percentageBp: null }), // no basis
+    ];
+    expect(exposureBasisCounts(bucketOf(rows))).toEqual({ official: 1, estimate: 1, none: 2 });
+    // Without the zero-valued apurado the official sum is still 0, but nothing is official.
+    const unassessed = bucketOf(rows.slice(1));
+    expect(unassessed.exposureCents).toBe(0);
+    expect(exposureBasisCounts(unassessed)).toEqual({ official: 0, estimate: 1, none: 2 });
+    // Only processes without basis: no estimate either (the estimate sum of 0 is not an estimate of zero).
+    const noBasis = bucketOf(rows.slice(2));
+    expect(noBasis.exposureEstimateCents).toBe(0);
+    expect(exposureBasisCounts(noBasis)).toEqual({ official: 0, estimate: 0, none: 2 });
+    // Null treated as zero would make every process official.
+    expect(exposureBasisCounts(bucketOf(rows.map((r) => ({ ...r, liquidatedCents: r.liquidatedCents ?? 0 }))))).toEqual({
+      official: 4,
+      estimate: 0,
+      none: 0,
+    });
+    expect(exposureBasisCounts(bucketOf([]))).toEqual({ official: 0, estimate: 0, none: 0 });
+  });
+
+  it("keeps null keys out of the chart groups and returns them as a registration gap", () => {
+    const rows = [
+      row({ number: "1", instance: "first", liquidatedCents: 100 }),
+      row({ number: "2", instance: null, liquidatedCents: 9_000 }), // the largest exposure: still not a category
+      row({ number: "3", instance: null }),
+      row({ number: "4", instance: "second" }),
+    ];
+    const { known, missing } = splitUnknownKey(groupRows(rows, (r) => r.instance));
+    expect([...known.keys()].sort()).toEqual(["first", "second"]);
+    expect(missing).toMatchObject({ count: 2, liquidatedCents: 9_000 });
+    expect(rankGroups(known).top.map((g) => g.key)).toEqual(["first", "second"]);
+    expect(splitUnknownKey(groupRows(rows, (r) => r.court)).missing).toBeNull();
+  });
+
+  it("links every gap to the processes filter of the same field (URL round trip)", () => {
+    const f: BiFilters = { ...ALL, unitId: "00000000-0000-4000-8000-0000000000aa" };
+    for (const field of DIMENSIONS) {
+      const href = processesHref(f, { pendencia: field });
+      const sp = Object.fromEntries(new URL(href, "http://praetor.invalid").searchParams);
+      const parsed = processFiltersFromSearchParams(sp);
+      expect(parsed.missingField).toBe(field);
+      expect(parsed.unitId).toBe(f.unitId); // the dashboard filters travel with the link
+      expect(parsed.portfolio).toBe("active"); // same population as the panel (active + suspended)
+    }
   });
 });
 
@@ -220,6 +327,13 @@ describe("executive portfolio panel", () => {
     });
     await insert("P6", { organizationId: fx.orgB, liquidatedAmountCents: 7_777 });
     guarantees.set(ids.P2, 100_000);
+    // The same linked guarantee in the database (the net exposure detail aggregates it by kind),
+    // plus a released and a deleted one that never count.
+    await fx.db.insert(processGuarantees).values([
+      { organizationId: fx.orgA, processId: ids.P2, kind: "judicial_deposit", amountCents: 100_000 },
+      { organizationId: fx.orgA, processId: ids.P2, kind: "seizure", amountCents: 70_000, status: "released_to_plaintiff" },
+      { organizationId: fx.orgA, processId: ids.P2, kind: "seizure", amountCents: 90_000, deletedAt: new Date() },
+    ]);
 
     // Closed months (the latest one before the current month is used) and another organization's closing.
     const params = { riskPercentages: { remote: 0, possible: 50, probable: 100 }, rulesVersion: 1, confidenceThreshold: 85 };
@@ -292,13 +406,43 @@ describe("executive portfolio panel", () => {
     const court = d.dimensions.court.rows.find((r) => r.key === "TRT10")!;
     expect(court.bucket.count).toBe(4);
     expect(court.href).toBe("/processos?tribunal=TRT10");
-    const noInstance = d.dimensions.instance.rows.find((r) => r.key === null)!;
-    expect(noInstance).toMatchObject({ label: "Não informado", href: null });
+    // A null dimension is never a chart category: it is a registration gap ("Pendências de cadastro").
+    for (const k of DIMENSIONS) {
+      expect(d.dimensions[k].rows.every((r) => r.key !== null && r.label !== "Não informado")).toBe(true);
+    }
+    expect(d.dimensions.instance.missing).toMatchObject({ bucket: { count: 1 }, href: "/processos?pendencia=instancia" }); // P4
+    expect(d.dimensions.instance.rows.reduce((n, r) => n + r.bucket.count, 0)).toBe(4);
+    expect(d.dimensions.court.missing).toBeNull();
+    expect(d.registrationGaps).toEqual([
+      { field: "instance", count: 1, href: "/processos?pendencia=instancia" },
+      { field: "city", count: 2, href: "/processos?pendencia=cidade" }, // P4, P8
+      { field: "company", count: 2, href: "/processos?pendencia=empresa" }, // P3, P8
+    ]);
+    // Valor apurado in 2 of 5 (P2, P4); P1, P3 and P8 are não apurados, never zero.
+    expect(d.coverage).toEqual({ assessed: 2, total: 5, ratio: 0.4 });
     expect(d.dimensions.company.rows.find((r) => r.key === fx.companyA)).toMatchObject({
       label: "Empresa Fictícia A Ltda.",
       href: `/processos?empresa=${fx.companyA}`,
     });
     expect(d.dimensions.city.rows.map((r) => r.key)).toContain("Palmas");
+
+    // P1.8: net exposure = apurado − linked guarantees (P2: 800 mil − 100 mil; P4: 40 mi), estimate apart.
+    expect(d.netExposure).toMatchObject({
+      coverage: { assessed: 2, total: 5 },
+      liquidatedCents: 40_800_000,
+      guaranteesCents: 100_000,
+      deductedCents: 100_000,
+      exposureCents: 40_700_000,
+      excess: { cents: 0, processes: 0 },
+      withGuarantees: 1,
+      byKind: [{ kind: "judicial_deposit", count: 1, amountCents: 100_000 }],
+      estimate: { exposureCents: 500_000, processes: 2, guaranteesCents: 0, noBasis: 1 },
+    });
+    expect(d.netExposure.exposureCents).toBe(d.totals.exposureCents);
+    expect(d.netExposure.estimate.exposureCents).toBe(d.totals.exposureEstimateCents);
+    expect(d.netExposure.top).toEqual([
+      expect.objectContaining({ processId: ids.P2, liquidatedCents: 800_000, guaranteesCents: 100_000, deductedCents: 100_000, exposureCents: 700_000 }),
+    ]);
 
     // Latest CLOSED month before October (the October preview is ignored).
     expect(d.previous?.period).toBe("2026-09");
@@ -308,8 +452,14 @@ describe("executive portfolio panel", () => {
   it("applies row visibility per role even when the upstream rows are not scoped", async () => {
     const exec = await panel(fx.ctx.executive);
     expect(exec.activeProcesses).toBe(4); // confidential P4 excluded
+    expect(exec.coverage).toEqual({ assessed: 1, total: 4, ratio: 0.25 });
+    expect(exec.registrationGaps.map((g) => [g.field, g.count])).toEqual([
+      ["city", 1],
+      ["company", 2],
+    ]);
     expect(exec.totals.exposureCents).toBe(700_000);
     expect(exec.top.map((t) => t.processId)).not.toContain(ids.P4);
+    expect(exec.netExposure).toMatchObject({ liquidatedCents: 800_000, exposureCents: 700_000, coverage: { assessed: 1, total: 4 } });
     expect(exec.previous?.totals).toMatchObject({ count: 2, exposureCents: 600_000 });
 
     for (const c of [fx.ctx.accountant, fx.ctx.auditor]) {
@@ -335,6 +485,14 @@ describe("executive portfolio panel", () => {
     expect(vi.mocked(getPortfolioExposure).mock.calls.at(-1)?.[1]).toEqual({ companyId: fx.companyA });
     const byUnit = await panel(fx.ctx.admin, { unitId: fx.unitRe });
     expect(byUnit.activeProcesses).toBe(2);
+    expect(byUnit.coverage).toEqual({ assessed: 0, total: 2, ratio: 0 });
+    // Nothing apurado in the unit: no net exposure (never R$ 0), no deduction detail.
+    expect(byUnit.netExposure).toMatchObject({ coverage: { assessed: 0 }, exposureCents: 0, byKind: [], top: [] });
+    expect(byUnit.registrationGaps.find((g) => g.field === "city")).toEqual({
+      field: "city",
+      count: 1,
+      href: `/processos?unidade=${fx.unitRe}&pendencia=cidade`,
+    });
     expect(byUnit.dimensions.court.rows.find((r) => r.key === "TRT22")?.href).toBe(`/processos?unidade=${fx.unitRe}&tribunal=TRT22`);
     expect((await panel(fx.ctx.admin, { area: "civil" })).activeProcesses).toBe(1);
     const byResponsible = await panel(fx.ctx.admin, { responsibleId: fx.ctx.lawyer.userId });
@@ -342,6 +500,32 @@ describe("executive portfolio panel", () => {
     expect(byResponsible.previous?.totals.count).toBe(2); // P1 and P4 in September
     // A foreign id can only narrow, never widen.
     expect((await panel(fx.ctx.admin, { unitId: fx.unitB })).activeProcesses).toBe(0);
+  });
+
+  it("counts a zero liquidated value as apurado and keeps it out of the estimates (RN-03)", async () => {
+    vi.mocked(getPortfolioExposure).mockImplementationOnce(async () => {
+      const rows = (await unscopedRows()).map((r) => (r.processId === ids.P1 ? { ...r, liquidatedCents: 0 } : r));
+      return { rows, totals: bucketOf(rows) };
+    });
+    const d = await panel(fx.ctx.admin);
+    expect(d.coverage).toEqual({ assessed: 3, total: 5, ratio: 0.6 });
+    expect(d.totals).toMatchObject({ liquidatedUnknown: 2, exposureEstimateCents: 0, exposureCents: 40_700_000 });
+  });
+
+  it("keeps the net exposure at zero when guarantees exceed the valor apurado, and reports the excess", async () => {
+    vi.mocked(getPortfolioExposure).mockImplementationOnce(async () => {
+      const rows = (await unscopedRows()).map((r) => (r.processId === ids.P2 ? { ...r, guaranteesCents: 900_000 } : r));
+      return { rows, totals: bucketOf(rows) };
+    });
+    const d = await panel(fx.ctx.admin);
+    expect(d.netExposure).toMatchObject({
+      liquidatedCents: 40_800_000,
+      guaranteesCents: 900_000,
+      deductedCents: 800_000,
+      exposureCents: 40_000_000,
+      excess: { cents: 100_000, processes: 1 },
+    });
+    expect(d.netExposure.exposureCents).toBe(d.totals.exposureCents);
   });
 
   it("reports an unavailable section when the contingency module fails", async () => {
@@ -376,23 +560,19 @@ describe("executive portfolio panel", () => {
     });
 
     beforeEach(() => {
-      vi.mocked(listUpcomingHearings).mockReset();
-      vi.mocked(listUpcomingHearings).mockResolvedValue([
-        {
-          id: "00000000-0000-4000-8000-000000000001",
-          processId: "00000000-0000-4000-8000-000000000002",
-          processNumber: "0000001-00.2026.5.10.0001",
-          processTitle: "Processo fictício",
-          kind: "instruction",
-          mode: "virtual",
-          status: "scheduled",
-          scheduledAt: new Date("2026-10-15T13:00:00Z"),
-          location: null,
-          responsibleName: null,
-        },
-      ]);
-      vi.mocked(getIntakeCounts).mockReset();
-      vi.mocked(getIntakeCounts).mockResolvedValue({ received: 1, inProgress: 2, awaitingReview: 3, approved: 4, failed: 0 });
+      vi.mocked(getIntakeStatusCounts).mockReset();
+      vi.mocked(getIntakeStatusCounts).mockResolvedValue({
+        received: 1,
+        assigned: 1,
+        analyzing: 0,
+        brief_ready: 1,
+        notified: 2,
+        in_review: 1,
+        approved: 4,
+        brief_rejected: 5,
+        failed: 0,
+        cancelled: 7,
+      });
     });
 
     it("groups open alerts by area within the user's visibility", async () => {
@@ -407,22 +587,25 @@ describe("executive portfolio panel", () => {
       expect(exec.alerts).toMatchObject({ total: 1, critical: 0 }); // the confidential process' alert is hidden
     });
 
-    it("passes the configured hearing window and surfaces intake counts", async () => {
+    it("surfaces the intake counts by effective status (each one a list of /entrada)", async () => {
       const d = await getFollowUpPanel(fx.ctx.manager);
-      expect(d.upcomingHearingDays).toBe(10);
-      expect(vi.mocked(listUpcomingHearings).mock.calls[0]?.[1]).toEqual({ days: 10, limit: 6 });
-      expect(d.hearings.status).toBe("ok");
-      expect(d.intake).toEqual({ status: "ok", data: { received: 1, inProgress: 2, awaitingReview: 3, approved: 4, failed: 0 } });
+      // No "Próximas audiências" card any more: the decision band shows the hearings.
+      expect(d).not.toHaveProperty("hearings");
+      expect(d.intake).toEqual({
+        status: "ok",
+        data: { received: 1, inProgress: 2, notified: 2, inReview: 1, approved: 4, failed: 0 },
+      });
 
-      vi.mocked(listUpcomingHearings).mockRejectedValueOnce(new Error("falha simulada"));
+      vi.mocked(getIntakeStatusCounts).mockRejectedValueOnce(new Error("falha simulada"));
       const failing = await getFollowUpPanel(fx.ctx.manager);
-      expect(failing.hearings).toEqual({ status: "error" });
-      expect(failing.intake.status).toBe("ok");
+      expect(failing.intake).toEqual({ status: "error" });
+      expect(failing.alerts.total).toBeGreaterThanOrEqual(0);
     });
 
     it("counts preliminary analyses awaiting review only for brief readers, within visibility", async () => {
       const admin = await getFollowUpPanel(fx.ctx.admin);
       expect(admin.briefs.status === "ok" && admin.briefs.data.total).toBe(2);
+      expect(admin.briefs.status === "ok" && [admin.briefs.data.readyForReview, admin.briefs.data.inReview]).toEqual([1, 1]);
       const exec = await getFollowUpPanel(fx.ctx.executive);
       // Executives have no brief:read permission.
       expect(exec.briefs).toEqual({ status: "forbidden" });

@@ -690,7 +690,7 @@ export async function getContract(ctx: AuthContext, id: string): Promise<Contrac
 
   const linkedProcess: LinkedRecordSummary | null = c.linkedProcessId
     ? process[0]
-      ? { id: process[0].id, label: `${process[0].number} — ${process[0].title}`, visible: true }
+      ? { id: process[0].id, label: `${process[0].number} · ${process[0].title}`, visible: true }
       : { id: c.linkedProcessId, label: "Processo vinculado (sem acesso)", visible: false }
     : null;
   const linkedOccurrence: LinkedRecordSummary | null = c.linkedOccurrenceId

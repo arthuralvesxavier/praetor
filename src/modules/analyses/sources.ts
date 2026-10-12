@@ -12,6 +12,7 @@ import {
   OCCURRENCE_STATUS_LABELS,
   PARTY_ROLE_LABELS,
   PROCESS_EVENT_TYPE_LABELS,
+  PROCESS_INSTANCE_LABELS,
   PROCESS_PHASE_LABELS,
   PROCESS_STATUS_LABELS,
   RENEWAL_TYPE_LABELS,
@@ -130,7 +131,7 @@ export type ResolvedSubject = {
 };
 
 export function processLabel(p: { number: string; title: string }) {
-  return `Processo ${p.number} — ${p.title}`;
+  return `Processo ${p.number} · ${p.title}`;
 }
 export function occurrenceLabel(o: { title: string }) {
   return `Ocorrência: ${o.title}`;
@@ -258,6 +259,7 @@ export async function renderProcessRecord(
     `Comarca / jurisdição: ${orNa(p.jurisdiction)}`,
     `Área: ${LEGAL_AREA_LABELS[p.area] ?? p.area}`,
     `Fase: ${PROCESS_PHASE_LABELS[p.phase] ?? p.phase}`,
+    `Instância: ${p.instance ? PROCESS_INSTANCE_LABELS[p.instance] : "não informada"}`,
     `Situação: ${PROCESS_STATUS_LABELS[p.status] ?? p.status}`,
     `Unidade: ${await unitName(p.unitId, organizationId)}`,
     `Responsável: ${await userName(p.responsibleId, organizationId)}`,
@@ -287,7 +289,7 @@ export async function renderProcessRecord(
     ...(events.length
       ? events.map(
           (e) =>
-            `- ${dateBr(e.occurredAt)} — ${PROCESS_EVENT_TYPE_LABELS[e.type] ?? e.type} — ${e.title}${
+            `- ${dateBr(e.occurredAt)}: ${PROCESS_EVENT_TYPE_LABELS[e.type] ?? e.type}, ${e.title}${
               e.description ? `. ${e.description}` : ""
             }`,
         )
@@ -484,7 +486,7 @@ function docCandidates(rows: DocRow[], notes: string[]): Candidate[] {
       entityId: d.id,
       versionId: d.versionId,
       versionNumber: d.versionNumber,
-      label: `${documentSourceLabel(d.title, d.versionNumber)} — ${DOCUMENT_CATEGORY_LABELS[d.category as keyof typeof DOCUMENT_CATEGORY_LABELS] ?? d.category}`,
+      label: `${documentSourceLabel(d.title, d.versionNumber)} · ${DOCUMENT_CATEGORY_LABELS[d.category as keyof typeof DOCUMENT_CATEGORY_LABELS] ?? d.category}`,
       rawText: text,
     });
   }

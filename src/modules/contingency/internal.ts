@@ -129,9 +129,32 @@ const MIRROR_FIELDS = [
 export type MirrorChanges = Record<string, { from: unknown; to: unknown }> | null;
 
 /**
+ * Order that picks THE official valuation in force among several (e.g. official
+ * values of different instances sharing a base date after an import):
+ * latest base date, then most recently reviewed (approval), then created, then id.
+ * Deterministic; mirrored by `later()` in ./position.ts.
+ */
+export const OFFICIAL_VALUATION_ORDER = [
+  desc(processValuations.baseDate),
+  desc(sql`coalesce(${processValuations.reviewedAt}, ${processValuations.createdAt})`),
+  desc(processValuations.createdAt),
+  desc(processValuations.id),
+] as const;
+
+/** PostgreSQL unique violation (SQLSTATE 23505), possibly wrapped in `cause` (DrizzleQueryError). */
+export function isUniqueViolation(err: unknown): boolean {
+  let e: unknown = err;
+  for (let i = 0; i < 5 && e && typeof e === "object"; i++) {
+    if ((e as { code?: unknown }).code === "23505") return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
  * Recomputes the denormalized contingency fields of a process inside the
  * caller's transaction (MODULE_CONTRACTS "Denormalized mirrors"):
- *   liquidatedAmountCents = latest OFFICIAL liquidated valuation (baseDate, then createdAt)
+ *   liquidatedAmountCents = latest OFFICIAL liquidated valuation (OFFICIAL_VALUATION_ORDER)
  *   claimAmountCents      = latest OFFICIAL claim valuation (kept when there is none)
  *   riskPercentageBp / lossProbability = official assessment in force today (kept when there is none)
  *   provisionAmountCents  = provisionFor(...) with the linked guarantees (RN-04/RN-05)
@@ -162,7 +185,7 @@ export async function syncProcessMirrors(
           eq(processValuations.status, "official"),
         ),
       )
-      .orderBy(desc(processValuations.baseDate), desc(processValuations.createdAt))
+      .orderBy(...OFFICIAL_VALUATION_ORDER)
       .limit(1);
 
   const today = todayISO();
@@ -180,7 +203,12 @@ export async function syncProcessMirrors(
           lte(processRiskAssessments.effectiveFrom, today),
         ),
       )
-      .orderBy(desc(processRiskAssessments.effectiveFrom), desc(processRiskAssessments.createdAt))
+      .orderBy(
+        desc(processRiskAssessments.effectiveFrom),
+        desc(sql`coalesce(${processRiskAssessments.reviewedAt}, ${processRiskAssessments.createdAt})`),
+        desc(processRiskAssessments.createdAt),
+        desc(processRiskAssessments.id),
+      )
       .limit(1),
     tx
       .select({ total: sql<number>`coalesce(sum(${processGuarantees.amountCents}), 0)`.mapWith(Number) })

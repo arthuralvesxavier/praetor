@@ -10,7 +10,7 @@ export type PermissionGroup = { key: string; label: string; permissions: Permiss
 
 const GROUPS: { key: string; label: string; prefixes: string[] }[] = [
   { key: "painel", label: "Painel e alertas", prefixes: ["dashboard", "alert"] },
-  { key: "carteira", label: "Carteira de processos", prefixes: ["process"] },
+  { key: "carteira", label: "Carteira de processos", prefixes: ["process", "court_sync"] },
   {
     key: "entrada",
     label: "Entrada, distribuição e análises preliminares",

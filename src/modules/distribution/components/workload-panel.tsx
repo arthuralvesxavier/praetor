@@ -10,7 +10,7 @@ import type { Workload, WorkloadPending, WorkloadRow } from "../service";
 
 /** Sum of known values + how many are unknown (RN-03: null is not zero). */
 function KnownSum({ cents, unknown, count, unknownLabel }: { cents: number; unknown: number; count: number; unknownLabel: string }) {
-  if (count === 0) return <span className="text-muted-foreground">—</span>;
+  if (count === 0) return <span className="text-muted-foreground">Sem processos</span>;
   if (unknown === count) return <span className="text-muted-foreground">{unknownLabel}</span>;
   return (
     <>
@@ -25,7 +25,7 @@ function KnownSum({ cents, unknown, count, unknownLabel }: { cents: number; unkn
 }
 
 function Exposure({ money }: { money: MoneyBucket }) {
-  if (money.count === 0) return <span className="text-muted-foreground">—</span>;
+  if (money.count === 0) return <span className="text-muted-foreground">Sem processos</span>;
   if (money.exposureUnknown === money.count) return <span className="text-muted-foreground">Sem base de cálculo</span>;
   return (
     <>
@@ -46,7 +46,7 @@ const PENDING_LABELS: { key: keyof WorkloadPending; singular: string; plural: st
   { key: "openDeadlines", singular: "prazo em aberto", plural: "prazos em aberto" },
   { key: "briefsAwaitingReview", singular: "análise preliminar a revisar", plural: "análises preliminares a revisar" },
   { key: "valuationsPendingReview", singular: "valor a conferir", plural: "valores a conferir" },
-  { key: "needsVerification", singular: "processo a verificar", plural: "processos a verificar" },
+  { key: "needsVerification", singular: "processo pendente de conferência", plural: "processos pendentes de conferência" },
   { key: "openIntakes", singular: "entrada em andamento", plural: "entradas em andamento" },
 ];
 

@@ -46,13 +46,16 @@ function briefIdFrom(formData: FormData): string {
   return str(formData, "briefId") ?? "";
 }
 
-/** Requests a new (simulated) preliminary analysis for a process; generated in the background. */
+/**
+ * Requests a new (simulated) preliminary analysis for a process; generated in the background.
+ * Requires `brief:review`: analysts (`intake:manage`) generate a new version from the intake page.
+ */
 export async function requestCaseBriefAction(
   _prev: ActionResult<{ briefId: string }> | null,
   formData: FormData,
 ): Promise<ActionResult<{ briefId: string }>> {
   try {
-    const ctx = await requireActionContext();
+    const ctx = await requireActionContext("brief:review");
     const processId = str(formData, "processId") ?? "";
     const result = await requestCaseBrief(ctx, processId);
     revalidateBrief(result.briefId, processId);

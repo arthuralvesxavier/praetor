@@ -62,7 +62,7 @@ export function EmailsTable({ items, hideProcess = false, emptyMessage, emptyDes
                   ) : m.processId ? (
                     <span className="text-xs text-muted-foreground">Processo sem acesso</span>
                   ) : (
-                    <span className="text-muted-foreground">—</span>
+                    <span className="text-muted-foreground">Sem processo</span>
                   )}
                 </TableCell>
               )}

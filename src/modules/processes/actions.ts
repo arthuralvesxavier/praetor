@@ -30,11 +30,21 @@ import {
   updateProcess,
   updateProcessInstance,
 } from "./service";
+import { CLAIM_PROPOSED_PARAM_VALUE } from "./tabs";
 
 /** ActionResult + submitted values on failure (forms re-fill their fields). */
 export type ProcessActionState = ActionResult<{ id: string }> & { values?: Record<string, string> };
 
 const DETAIL = (id: string) => `/processos/${id}`;
+
+/** Detail URL after a save: banners for a failed occurrence link and a valor da causa sent for review. */
+function detailAfterSave(id: string, flags: { linkFailed?: boolean; claimProposed?: boolean }): string {
+  const params = new URLSearchParams();
+  if (flags.linkFailed) params.set("vinculo", "falhou");
+  if (flags.claimProposed) params.set("valor_causa", CLAIM_PROPOSED_PARAM_VALUE);
+  const qs = params.toString();
+  return qs ? `${DETAIL(id)}?${qs}` : DETAIL(id);
+}
 
 /** String entries of the submitted form, echoed back on failure. */
 function submittedValues(fd: FormData): Record<string, string> {
@@ -156,7 +166,10 @@ export async function createProcessAction(
       revalidatePath("/preventivo");
       revalidatePath(`/preventivo/${fromOccurrenceId}`);
     }
-    target = result.occurrenceLinkError ? `${DETAIL(result.id)}?vinculo=falhou` : DETAIL(result.id);
+    target = detailAfterSave(result.id, {
+      linkFailed: Boolean(result.occurrenceLinkError),
+      claimProposed: result.claimValuationStatus === "proposed",
+    });
   } catch (err) {
     return failure(err, "createProcess", formData);
   }
@@ -168,15 +181,18 @@ export async function updateProcessAction(
   formData: FormData,
 ): Promise<ProcessActionState> {
   const id = idFrom(formData, "id");
+  let target: string;
   try {
     const ctx = await requireActionContext("process:write");
-    await updateProcess(ctx, id, processInputFromForm(formData));
+    const { claimValuation } = await updateProcess(ctx, id, processInputFromForm(formData));
     revalidatePath("/processos");
     revalidatePath(DETAIL(id));
+    if (claimValuation) revalidatePath("/contingencias/revisao");
+    target = detailAfterSave(id, { claimProposed: claimValuation?.status === "proposed" });
   } catch (err) {
     return failure(err, "updateProcess", formData);
   }
-  redirect(DETAIL(id));
+  redirect(target);
 }
 
 export async function deleteProcessAction(
@@ -243,7 +259,7 @@ export async function flagVerificationAction(
     await flagProcessForVerification(ctx, id, { note: str(formData, "note") ?? "" });
     revalidatePath("/processos");
     revalidatePath(DETAIL(id));
-    return { ok: true, data: { id }, message: "Processo marcado para verificação." };
+    return { ok: true, data: { id }, message: "Processo marcado para conferência." };
   } catch (err) {
     return failure(err, "flagProcessForVerification", formData);
   }
@@ -259,7 +275,7 @@ export async function resolveVerificationAction(
     await resolveProcessVerification(ctx, id, { note: strOrNull(formData, "note") });
     revalidatePath("/processos");
     revalidatePath(DETAIL(id));
-    return { ok: true, data: { id }, message: "Verificação concluída." };
+    return { ok: true, data: { id }, message: "Conferência concluída." };
   } catch (err) {
     return failure(err, "resolveProcessVerification", formData);
   }

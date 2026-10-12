@@ -8,6 +8,7 @@ vi.mock("@/modules/contingency/service", async (importOriginal) =>
 
 import { and, eq } from "drizzle-orm";
 import { periodReferenceDate, previousPeriod } from "@/domain/contingency";
+import { processPhaseLabel } from "@/domain/enums";
 import { addDaysISO, todayISO } from "@/lib/format";
 import {
   auditLogs,
@@ -20,6 +21,7 @@ import {
 } from "@/server/db/schema";
 import { ForbiddenError, ValidationError } from "@/server/lib/errors";
 import { CSV_BOM } from "@/modules/reports/csv";
+import { buildReportExport } from "@/modules/reports/export-builders";
 import {
   exportReport,
   getAuditLetterReport,
@@ -120,7 +122,7 @@ beforeAll(async () => {
     unitId: fx.unitSp,
     companyId: fx.companyA,
     court: "TST",
-    phase: "appeal",
+    phase: "knowledge",
     instance: "superior",
     claimAmountCents: 7_000_000,
     liquidatedAmountCents: 7_000_000,
@@ -133,7 +135,7 @@ beforeAll(async () => {
     unitId: fx.unitSp,
     companyId: fx.companyA,
     court: "TRT2",
-    phase: "closed",
+    phase: "enforcement",
     status: "closed",
     closedAt: today,
     closureReason: "paid_extinct",
@@ -411,6 +413,16 @@ beforeAll(async () => {
       summary: "x",
       changes: { phase: { from: "knowledge", to: "appeal" } },
     },
+    {
+      // P0.5 data migration: a reclassification of the model, not a procedural phase change.
+      organizationId: fx.orgA,
+      actorId: null,
+      action: "legal_process.phase_migration",
+      entityType: "legal_process",
+      entityId: p.p3,
+      summary: "x",
+      changes: { phase: { from: "appeal", to: "knowledge" } },
+    },
   ]);
 });
 
@@ -484,11 +496,25 @@ describe("exposição report", () => {
   it("compares the current position with the previous month's snapshot", async () => {
     const r = await getExposureReport(fx.ctx.admin);
     expect(r.comparison?.period).toBe(prevPeriod);
-    expect(r.comparisonNote).toBeNull();
+    // The closed competência keeps p5 in the former "Recursal" phase (RN-10): explained, never recalculated (P0.5).
+    expect(r.comparisonNote).toBe(
+      "Na dimensão Fase, a competência de comparação usa fases do modelo anterior à separação entre fase e instância (Recursal): os valores dela não são recalculados.",
+    );
+    const phases = r.dimensions.find((d) => d.key === "phase")!;
+    const legacy = phases.rows.find((g) => g.key === "appeal")!;
+    expect(legacy).toMatchObject({ label: "Recursal", processCount: 0 });
+    expect(legacy.previous?.processCount).toBe(1);
+    expect(phases.rows.find((g) => g.key === "knowledge")!.label).toBe("Conhecimento");
     const courts = r.dimensions.find((d) => d.key === "court")!;
     const trt10 = courts.rows.find((g) => g.label === "TRT10")!;
     expect(trt10.processCount).toBe(3); // p1, p2, p4
-    expect(trt10.previous).toEqual({ processCount: 2, exposureCents: 3_000_000, exposureEstimateCents: 4_000_000, exposureUnknown: 0 });
+    expect(trt10.previous).toEqual({
+      processCount: 2,
+      exposureCents: 3_000_000,
+      exposureEstimateCents: 4_000_000,
+      exposureUnknown: 0,
+      exposureBasis: { official: 1, estimate: 1, none: 0 },
+    });
     // TRT2 had p6 (now closed) in the snapshot and has p3/p7 now.
     const trt2 = courts.rows.find((g) => g.label === "TRT2")!;
     expect(trt2.previous?.processCount).toBe(1);
@@ -556,7 +582,7 @@ describe("carta de auditoria", () => {
     expect(r.rows).toHaveLength(6);
     const p1 = r.rows.find((x) => x.processId === p.p1)!;
     expect(p1.provisionIsEstimate).toBe(true);
-    expect(p1.caveats.join(" ")).toContain("RN-07");
+    expect(p1.caveats.join(" ")).toContain("Provisão estimada sobre o valor da causa (sem valor liquidado).");
     expect(p1.caveats.join(" ")).toContain("Valor liquidado não apurado");
     const p3 = r.rows.find((x) => x.processId === p.p3)!;
     expect(p3.caveats.join(" ")).toContain("Sem classificação de risco");
@@ -571,6 +597,11 @@ describe("carta de auditoria", () => {
     expect(r.source).toBe("snapshot");
     expect(r.baseDate).toBe(periodReferenceDate(prevPeriod));
     expect(r.rows.map((x) => x.processId).sort()).toEqual([p.p1, p.p2, p.p5, p.p6].sort());
+    // RN-10: the closed competência keeps the phase frozen at the close, even one of the previous model (P0.5).
+    const p5 = r.rows.find((x) => x.processId === p.p5)!;
+    expect(p5.phase).toBe("appeal");
+    expect(processPhaseLabel(p5.phase)).toBe("Recursal");
+    expect(buildReportExport(r).sheets[0].rows.find((row) => row[0]?.v === "0000005-11.2025.5.00.0001")?.[5]?.v).toBe("Recursal");
     await expect(getAuditLetterReport(fx.ctx.admin, { period: currentPeriod })).rejects.toBeInstanceOf(ValidationError);
     const exec = await getAuditLetterReport(fx.ctx.executive, { period: prevPeriod });
     expect(exec.rows.some((x) => x.processId === p.p5)).toBe(false);
@@ -591,6 +622,9 @@ describe("movimentação report", () => {
     expect(r.summary.phaseChanges).toBe(2); // p1 and p5; the creation entry is ignored
     expect(r.summary.statusChanges).toBe(1); // p7 suspended; closure of p6 is listed by its closing date
     expect(r.events.find((e) => e.kind === "phase_change" && e.processId === p.p1)!.detail).toBe("Pré-ajuizamento → Conhecimento");
+    // History keeps the phases of the previous model with their former labels; the migration entry is not a phase change.
+    expect(r.events.find((e) => e.kind === "phase_change" && e.processId === p.p5)!.detail).toBe("Conhecimento → Recursal");
+    expect(r.events.some((e) => e.kind === "phase_change" && e.processId === p.p3)).toBe(false);
   });
 
   it("respects visibility and the period", async () => {

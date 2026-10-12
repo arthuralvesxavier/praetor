@@ -138,7 +138,7 @@ export async function AnalysisResultView({ ctx, analysis: a }: AnalysisResultVie
               { label: "Origem da solicitação", value: ANALYSIS_TRIGGER_LABELS[a.trigger] },
               { label: "Solicitada por", value: a.requestedByName ?? "Sistema (automática)" },
               { label: "Solicitada em", value: formatDateTime(a.createdAt) },
-              { label: "Concluída em", value: a.completedAt ? formatDateTime(a.completedAt) : "—" },
+              { label: "Concluída em", value: a.completedAt ? formatDateTime(a.completedAt) : null },
               {
                 label: "Provedor e modelo",
                 value: a.mode === "demo" ? `${a.provider} (regras de demonstração, sem IA)` : `${a.provider} · ${a.model}`,
@@ -149,7 +149,7 @@ export async function AnalysisResultView({ ctx, analysis: a }: AnalysisResultVie
                 label: "Tokens (entrada / saída)",
                 value:
                   a.inputTokens == null && a.outputTokens == null
-                    ? "—"
+                    ? null
                     : `${formatNumber(a.inputTokens ?? 0)} / ${formatNumber(a.outputTokens ?? 0)}`,
               },
               showCosts && { label: "Custo estimado", value: formatMicroUsd(a.costMicroUsd) },
@@ -327,8 +327,8 @@ export async function AnalysisResultView({ ctx, analysis: a }: AnalysisResultVie
                 columns={3}
                 items={[
                   { label: "Situação", value: ANALYSIS_REVIEW_STATUS_LABELS[a.reviewStatus] },
-                  { label: "Revisada por", value: a.reviewedByName ?? "—" },
-                  { label: "Data da revisão", value: a.reviewedAt ? formatDateTime(a.reviewedAt) : "—" },
+                  { label: "Revisada por", value: a.reviewedByName },
+                  { label: "Data da revisão", value: a.reviewedAt ? formatDateTime(a.reviewedAt) : null },
                   a.reviewNote ? { label: "Observação", value: a.reviewNote, full: true } : null,
                 ]}
               />

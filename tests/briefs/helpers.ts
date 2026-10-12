@@ -9,7 +9,7 @@ import { uploadDocument } from "@/modules/documents/service";
 import { addParty, createProcess } from "@/modules/processes/service";
 import type { AuthContext } from "@/server/auth/context";
 import { getDb } from "@/server/db/client";
-import { legalProcesses } from "@/server/db/schema";
+import { caseIntakes, legalProcesses } from "@/server/db/schema";
 
 let seq = 100;
 
@@ -87,4 +87,20 @@ export async function uploadDemoPack(
     out.push({ ...r, title: d.title });
   }
   return out;
+}
+
+/**
+ * Intake row of a process, inserted directly (the intake pipeline is not under
+ * test here): `requestCaseBrief` accepts analysts only with an intake of the process.
+ */
+export async function insertIntake(
+  organizationId: string,
+  processId: string,
+  values: Partial<typeof caseIntakes.$inferInsert> = {},
+): Promise<string> {
+  const [row] = await getDb()
+    .insert(caseIntakes)
+    .values({ organizationId, processId, source: "manual", status: "assigned", ...values })
+    .returning({ id: caseIntakes.id });
+  return row.id;
 }

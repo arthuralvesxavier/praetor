@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { Textarea } from "@/components/ui/textarea";
+import { usePreservingSubmit } from "@/components/ui/use-preserving-submit";
 import { CLOSURE_REASON_LABELS, type ClosureReason } from "@/domain/enums";
 import { fieldError } from "@/lib/form";
 import { optionsFromLabels } from "@/lib/options";
@@ -31,7 +32,7 @@ const reasonOptions = optionsFromLabels(CLOSURE_REASON_LABELS);
 
 /** Short pt-BR explanation of each closure reason (RN-12). */
 const CLOSURE_REASON_HELP: Record<ClosureReason, string> = {
-  paid_extinct: "A obrigação foi satisfeita (pagamento) e o processo foi extinto. Registre a quitação também na aba “Valores e risco”.",
+  paid_extinct: "A obrigação foi satisfeita (pagamento) e o processo foi extinto. Registre a quitação também na aba “Valores e acordos”.",
   settlement_fulfilled: "O acordo foi integralmente cumprido.",
   dismissed: "Improcedência ou extinção sem ônus para a empresa.",
   archived: "Arquivamento definitivo dos autos.",
@@ -41,21 +42,22 @@ const CLOSURE_REASON_HELP: Record<ClosureReason, string> = {
   other: "Descreva o motivo na observação.",
 };
 
+/**
+ * `useActionState` for a dialog form: calls `onDone` (closes the dialog) on success and
+ * returns the `onSubmit` handler that keeps typed values AND selects on error.
+ */
 function useDialogAction<S extends ValuesFormState>(action: Action<S>, onDone: () => void) {
-  return useActionState(async (prev: S | null, formData: FormData) => {
+  const [state, formAction] = useActionState(async (prev: S | null, formData: FormData) => {
     const result = await action(prev, formData);
     if (result.ok) onDone();
     return result;
   }, null);
+  const onSubmit = usePreservingSubmit(formAction);
+  return { state, formAction, onSubmit };
 }
 
-function DialogShell({
-  trigger,
-  children,
-}: {
-  trigger: ReactNode;
-  children: (close: () => void) => ReactNode;
-}) {
+/** Dialog opened by its own trigger button (forms below also work in a controlled dialog). */
+function DialogShell({ trigger, children }: { trigger: ReactNode; children: (close: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -65,7 +67,7 @@ function DialogShell({
   );
 }
 
-function Footer({ confirm, pending }: { confirm: string; pending: string }) {
+function Footer({ confirm, pending, destructive = false }: { confirm: string; pending: string; destructive?: boolean }) {
   return (
     <DialogFooter>
       <DialogClose asChild>
@@ -73,7 +75,9 @@ function Footer({ confirm, pending }: { confirm: string; pending: string }) {
           Cancelar
         </Button>
       </DialogClose>
-      <SubmitButton pendingLabel={pending}>{confirm}</SubmitButton>
+      <SubmitButton pendingLabel={pending} variant={destructive ? "destructive" : "primary"}>
+        {confirm}
+      </SubmitButton>
     </DialogFooter>
   );
 }
@@ -82,18 +86,16 @@ function Footer({ confirm, pending }: { confirm: string; pending: string }) {
 // Retirar da carteira ativa
 // ---------------------------------------------------------------------------
 
-export function CloseProcessDialog<S extends ValuesFormState>({
-  action,
-  processId,
-  processNumber,
-  today,
-}: {
+export type CloseProcessFormProps<S> = {
   action: Action<S>;
   processId: string;
   processNumber: string;
   /** "YYYY-MM-DD" (server time zone). */
   today: string;
-}) {
+  onDone: () => void;
+};
+
+export function CloseProcessDialog<S extends ValuesFormState>(props: Omit<CloseProcessFormProps<S>, "onDone">) {
   return (
     <DialogShell
       trigger={
@@ -103,32 +105,20 @@ export function CloseProcessDialog<S extends ValuesFormState>({
         </Button>
       }
     >
-      {(close) => <CloseForm action={action} processId={processId} processNumber={processNumber} today={today} onDone={close} />}
+      {(close) => <CloseProcessForm {...props} onDone={close} />}
     </DialogShell>
   );
 }
 
-function CloseForm<S extends ValuesFormState>({
-  action,
-  processId,
-  processNumber,
-  today,
-  onDone,
-}: {
-  action: Action<S>;
-  processId: string;
-  processNumber: string;
-  today: string;
-  onDone: () => void;
-}) {
-  const [state, formAction] = useDialogAction(action, onDone);
+export function CloseProcessForm<S extends ValuesFormState>({ action, processId, processNumber, today, onDone }: CloseProcessFormProps<S>) {
+  const { state, formAction, onSubmit } = useDialogAction(action, onDone);
   const sent = state && !state.ok ? state.values : undefined;
   const [reason, setReason] = useState<string>(sent?.closureReason ?? "");
   const err = (f: string) => fieldError(state, f);
   const help = reason ? CLOSURE_REASON_HELP[reason as ClosureReason] : null;
 
   return (
-    <form action={formAction} className="flex flex-col gap-4" noValidate>
+    <form action={formAction} onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
       <DialogHeader>
         <DialogTitle>Retirar da carteira ativa</DialogTitle>
         <DialogDescription>
@@ -168,15 +158,14 @@ function CloseForm<S extends ValuesFormState>({
 // Reativar
 // ---------------------------------------------------------------------------
 
-export function ReactivateProcessDialog<S extends ValuesFormState>({
-  action,
-  processId,
-  closureLabel,
-}: {
+export type ReactivateProcessFormProps<S> = {
   action: Action<S>;
   processId: string;
   closureLabel: string | null;
-}) {
+  onDone: () => void;
+};
+
+export function ReactivateProcessDialog<S extends ValuesFormState>(props: Omit<ReactivateProcessFormProps<S>, "onDone">) {
   return (
     <DialogShell
       trigger={
@@ -186,31 +175,23 @@ export function ReactivateProcessDialog<S extends ValuesFormState>({
         </Button>
       }
     >
-      {(close) => <ReactivateForm action={action} processId={processId} closureLabel={closureLabel} onDone={close} />}
+      {(close) => <ReactivateProcessForm {...props} onDone={close} />}
     </DialogShell>
   );
 }
 
-function ReactivateForm<S extends ValuesFormState>({
-  action,
-  processId,
-  closureLabel,
-  onDone,
-}: {
-  action: Action<S>;
-  processId: string;
-  closureLabel: string | null;
-  onDone: () => void;
-}) {
-  const [state, formAction] = useDialogAction(action, onDone);
+export function ReactivateProcessForm<S extends ValuesFormState>({ action, processId, closureLabel, onDone }: ReactivateProcessFormProps<S>) {
+  const { state, formAction, onSubmit } = useDialogAction(action, onDone);
   const sent = state && !state.ok ? state.values : undefined;
   return (
-    <form action={formAction} className="flex flex-col gap-4" noValidate>
+    <form action={formAction} onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
       <DialogHeader>
         <DialogTitle>Reativar processo</DialogTitle>
         <DialogDescription>
           O processo volta para a carteira ativa com a situação “Ativo”.
-          {closureLabel ? ` O motivo de saída registrado (${closureLabel}) e a data de saída serão limpos — continuam no histórico.` : ""}
+          {closureLabel
+            ? ` O motivo de saída registrado (${closureLabel}) e a data de saída serão limpos, mas continuam no histórico.`
+            : ""}
         </DialogDescription>
       </DialogHeader>
       <input type="hidden" name="id" value={processId} />
@@ -224,106 +205,84 @@ function ReactivateForm<S extends ValuesFormState>({
 }
 
 // ---------------------------------------------------------------------------
-// Verificação
+// Conferência (needsVerification)
 // ---------------------------------------------------------------------------
 
-export function FlagVerificationDialog<S extends ValuesFormState>({
-  action,
-  processId,
-  currentNote,
-}: {
+export type FlagVerificationFormProps<S> = {
   action: Action<S>;
   processId: string;
-  /** Present when already flagged (the dialog then edits the note). */
+  /** Present when already flagged (the form then edits the note). */
   currentNote?: string | null;
-}) {
+  onDone: () => void;
+};
+
+export function FlagVerificationDialog<S extends ValuesFormState>(props: Omit<FlagVerificationFormProps<S>, "onDone">) {
   return (
     <DialogShell
       trigger={
         <Button type="button" variant="outline">
           <SearchCheck aria-hidden="true" />
-          {currentNote !== undefined ? "Editar nota de verificação" : "Marcar para verificação"}
+          {props.currentNote !== undefined ? "Editar nota de conferência" : "Marcar para conferência"}
         </Button>
       }
     >
-      {(close) => <FlagForm action={action} processId={processId} currentNote={currentNote ?? ""} onDone={close} />}
+      {(close) => <FlagVerificationForm {...props} onDone={close} />}
     </DialogShell>
   );
 }
 
-function FlagForm<S extends ValuesFormState>({
-  action,
-  processId,
-  currentNote,
-  onDone,
-}: {
-  action: Action<S>;
-  processId: string;
-  currentNote: string;
-  onDone: () => void;
-}) {
-  const [state, formAction] = useDialogAction(action, onDone);
+export function FlagVerificationForm<S extends ValuesFormState>({ action, processId, currentNote, onDone }: FlagVerificationFormProps<S>) {
+  const { state, formAction, onSubmit } = useDialogAction(action, onDone);
   const sent = state && !state.ok ? state.values : undefined;
   return (
-    <form action={formAction} className="flex flex-col gap-4" noValidate>
+    <form action={formAction} onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
       <DialogHeader>
-        <DialogTitle>Marcar para verificação</DialogTitle>
+        <DialogTitle>Marcar para conferência</DialogTitle>
         <DialogDescription>
           Sinaliza que algum dado precisa ser conferido (ex.: “saiu do acervo?”, valores divergentes entre planilhas). O
-          processo aparece com o selo “Verificar” e no filtro “Somente a verificar”.
+          processo aparece com o selo “Pendente de conferência” e no filtro “Somente pendentes de conferência”.
         </DialogDescription>
       </DialogHeader>
       <input type="hidden" name="id" value={processId} />
       <FormMessage state={state} />
-      <FormField label="O que precisa ser verificado" htmlFor="verify-note" required error={fieldError(state, "note")}>
-        <Textarea name="note" rows={4} maxLength={2000} required defaultValue={sent?.note ?? currentNote} />
+      <FormField label="O que precisa ser conferido" htmlFor="verify-note" required error={fieldError(state, "note")}>
+        <Textarea name="note" rows={4} maxLength={2000} required defaultValue={sent?.note ?? currentNote ?? ""} />
       </FormField>
       <Footer confirm="Salvar marcação" pending="Salvando…" />
     </form>
   );
 }
 
-export function ResolveVerificationDialog<S extends ValuesFormState>({
-  action,
-  processId,
-  note,
-}: {
+export type ResolveVerificationFormProps<S> = {
   action: Action<S>;
   processId: string;
   note: string | null;
-}) {
+  onDone: () => void;
+};
+
+export function ResolveVerificationDialog<S extends ValuesFormState>(props: Omit<ResolveVerificationFormProps<S>, "onDone">) {
   return (
     <DialogShell
       trigger={
         <Button type="button" variant="outline">
           <SearchX aria-hidden="true" />
-          Concluir verificação
+          Concluir conferência
         </Button>
       }
     >
-      {(close) => <ResolveForm action={action} processId={processId} note={note} onDone={close} />}
+      {(close) => <ResolveVerificationForm {...props} onDone={close} />}
     </DialogShell>
   );
 }
 
-function ResolveForm<S extends ValuesFormState>({
-  action,
-  processId,
-  note,
-  onDone,
-}: {
-  action: Action<S>;
-  processId: string;
-  note: string | null;
-  onDone: () => void;
-}) {
-  const [state, formAction] = useDialogAction(action, onDone);
+export function ResolveVerificationForm<S extends ValuesFormState>({ action, processId, note, onDone }: ResolveVerificationFormProps<S>) {
+  const { state, formAction, onSubmit } = useDialogAction(action, onDone);
   const sent = state && !state.ok ? state.values : undefined;
   return (
-    <form action={formAction} className="flex flex-col gap-4" noValidate>
+    <form action={formAction} onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
       <DialogHeader>
-        <DialogTitle>Concluir verificação</DialogTitle>
-        <DialogDescription>Remove o selo “Verificar”. A nota e a conclusão ficam no histórico do processo.</DialogDescription>
+        <DialogTitle>Concluir conferência</DialogTitle>
+        <DialogDescription>Remove o selo “Pendente de conferência”. A nota e a conclusão ficam no histórico do processo.</DialogDescription>
       </DialogHeader>
       <input type="hidden" name="id" value={processId} />
       {note ? (
@@ -336,7 +295,37 @@ function ResolveForm<S extends ValuesFormState>({
       <FormField label="Conclusão" htmlFor="resolve-note" error={fieldError(state, "note")} hint="Opcional. Fica registrada no histórico.">
         <Textarea name="note" rows={3} maxLength={500} defaultValue={sent?.note ?? ""} />
       </FormField>
-      <Footer confirm="Concluir verificação" pending="Salvando…" />
+      <Footer confirm="Concluir conferência" pending="Salvando…" />
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Excluir
+// ---------------------------------------------------------------------------
+
+export type DeleteProcessFormProps<S> = {
+  action: Action<S>;
+  processId: string;
+  processNumber: string;
+  onDone: () => void;
+};
+
+/** Confirmation of the soft delete (the action redirects to /processos on success). */
+export function DeleteProcessForm<S extends ValuesFormState>({ action, processId, processNumber, onDone }: DeleteProcessFormProps<S>) {
+  const { state, formAction, onSubmit } = useDialogAction(action, onDone);
+  return (
+    <form action={formAction} onSubmit={onSubmit} className="flex flex-col gap-4">
+      <DialogHeader>
+        <DialogTitle>Excluir processo?</DialogTitle>
+        <DialogDescription>
+          O processo {processNumber} deixará de aparecer nas listagens. A exclusão fica registrada na auditoria. Para
+          tirá-lo apenas da carteira ativa, use “Retirar da carteira ativa”.
+        </DialogDescription>
+      </DialogHeader>
+      <input type="hidden" name="id" value={processId} />
+      <FormMessage state={state} />
+      <Footer confirm="Excluir processo" pending="Excluindo…" destructive />
     </form>
   );
 }

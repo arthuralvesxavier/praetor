@@ -152,8 +152,18 @@ export async function getBiData(ctx: AuthContext, filters: BiFilters, opts: BiOp
     .where(eq(organizations.id, ctx.organizationId))
     .limit(1);
   const alerts = { ...DEFAULT_ORGANIZATION_SETTINGS.alerts, ...(org?.settings?.alerts ?? {}) };
-  const upcomingDays = Math.max(0, Math.min(3650, Math.floor(alerts.upcomingDeadlineDays)));
-  const contractDays = Math.max(0, Math.min(3650, Math.floor(alerts.contractExpirationDays)));
+  // Same reading as `/prazos?situacao=proximos` (work service), so the "Prazos próximos" link lists the same deadlines.
+  const rawUpcoming = alerts.upcomingDeadlineDays;
+  const upcomingDays =
+    typeof rawUpcoming === "number" && Number.isFinite(rawUpcoming) && rawUpcoming >= 0
+      ? Math.min(365, Math.floor(rawUpcoming))
+      : DEFAULT_ORGANIZATION_SETTINGS.alerts.upcomingDeadlineDays;
+  // Same reading as `/contratos?vencendo=1` (contracts service).
+  const rawContract = alerts.contractExpirationDays;
+  const contractDays =
+    typeof rawContract === "number" && Number.isFinite(rawContract) && rawContract >= 0
+      ? Math.trunc(rawContract)
+      : DEFAULT_ORGANIZATION_SETTINGS.alerts.contractExpirationDays;
 
   // --- filter conditions (scope first, then filters) ----------------------
   const p = legalProcesses;
@@ -475,7 +485,7 @@ export async function getBiData(ctx: AuthContext, filters: BiFilters, opts: BiOp
       const r = procLoss.find((x) => (x.k ?? "unclassified") === key);
       return { key, count: num(r?.n), claimCents: num(r?.claim), provisionCents: num(r?.provision) };
     }),
-    byPhase: PROCESS_PHASES.filter((ph) => ph !== "closed").map((key) => ({
+    byPhase: PROCESS_PHASES.map((key) => ({
       key,
       count: num(procPhase.find((r) => r.k === key)?.n),
     })),

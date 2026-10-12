@@ -85,7 +85,7 @@ export function HearingFormDialog({
           <DialogDescription>
             {isEdit
               ? "Corrija os dados da audiência designada. Para mudar a data com histórico, use “Redesignar”."
-              : "Cadastro manual: informe a data e o horário conforme a intimação ou a pauta publicada. Não há integração com tribunais nesta versão."}
+              : "Cadastro manual: informe a data e o horário conforme a intimação ou a pauta publicada. O DataJud não informa a data das audiências, e PJe e MNI não estão integrados nesta versão."}
           </DialogDescription>
         </DialogHeader>
         {open ? (

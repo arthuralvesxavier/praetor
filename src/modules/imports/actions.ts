@@ -6,7 +6,7 @@ import { bool, str } from "@/lib/form";
 import { requireActionContext } from "@/server/auth/session";
 import { AppError, toActionError, type ActionResult } from "@/server/lib/errors";
 import { logger } from "@/server/lib/logger";
-import { commitImport, rollbackImport } from "./service";
+import { commitImport, resumeImportDistribution, rollbackImport } from "./service";
 
 function fail(action: string, err: unknown) {
   if (!(err instanceof AppError)) logger.error("action_failed", { action, errorName: err instanceof Error ? err.name : "unknown" });
@@ -35,6 +35,19 @@ export async function commitImportAction(_prev: ActionResult | null, formData: F
     return fail("commitImport", err);
   }
   redirect(`/importacoes/${id}?confirmado=1`);
+}
+
+/** Resumes an interrupted post-commit distribution. Expects `id`. */
+export async function resumeImportDistributionAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const id = str(formData, "id") ?? "";
+  try {
+    const ctx = await requireActionContext("import:run");
+    await resumeImportDistribution(ctx, id);
+    revalidatePortfolio(id);
+  } catch (err) {
+    return fail("resumeImportDistribution", err);
+  }
+  redirect(`/importacoes/${id}`);
 }
 
 /** Undoes a committed batch. Expects `id`. */

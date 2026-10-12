@@ -11,7 +11,8 @@ import { fieldError } from "@/lib/form";
 import { optionsFromLabels } from "@/lib/options";
 import { createTaskAction } from "../actions";
 import type { FixedWorkLink, WorkLinkOptions, WorkUserOption } from "../types";
-import { FixedLinkFields, LinkSelect, PendingButton } from "./form-parts";
+import { FixedLinkFields, PendingButton } from "./form-parts";
+import { LinkField } from "./link-field";
 import { useFormAction } from "./use-form-action";
 
 export type TaskFormProps = {
@@ -76,7 +77,7 @@ export function TaskForm({
 
       {!fixedLink && linkOptions ? (
         <FormField label="Vínculo" htmlFor={id("link")} error={fieldError(state, "link")} className="sm:col-span-2">
-          <LinkSelect name="link" options={linkOptions} defaultValue="" />
+          <LinkField name="link" options={linkOptions} />
         </FormField>
       ) : null}
 

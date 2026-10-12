@@ -9,7 +9,7 @@ import { FilterBar, FilterSelect } from "@/components/ui/filter-bar";
 import { PageHeader } from "@/components/ui/page-header";
 import { Pagination } from "@/components/ui/pagination";
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow, tableLinkClasses } from "@/components/ui/table";
-import { ASSIGNMENT_METHOD_LABELS, INTAKE_SOURCE_LABELS, INTAKE_SOURCES, INTAKE_STATUSES } from "@/domain/enums";
+import { ASSIGNMENT_METHOD_LABELS, INTAKE_SOURCE_LABELS, INTAKE_SOURCES } from "@/domain/enums";
 import { formatDateTime } from "@/lib/format";
 import { optionsFromLabels } from "@/lib/options";
 import { enumParam, hasAnyParam, pageParam, param } from "@/lib/search-params";
@@ -17,6 +17,7 @@ import { simulateIntakeAction } from "@/modules/intake/actions";
 import { IntakeSourceBadge, IntakeStatusBadge } from "@/modules/intake/components/intake-badges";
 import { PipelineStrip } from "@/modules/intake/components/pipeline-strip";
 import { getIntakeStatusCounts, listIntakes } from "@/modules/intake/service";
+import { EFFECTIVE_INTAKE_STATUSES } from "@/modules/intake/status";
 import { requirePageContext } from "@/server/auth/session";
 
 export const metadata: Metadata = { title: "Entrada de processos" };
@@ -26,7 +27,7 @@ const FILTER_KEYS = ["q", "status", "origem"] as const;
 export default async function IntakeListPage(props: PageProps<"/entrada">) {
   const ctx = await requirePageContext("intake:manage");
   const sp = await props.searchParams;
-  const status = enumParam(sp, "status", INTAKE_STATUSES);
+  const status = enumParam(sp, "status", EFFECTIVE_INTAKE_STATUSES);
   const source = enumParam(sp, "origem", INTAKE_SOURCES);
   const q = param(sp, "q");
 
@@ -47,7 +48,7 @@ export default async function IntakeListPage(props: PageProps<"/entrada">) {
         </Button>
       }
       title="Simular a chegada de um processo?"
-      description="Será criado um processo trabalhista FICTÍCIO (número CNJ, partes e valores inventados, coerentes com a carteira) com documentos fictícios. Em seguida ele é distribuído, os documentos são lidos e a análise preliminar é gerada por simulação, e o advogado recebe um e-mail simulado — nada é enviado."
+      description="Será criado um processo trabalhista FICTÍCIO (número CNJ, partes e valores inventados, coerentes com a carteira) com documentos fictícios. Em seguida ele é distribuído, os documentos são lidos e a análise preliminar é gerada por simulação, e o advogado recebe um e-mail simulado (nada é enviado)."
       confirmLabel="Simular chegada"
       pendingLabel="Gerando processo fictício…"
     />
@@ -58,7 +59,7 @@ export default async function IntakeListPage(props: PageProps<"/entrada">) {
       <PageHeader
         title="Entrada de processos"
         description="Chegada de processos novos: distribuição ao responsável, leitura dos documentos e análise preliminar (simulação) e aviso ao advogado por e-mail (simulado)."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Entrada de processos" }]}
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Entrada de processos" }]}
         actions={
           <>
             {simulate}
@@ -72,7 +73,7 @@ export default async function IntakeListPage(props: PageProps<"/entrada">) {
 
       <Callout tone="info" title="Simulação nesta versão" className="mb-4">
         A leitura dos documentos e a análise preliminar são feitas por uma simulação (regras determinísticas, sem
-        inteligência artificial real) e o e-mail ao advogado é simulado — nenhuma mensagem é enviada. Não há integração
+        inteligência artificial real) e o e-mail ao advogado é simulado: nenhuma mensagem é enviada. Não há integração
         com tribunais (DataJud, MNI, PJe): os processos chegam por cadastro, importação ou pela chegada simulada.
       </Callout>
 

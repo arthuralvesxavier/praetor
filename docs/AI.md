@@ -1,5 +1,14 @@
 # Camada de inteligência artificial
 
+Há duas funcionalidades de análise no Praetor:
+
+| Funcionalidade | Onde | Provedor nesta versão |
+|---|---|---|
+| **Central de IA** (v1): análises de registros e documentos e perguntas à base | `/ia`, aba "Análises de IA" | `DemoProvider` (regras de texto) sem chave de API; `AnthropicProvider` com `ANTHROPIC_API_KEY` |
+| **Análise preliminar de processos** (v2): leitura dos documentos de um processo recém-chegado, revisada e aprovada pelo advogado | `/analises-preliminares`, aba "Análise preliminar", entrada de processos | **Sempre** `SimulatedCaseBriefProvider` (regras determinísticas, **sem IA**). O adaptador real existe e **não está ativado**. |
+
+As seções abaixo descrevem primeiro a Central de IA e depois a [análise preliminar](#análise-preliminar-de-processos). O provedor de e-mail, também simulado, está em [Como trocar o e-mail simulado por envio real](#como-trocar-o-e-mail-simulado-por-envio-real).
+
 ## Princípios
 
 1. **Apoio, não substituição.** Toda análise mostra o aviso `ANALYSIS_DISCLAIMER` (`src/domain/analysis.ts`): conteúdo gerado automaticamente, não substitui a avaliação de um advogado, não é previsão de resultado e pode conter erros.
@@ -161,3 +170,100 @@ Ver [DATA_MODEL.md](DATA_MODEL.md#fontes-de-análise-e-desatualização). Resumo
 - **Modelo**: defina `AI_MODEL` (e, se quiser, `AI_EFFORT` e `AI_MAX_OUTPUT_TOKENS`), cadastre o preço em `MODEL_PRICING` e reinicie web e worker. Análises na fila criadas com o modelo anterior serão canceladas com aviso.
 - **Provedor**: passo a passo em [ARCHITECTURE.md → Como trocar o provedor de IA](ARCHITECTURE.md#como-trocar-o-provedor-de-ia) e [ADR-0007](adr/0007-ai-provider-abstraction.md).
 - **Testes**: `setAiProviderForTesting(provider)` injeta um provedor falso (ver `tests/ai/analyses.test.ts`).
+- A configuração da Central de IA (`AI_PROVIDER`, chave) **não** afeta a análise preliminar, que continua simulada.
+
+---
+
+# Análise preliminar de processos
+
+Quando um processo chega (entrada de processos) ou quando alguém pede na aba "Análise preliminar", o Praetor monta uma análise estruturada do caso para o advogado responsável revisar, editar e aprovar. **Nesta versão a geração é uma simulação demonstrativa**: regras determinísticas sobre o cadastro e o texto dos documentos, sem inteligência artificial e sem chamada de rede.
+
+## Princípios
+
+1. **Revisão humana obrigatória**: a análise nasce "pronta para revisão"; o advogado edita (cada edição é uma revisão numerada), aprova ou rejeita com motivo. Nada é aplicado sozinho.
+2. **Proveniência por item**: todo item diz de onde veio (ver abaixo). O que é ilustrativo nunca é apresentado como fato do processo.
+3. **Sem fabricação**: sem jurisprudência, súmulas, leis, citações, movimentações ou códigos de movimento do CNJ; datas só quando escritas nas fontes; "prazo de N dias" fica sem data (a contagem é do advogado).
+4. **Sem efeito direto**: prazos, tarefas e valores só nascem por ação explícita — prazo sempre pendente de validação humana, tarefa com origem "sugerida", valor como valoração **proposta** na fila de conferência.
+5. **Rotulagem**: toda tela mostra `CASE_BRIEF_DEMO_NOTICE` ("ANÁLISE DEMONSTRATIVA: gerada por uma simulação… sem inteligência artificial real…") e `CASE_BRIEF_DISCLAIMER` (não substitui a leitura dos autos, não é parecer, prazos a conferir).
+
+## Contrato de saída (`src/domain/case-brief.ts`)
+
+`caseBriefSchema` (zod) com `headline` e as seções: identificação, resumo dos fatos, linha do tempo, pedidos, valores, provas, argumentos do autor e da defesa, contradições, documentos faltantes, possíveis teses, riscos, urgências, próximos passos, possíveis prazos (a conferir), lacunas, limitações e `promptInjectionSuspected`.
+
+Cada item carrega `provenance`, `citations[]` (`ref`, `page`, `excerpt`) e `note`:
+
+| Proveniência | Rótulo | Regra |
+|---|---|---|
+| `extracted` | Extraído de documento | Lido em um documento do processo; precisa citar `D1`, `D2`… com página e trecho literal. |
+| `record` | Dado do cadastro / planilha | Copiado do cadastro do processo (fonte `REG`). |
+| `illustrative` | Ilustrativo (simulação) | Exemplo gerado (teses, próximos passos, checklists); não é fato do processo. |
+| `missing` | Lacuna | Informação procurada e não encontrada. |
+| `reviewer` | Incluído/editado pelo advogado | Só gravado pelo serviço quando um item é escrito ou alterado na revisão; provedores **nunca** podem emitir. |
+
+O valor da causa e o valor liquidado aparecem em itens separados (RN-02) e valor ausente é `null` com proveniência "Lacuna" (RN-03).
+
+## Fontes e citação por página
+
+- Fontes: o cadastro do processo (`REG`: número, tribunal, vara, cidade, fase, instâncias, partes, movimentações cadastradas, valores, empresa, responsável, origem dos dados) e a versão atual de cada documento do processo **com texto extraído e visível a quem solicitou** (todas, em contexto de sistema), como `D1`, `D2`…
+- A extração de PDF normaliza cada página e guarda `page_count` e `page_offsets` na versão do documento; `pageForOffset` converte a posição de um trecho em número de página. As citações "D1 · p. 3" abrem o texto daquela página com o trecho destacado (`getDocumentVersionPageText`, que exige `document:read` e visibilidade).
+- Documentos sem texto (imagens, PDFs digitalizados, falha de leitura) não são lidos e entram nas limitações. **Não há OCR.**
+- As fontes são registradas em `case_brief_sources` com hash do texto; a análise fica visível só para quem vê o processo **e** todos os documentos-fonte (regra 11 de `access.ts`).
+- Fica desatualizada quando um documento do processo ganha texto novo, é excluído ou muda de vínculo; o resultado antigo é mantido com aviso.
+
+## Provedor (`src/server/integrations/ai/case-brief/`)
+
+```ts
+export interface CaseBriefProvider {
+  name: string;           // gravado em case_briefs.provider
+  model: string;          // gravado em case_briefs.model
+  mode: AiMode;           // "demo" (simulado) | "live"
+  promptVersion: string;  // gravado e usado no hash de entrada
+  generate(req: CaseBriefRequest): Promise<{ brief: CaseBrief; usage: AiUsage }>;
+}
+```
+
+- `getCaseBriefProvider()` (`index.ts`) devolve **sempre** o `SimulatedCaseBriefProvider` (`name = "simulated-case-brief"`, `model = "regras-deterministicas-v1"`, `mode = "demo"`, `promptVersion = CASE_BRIEF_SIMULATION_VERSION`). Não existe variável de ambiente para trocá-lo. `setCaseBriefProviderForTesting(p)` injeta outro provedor nos testes; `getCaseBriefRuntimeInfo()` expõe só modo, provedor e modelo.
+- **Simulador** (`simulated.ts`): regras de texto ajustadas ao layout dos documentos fictícios de demonstração (títulos de seção, listas de pedidos "a) … — R$ x", linhas "Campo: valor"). Documentos reais com outro formato geram menos itens extraídos, que aparecem como lacunas — nunca como conteúdo inventado. Linhas que parecem instruções a uma IA são ignoradas e sinalizadas (`promptInjectionSuspected`), com a mesma lista de frases do `DemoProvider`.
+- **Validação no serviço** (`sanitizeGeneratedBrief` em `src/modules/briefs/service.ts`), para qualquer provedor: valida o schema de novo; descarta a proveniência "reviewer", citações a referências ou páginas inexistentes, itens "extraído" sem citação de documento, datas e valores inválidos e datas de possíveis prazos que não aparecem literalmente no documento citado. Os descartes viram limitações. O serviço acrescenta os avisos fixos (`systemNotices`): demonstrativo + aviso geral quando `mode = "demo"`; só o aviso geral quando `mode = "live"`.
+- Hash de entrada: provedor, modelo, `promptVersion` e (ref, entidade, versão, hash) de cada fonte.
+- Execução: dentro da entrada de processos, inline no job `intake.process`; pedida pela tela, no job `case_brief.generate` (retentativas da fila; a última tentativa marca a análise como falha com mensagem saneada). Geração presa há mais de 30 minutos é encerrada.
+- Auditoria só com metadados (`case_brief.request|generate|edit|approve|reject|apply|propose|status_change`); conteúdo da análise, textos e trechos nunca vão para logs nem auditoria.
+
+### Documentos fictícios de demonstração
+
+`buildDemoCaseDocuments(info, { variant })` (`src/modules/briefs/demo-documents.ts`) gera PDFs fictícios (pdf-lib) determinísticos pelo número CNJ e pela variante (ex.: contradições, insalubridade sem laudo, lacunas), com "DOCUMENTO FICTÍCIO — GERADO PARA DEMONSTRAÇÃO" em todas as páginas. São usados pela "Simular chegada de processo" e pelo seed. Processos da planilha sem data de ajuizamento recebem datas de audiência derivadas do ano do CNJ — em geral no passado, sem urgências.
+
+## Como ativar a IA real na análise preliminar
+
+O adaptador `LiveCaseBriefProvider` (`src/server/integrations/ai/case-brief/live.ts`) já define o contrato que um modelo real precisa seguir: SDK oficial da Anthropic com saída estruturada `betaZodOutputFormat(caseBriefSchema)`, system prompt fixo em pt-BR com as regras de proveniência e de não fabricação, documentos neutralizados (`neutralizeUntrustedText`) dentro de blocos `<source ref="D1">` com marcadores "[página N]", fallback de recusa no servidor (`server-side-fallback-2026-07-01`, `fallbacks: "default"`), modelo `AI_MODEL`, `AI_EFFORT` e `AI_MAX_OUTPUT_TOKENS`, e erros mapeados para `AiProviderError` (`promptVersion = case-brief-live-2026-10-v1`). **Ele passa no typecheck, mas nunca foi chamado contra a API** e não é selecionável. Para ativá-lo numa versão futura:
+
+1. **Seleção explícita**: adicionar `CASE_BRIEF_PROVIDER=simulated|live` (padrão `simulated`) em `src/server/env.ts` e `.env.example`, e em `getCaseBriefProvider()` construir o `LiveCaseBriefProvider` só com `live` **e** `ANTHROPIC_API_KEY` definida. Manter o simulado como padrão e nos testes.
+2. **Custo**: hoje a análise preliminar não passa pelo orçamento mensal nem registra uso. Antes de ativar, aplicar o mesmo controle da Central de IA (estimativa e verificação de `ai.monthlyTokenBudget` na solicitação e na execução, acumular `usage` em `ai_usage`, preço em `MODEL_PRICING`) e um limite de caracteres por análise (hoje não há truncamento das fontes).
+3. **Dados pessoais (LGPD)**: os documentos do processo (com dados de saúde, inclusive) passariam a ir a um fornecedor externo. Exige contrato de tratamento de dados com o fornecedor (retenção, treinamento, localização, subprocessadores), avaliação do caderno de requisitos (INT-05 recomenda processar documento judicial em serviço próprio) e decisão sobre excluir documentos `sensitive_health` das fontes.
+4. **Rotulagem**: com `mode = "live"` o aviso demonstrativo deixa de ser incluído automaticamente, mas vários textos da interface e dos dados dizem "simulação" de forma fixa (etapas e rótulos de situação da entrada de processos, selos da análise, "Extração simulada" nas valorações com `source = simulation`, e-mail `case_brief_ready`, painel de integrações). Revisar todos para dizer a verdade nos dois modos, mantendo o aviso de que o conteúdo é gerado automaticamente e exige revisão.
+5. **Qualidade**: testar com documentos reais anonimizados ou fictícios em ambiente controlado; incrementar `promptVersion` a cada mudança de prompt ou contrato; manter `sanitizeGeneratedBrief` como barreira; considerar OCR (hoje PDFs digitalizados não entram).
+6. **Testes**: `setCaseBriefProviderForTesting(provider)` para injetar provedores falsos; nenhum teste deve chamar a API.
+
+---
+
+# Como trocar o e-mail simulado por envio real
+
+Nesta versão **nenhum e-mail é enviado**. A Central de e-mails (`src/modules/emails`) renderiza os modelos, grava a mensagem e os eventos e entrega ao provedor ativo, que é sempre o `SimulatedEmailProvider` (`src/server/integrations/email/simulated.ts`): ele não abre conexão de rede e devolve um id `sim-…`; como proteção, recusa mensagens sem "[Simulação]" no assunto.
+
+```ts
+export interface EmailProvider {
+  name: string;
+  mode: EmailMode;          // "simulated" | "live" (reservado)
+  send(message: OutgoingEmail): Promise<EmailDeliveryResult>;   // { providerMessageId, acceptedAt, simulated }
+}
+```
+
+Para um provedor real (SMTP ou API):
+
+1. Implementar `EmailProvider` em `src/server/integrations/email/<provedor>.ts`, com `mode = "live"`; mapear erros para `EmailProviderError(message, { retryable, userMessage })` sem endereços nem conteúdo na mensagem; nunca logar assunto, corpo ou endereços.
+2. Adicionar variáveis em `src/server/env.ts` e `.env.example` (ex.: `EMAIL_PROVIDER=simulated|smtp|api`, padrão `simulated`, e as credenciais), lidas só no servidor e guardadas em cofre de segredos; selecionar em `getEmailProvider()`.
+3. Ajustar o que hoje presume simulação: `renderEmail` sempre põe "[Simulação]" no assunto e a faixa "SIMULAÇÃO — este e-mail não foi enviado" no corpo; o tipo `OrganizationSettings.email.mode` só admite `"simulated"`; o formulário de configurações exige remetente de domínio reservado (`.invalid`, `.test`, `example.com`…); o selo "E-mail simulado" do cabeçalho e o painel de integrações.
+4. Revisar a entrega em duas fases do `composeAndDeliver` (hoje síncrona na requisição ou no job): com um provedor real, considerar enviar por job da fila com retentativas e idempotência pelo id da mensagem, e tratar devoluções.
+5. Implementar o que falta para notificação real: preferências por usuário, respeito a `notifyOnAssignment` (hoje sem uso), resumo diário agendado e os modelos ainda sem fluxo (`intake_assigned`, `deadline_reminder`, `brief_approved`).
+6. LGPD e segurança: o corpo pode conter dados do processo; definir o que pode sair por e-mail (o requisito RF-14 pede resumo e alerta), base legal, retenção das mensagens gravadas e contrato com o fornecedor de envio.
+7. Testes: `setEmailProviderForTesting(provider)`; nenhum teste deve enviar e-mail.

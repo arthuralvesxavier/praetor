@@ -18,7 +18,8 @@ function preselect(options: Option[], id: string | undefined): string | undefine
 export default async function NewDocumentPage(props: PageProps<"/documentos/novo">) {
   const ctx = await requirePageContext("document:upload");
   const sp = await props.searchParams;
-  const options = await loadLinkOptions(ctx);
+  // The preselected process is offered even beyond the option list limit (when visible to the user).
+  const options = await loadLinkOptions(ctx, { includeProcessId: idParam(sp, "processo") });
 
   return (
     <>
@@ -26,7 +27,7 @@ export default async function NewDocumentPage(props: PageProps<"/documentos/novo
         title="Novo documento"
         description="Envie um arquivo e, se for o caso, vincule-o a um processo, ocorrência ou contrato."
         breadcrumbs={[
-          { label: "Dashboard", href: "/dashboard" },
+          { label: "Painel executivo", href: "/dashboard" },
           { label: "Documentos", href: "/documentos" },
           { label: "Novo documento" },
         ]}

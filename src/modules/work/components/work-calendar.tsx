@@ -12,6 +12,7 @@ import {
 } from "@/domain/enums";
 import { formatDate, formatMonthYear } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { PROCESS_SECTION_IDS, processTabUrl } from "@/modules/processes/tabs";
 import { buildMonthGrid, WEEKDAY_LABELS, WEEKDAY_SHORT_LABELS } from "../calendar";
 import type { CalendarData, CalendarDeadline, CalendarHearing, CalendarTask } from "../service";
 import { DEADLINE_KIND_STYLES } from "./work-badges";
@@ -47,7 +48,7 @@ function deadlineAccessibleLabel(d: CalendarDeadline): string {
   if (d.isPendingValidation) parts.push("sugerido pela IA, aguardando validação");
   else if (d.status === "done") parts.push("cumprido");
   else if (d.isOverdue) parts.push("vencido");
-  return parts.join(" — ");
+  return parts.join(", ");
 }
 
 function DeadlineChip({ d }: { d: CalendarDeadline }) {
@@ -91,11 +92,11 @@ function DeadlineChip({ d }: { d: CalendarDeadline }) {
 
 function hearingAccessibleLabel(h: CalendarHearing): string {
   const parts = [
-    `Audiência às ${h.time}: ${HEARING_KIND_LABELS[h.kind]} (${HEARING_MODE_LABELS[h.mode].toLowerCase()}) — processo ${h.processNumber}`,
+    `Audiência às ${h.time}: ${HEARING_KIND_LABELS[h.kind]} (${HEARING_MODE_LABELS[h.mode].toLowerCase()}), processo ${h.processNumber}`,
   ];
   if (h.status !== "scheduled") parts.push(HEARING_STATUS_LABELS[h.status].toLowerCase());
   if (h.location) parts.push(h.location);
-  return parts.join(" — ");
+  return parts.join(", ");
 }
 
 /** Hearings have their own visual (gold border + gavel) and the text "Audiência". */
@@ -104,7 +105,7 @@ function HearingChip({ h }: { h: CalendarHearing }) {
   const held = h.status === "held";
   return (
     <Link
-      href={`/processos/${h.processId}?aba=audiencias`}
+      href={processTabUrl(h.processId, "prazos-e-audiencias", PROCESS_SECTION_IDS.hearings)}
       aria-label={label}
       title={label}
       className={cn(
@@ -126,7 +127,7 @@ function HearingChip({ h }: { h: CalendarHearing }) {
 }
 
 function TaskChip({ t }: { t: CalendarTask }) {
-  const label = `Tarefa: ${t.title} — ${TASK_STATUS_LABELS[t.status].toLowerCase()}${t.isOverdue ? ", atrasada" : ""}`;
+  const label = `Tarefa: ${t.title}, ${TASK_STATUS_LABELS[t.status].toLowerCase()}${t.isOverdue ? ", atrasada" : ""}`;
   return (
     <Link
       href={`/prazos?aba=tarefas&tarefa=${t.id}`}
@@ -210,7 +211,7 @@ export function WorkCalendar({ data, prevHref, nextHref, todayHref }: WorkCalend
       <div className="hidden overflow-hidden rounded-lg border border-border bg-surface shadow-xs md:block">
         <table className="w-full table-fixed border-collapse text-sm">
           <caption className="sr-only">
-            Calendário de audiências, prazos e tarefas — {monthLabel}. Audiências aparecem com borda dourada e o texto
+            Calendário de audiências, prazos e tarefas de {monthLabel}. Audiências aparecem com borda dourada e o texto
             “Audiência”. Prazos sugeridos pela IA aparecem com contorno tracejado e só contam como prazo após validação
             humana.
           </caption>

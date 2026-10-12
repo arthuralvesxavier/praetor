@@ -4,14 +4,15 @@
  * the XLSX carries every sheet plus a "Sobre" sheet with filters, scope and
  * the reading rules (RN-02 / RN-03 / RN-07).
  */
-import type { MoneyBucket } from "@/domain/contingency";
+import { exposureBasisCounts, type AmountBasisCounts, type MoneyBucket } from "@/domain/contingency";
 import {
   PROCESS_INSTANCE_LABELS,
-  PROCESS_PHASE_LABELS,
   CLOSURE_REASON_LABELS,
   VALUATION_KIND_LABELS,
+  processPhaseLabel,
 } from "@/domain/enums";
 import { formatDate, formatDateTime, formatMonthYear, toISODate } from "@/lib/format";
+import { exposureAmounts, previousExposureAmounts, provisionAmountsOn, variationOf } from "./comparison";
 import { cell, type ExportCell, type ExportColumn, type ExportSheet, type ReportExport } from "./csv";
 import {
   CLASSIFICATION_LABELS,
@@ -29,9 +30,9 @@ import {
 } from "./types";
 
 export const READING_RULES = [
-  "Valor da causa e valor liquidado são grandezas distintas e nunca são somados (RN-02).",
-  "Valores não informados ou não apurados não equivalem a zero: são contados à parte e ficam em branco nas exportações (RN-03).",
-  "Exposição e provisão estimadas (calculadas sobre o valor da causa, sem valor liquidado) ficam em colunas próprias e devem ser lidas com ressalva (RN-07).",
+  "Valor da causa e valor liquidado são grandezas distintas e nunca são somados.",
+  "Valores não informados, não apurados ou não calculados não equivalem a zero: são contados à parte e ficam em branco nas exportações, assim como a variação em relação a uma competência em que o valor não existia.",
+  "Exposição e provisão estimadas (calculadas sobre o valor da causa, sem valor liquidado) ficam em colunas próprias e devem ser lidas com ressalva.",
 ];
 
 /** Sum of known values, or null when every value of the group is unknown (RN-03). */
@@ -46,31 +47,40 @@ const BUCKET_COLUMNS: ExportColumn[] = [
   { header: "Valor liquidado (R$)", width: 18 },
   { header: "Liquidado não apurado (processos)", width: 16 },
   { header: "Garantias vinculadas (R$)", width: 18 },
-  { header: "Exposição oficial (R$)", width: 18 },
-  { header: "Exposição estimada (R$) — RN-07", width: 20 },
+  { header: "Exposição apurada (R$)", width: 18 },
+  { header: "Exposição estimada (R$)", width: 20 },
   { header: "Exposição não calculável (processos)", width: 16 },
   { header: "Provisão (R$)", width: 18 },
-  { header: "Provisão estimada (R$) — RN-07", width: 20 },
+  { header: "Provisão estimada (R$)", width: 20 },
 ];
 
-function bucketCells(processCount: number, b: MoneyBucket): ExportCell[] {
+/**
+ * Amounts of a group, with an empty cell (never 0) where no process of the group was
+ * calculated on that basis (RN-03): exposure without any valor apurado, estimate without
+ * any estimated process, provision without any calculated provision. A group without
+ * processes (a court that only exists in the previous competência; "Sem processos" on
+ * screen) has no amount at all.
+ */
+function bucketCells(processCount: number, b: MoneyBucket, provision?: AmountBasisCounts): ExportCell[] {
+  const exposure = exposureBasisCounts(b);
+  const money = (cents: number | null) => cell.money(b.count === 0 ? null : cents);
   return [
     cell.int(processCount),
-    cell.money(knownSum(b.claimCents, b.count, b.claimUnknown)),
+    money(knownSum(b.claimCents, b.count, b.claimUnknown)),
     cell.int(b.claimUnknown),
-    cell.money(knownSum(b.liquidatedCents, b.count, b.liquidatedUnknown)),
+    money(knownSum(b.liquidatedCents, b.count, b.liquidatedUnknown)),
     cell.int(b.liquidatedUnknown),
-    cell.money(b.guaranteesCents),
-    cell.money(b.exposureCents),
-    cell.money(b.exposureEstimateCents),
+    money(b.guaranteesCents),
+    money(knownSum(b.exposureCents, b.count, b.liquidatedUnknown)),
+    money(exposure.estimate === 0 ? null : b.exposureEstimateCents),
     cell.int(b.exposureUnknown),
-    cell.money(b.provisionCents),
-    cell.money(b.provisionEstimateCents),
+    money(provision ? (provision.official === 0 ? null : b.provisionCents) : knownSum(b.provisionCents, b.count, b.liquidatedUnknown)),
+    money((provision ? provision.estimate : exposure.estimate) === 0 ? null : b.provisionEstimateCents),
   ];
 }
 
 function bucketRowCells(group: string, r: BucketRow): ExportCell[] {
-  return [cell.text(group), cell.text(r.label), ...bucketCells(r.processCount, r.bucket)];
+  return [cell.text(group), cell.text(r.label), ...bucketCells(r.processCount, r.bucket, r.provisionBasis)];
 }
 
 function about(report: ReportData, extra: { label: string; value: string }[] = []): { label: string; value: string }[] {
@@ -105,17 +115,21 @@ function portfolioExport(r: PortfolioReport): ReportExport {
 }
 
 function exposureExport(r: ExposureReport): ReportExport {
-  const prevHeader = r.comparison ? ` — ${formatMonthYear(`${r.comparison.period}-01`)}` : " — competência anterior";
+  const prevHeader = r.comparison ? `, ${formatMonthYear(`${r.comparison.period}-01`)}` : ", competência anterior";
   const rows: ExportCell[][] = [];
+  // RN-03: the previous amount and the variation stay empty when one side was not calculated
+  // (no process in the group, or nothing apurado / estimated), never written as 0.
   const push = (dimension: string, row: ExposureReport["totals"]) => {
     const p = row.previous;
+    const cur = exposureAmounts(row.bucket);
+    const prev = p ? previousExposureAmounts(p) : null;
     rows.push([
       ...bucketRowCells(dimension, row),
       cell.int(p ? p.processCount : null),
-      cell.money(p ? p.exposureCents : null),
-      cell.money(p ? p.exposureEstimateCents : null),
-      cell.money(p ? row.bucket.exposureCents - p.exposureCents : null),
-      cell.money(p ? row.bucket.exposureEstimateCents - p.exposureEstimateCents : null),
+      cell.money(prev ? prev.official : null),
+      cell.money(prev ? prev.estimate : null),
+      cell.money(prev ? variationOf(cur.official, prev.official) : null),
+      cell.money(prev ? variationOf(cur.estimate, prev.estimate) : null),
     ]);
   };
   for (const dim of r.dimensions) for (const row of dim.rows) push(dim.label, row);
@@ -127,9 +141,9 @@ function exposureExport(r: ExposureReport): ReportExport {
       { header: "Grupo", width: 34 },
       ...BUCKET_COLUMNS,
       { header: `Processos${prevHeader}`, width: 14 },
-      { header: `Exposição oficial (R$)${prevHeader}`, width: 20 },
+      { header: `Exposição apurada (R$)${prevHeader}`, width: 20 },
       { header: `Exposição estimada (R$)${prevHeader}`, width: 20 },
-      { header: "Variação da exposição oficial (R$)", width: 20 },
+      { header: "Variação da exposição apurada (R$)", width: 20 },
       { header: "Variação da exposição estimada (R$)", width: 20 },
     ],
     rows,
@@ -153,40 +167,51 @@ function provisionExport(r: ProvisionReport): ReportExport {
       { header: "Percentual (%)", width: 12 },
       { header: "Processos", width: 12 },
       { header: "Provisão (R$)", width: 18 },
-      { header: "Provisão estimada (R$) — RN-07", width: 20 },
+      { header: "Provisão estimada (R$)", width: 20 },
       { header: "Processos (competência anterior)", width: 14 },
-      { header: "Provisão (R$) — competência anterior", width: 20 },
-      { header: "Provisão estimada (R$) — competência anterior", width: 20 },
+      { header: "Provisão (R$), competência anterior", width: 20 },
+      { header: "Provisão estimada (R$), competência anterior", width: 20 },
     ],
-    rows: [...r.byClassification, r.totals].map((c, i, all) => [
-      cell.text(i === all.length - 1 ? c.label : CLASSIFICATION_LABELS[c.key]),
-      cell.bp(c.percentageBp),
-      cell.int(c.processCount),
-      cell.money(c.current.provisionCents),
-      cell.money(c.current.provisionEstimateCents),
-      cell.int(c.previous ? c.previous.processCount : null),
-      cell.money(c.previous ? c.previous.provisionCents : null),
-      cell.money(c.previous ? c.previous.provisionEstimateCents : null),
-    ]),
+    rows: [...r.byClassification, r.totals].map((c, i, all) => {
+      const isTotal = i === all.length - 1;
+      // Without a classification the provision is never calculated (rows built without counts included).
+      const notCalculated = !isTotal && c.key === "unclassified" ? { official: 0, estimate: 0, none: c.processCount } : undefined;
+      const cur = provisionAmountsOn(c.current, c.currentBasis ?? notCalculated, c.processCount);
+      const prev = c.previous ? provisionAmountsOn(c.previous, c.previous.basis ?? notCalculated, c.previous.processCount) : null;
+      return [
+        cell.text(isTotal ? c.label : CLASSIFICATION_LABELS[c.key]),
+        cell.bp(c.percentageBp),
+        cell.int(c.processCount),
+        cell.money(cur.official),
+        cell.money(cur.estimate),
+        cell.int(c.previous ? c.previous.processCount : null),
+        cell.money(prev ? prev.official : null),
+        cell.money(prev ? prev.estimate : null),
+      ];
+    }),
   };
+  const opening = r.totals.previous
+    ? provisionAmountsOn(r.totals.previous, r.totals.previous.basis, r.totals.previous.processCount)
+    : { official: null, estimate: null };
+  const closing = provisionAmountsOn(r.totals.current, r.totals.currentBasis, r.totals.processCount);
   const movement: ExportSheet = {
     name: "Movimentação",
     columns: [
       { header: "Movimento", width: 34 },
       { header: "Processos", width: 12 },
       { header: "Provisão (R$)", width: 18 },
-      { header: "Provisão estimada (R$) — RN-07", width: 20 },
+      { header: "Provisão estimada (R$)", width: 20 },
     ],
     rows: r.movement
       ? [
-          [cell.text("Saldo da competência anterior"), cell.int(null), cell.money(r.movement.opening.provisionCents), cell.money(r.movement.opening.provisionEstimateCents)],
+          [cell.text("Saldo da competência anterior"), cell.int(null), cell.money(opening.official), cell.money(opening.estimate)],
           ...r.movement.rows.map((m) => [
             cell.text(PROVISION_MOVEMENT_LABELS[m.kind]),
             cell.int(m.processCount),
             cell.money(m.provisionCents),
             cell.money(m.provisionEstimateCents),
           ]),
-          [cell.text("Saldo da competência"), cell.int(null), cell.money(r.movement.closing.provisionCents), cell.money(r.movement.closing.provisionEstimateCents)],
+          [cell.text("Saldo da competência"), cell.int(null), cell.money(closing.official), cell.money(closing.estimate)],
         ]
       : [],
   };
@@ -200,7 +225,7 @@ function provisionExport(r: ProvisionReport): ReportExport {
       { header: "Valor liquidado (R$)", width: 18 },
       { header: "Garantias vinculadas (R$)", width: 18 },
       { header: "Provisão (R$)", width: 18 },
-      { header: "Provisão estimada (RN-07)", width: 14 },
+      { header: "Provisão é estimada", width: 14 },
       { header: "Provisão anterior (R$)", width: 18 },
       { header: "Provisão anterior estimada", width: 14 },
       { header: "Movimento", width: 30 },
@@ -216,7 +241,11 @@ function provisionExport(r: ProvisionReport): ReportExport {
       cell.bool(i.movement === "left" ? null : i.provisionIsEstimate),
       cell.money(i.previousProvisionCents),
       cell.bool(i.previousProvisionCents === null ? null : i.previousIsEstimate),
-      cell.text(i.movement ? PROVISION_MOVEMENT_LABELS[i.movement] : null),
+      cell.text(
+        [i.movement ? PROVISION_MOVEMENT_LABELS[i.movement] : null, i.deletedAfterClose ? "processo excluído após o fechamento" : null]
+          .filter(Boolean)
+          .join(" · ") || null,
+      ),
     ]),
   };
   const extra = r.snapshot
@@ -253,9 +282,9 @@ function auditExport(r: AuditLetterReport): ReportExport {
       { header: "Valor liquidado (R$)", width: 18 },
       { header: "Garantias vinculadas (R$)", width: 18 },
       { header: "Exposição (R$)", width: 18 },
-      { header: "Exposição estimada (RN-07)", width: 14 },
+      { header: "Exposição é estimada", width: 14 },
       { header: "Provisão (R$)", width: 18 },
-      { header: "Provisão estimada (RN-07)", width: 14 },
+      { header: "Provisão é estimada", width: 14 },
       { header: "Ressalvas", width: 60 },
     ],
     rows: r.rows.map((p) => [
@@ -264,7 +293,7 @@ function auditExport(r: AuditLetterReport): ReportExport {
       cell.text(p.court),
       cell.text(p.courtDivision),
       cell.text(p.instance ? PROCESS_INSTANCE_LABELS[p.instance] : null),
-      cell.text(p.phase ? PROCESS_PHASE_LABELS[p.phase] : null),
+      cell.text(processPhaseLabel(p.phase)),
       cell.text(CLASSIFICATION_LABELS[p.classification ?? "unclassified"]),
       cell.bp(p.percentageBp),
       cell.money(p.claimCents),
@@ -290,7 +319,7 @@ function auditExport(r: AuditLetterReport): ReportExport {
   ];
   return {
     fileBase: fileBase(r, r.baseDate),
-    title: `${REPORT_TYPE_LABELS[r.type]} — data-base ${formatDate(r.baseDate)}`,
+    title: `${REPORT_TYPE_LABELS[r.type]}, data-base ${formatDate(r.baseDate)}`,
     about: about(r, extra),
     sheets: [sheet],
     csvSheet: 0,
@@ -310,7 +339,7 @@ function movementExport(r: MovementReport): ReportExport {
       { header: "Tipo de valor", width: 24 },
       { header: "Valor anterior (R$)", width: 18 },
       { header: "Valor novo (R$)", width: 18 },
-      { header: "Estimativa (RN-07)", width: 12 },
+      { header: "Valor estimado", width: 12 },
     ],
     rows: r.events.map((e) => [
       cell.date(e.date),
@@ -331,7 +360,7 @@ function movementExport(r: MovementReport): ReportExport {
     rows: [
       [cell.text("Entradas na carteira"), cell.int(r.summary.added)],
       [cell.text("Encerramentos"), cell.int(r.summary.closed)],
-      ...r.summary.closedByReason.map((c) => [cell.text(`Encerramentos — ${c.label}`), cell.int(c.count)]),
+      ...r.summary.closedByReason.map((c) => [cell.text(`Encerramentos: ${c.label}`), cell.int(c.count)]),
       [cell.text("Alterações de valor oficial"), cell.int(r.summary.valueChanges)],
       [cell.text("Mudanças de fase"), cell.int(r.summary.phaseChanges)],
       [cell.text("Mudanças de situação"), cell.int(r.summary.statusChanges)],

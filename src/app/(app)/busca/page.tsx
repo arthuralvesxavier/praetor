@@ -226,7 +226,7 @@ function SearchResults({ result, hits }: { result: GlobalSearchResult; hits: num
                     {DOCUMENT_CATEGORY_LABELS[d.category]}
                   </TableCell>
                   <TableCell className="hidden max-w-xs text-slate-700 lg:table-cell">
-                    {d.linkedTo.length > 0 ? <span className="line-clamp-2">{d.linkedTo.join(" · ")}</span> : "—"}
+                    {d.linkedTo.length > 0 ? <span className="line-clamp-2">{d.linkedTo.join(" · ")}</span> : <span className="text-muted-foreground">Sem vínculo</span>}
                   </TableCell>
                   <TableCell className="text-right whitespace-nowrap tabular-nums">{formatDate(d.updatedAt)}</TableCell>
                 </TableRow>
@@ -267,7 +267,7 @@ function SearchResults({ result, hits }: { result: GlobalSearchResult; hits: num
                     <StatusBadge label={CONTRACT_STATUS_LABELS[c.status]} tone={CONTRACT_STATUS_TONES[c.status]} />
                   </TableCell>
                   <TableCell className="hidden text-right whitespace-nowrap tabular-nums md:table-cell">
-                    {formatDate(c.endDate)}
+                    {c.endDate ? formatDate(c.endDate) : <span className="text-muted-foreground">Prazo indeterminado</span>}
                   </TableCell>
                 </TableRow>
               ))}

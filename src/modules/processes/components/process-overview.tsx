@@ -1,37 +1,34 @@
-import { FileSearch, Sparkles } from "lucide-react";
+import { ArrowRight, FileSearch, PencilLine } from "lucide-react";
 import Link from "next/link";
-import { AiModeBadge } from "@/components/ui/ai-mode-badge";
+import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { DescriptionList } from "@/components/ui/description-list";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DescriptionList, type DescriptionItem } from "@/components/ui/description-list";
 import { OriginBadge } from "@/components/ui/origin-badge";
-import { RiskBadge } from "@/components/ui/risk-badge";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { CASE_BRIEF_DEMO_NOTICE } from "@/domain/case-brief";
 import {
   CASE_BRIEF_STATUS_LABELS,
   CLOSURE_REASON_LABELS,
+  LEGACY_PROCESS_PHASE_LABELS,
   LEGAL_AREA_LABELS,
-  LIABILITY_NATURE_LABELS,
-  LOSS_PROBABILITY_LABELS,
   PROCESS_INSTANCE_LABELS,
   PROCESS_PHASE_LABELS,
-  PROCESS_STATUS_LABELS,
   type CaseBriefStatus,
   type PartyRole,
 } from "@/domain/enums";
-import { formatDate, formatDateTime, formatMoneyCents, truncate } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoneyCents, pluralize, truncate } from "@/lib/format";
 import type { Tone } from "@/lib/tones";
-import { PROCESS_STATUS_TONES } from "@/lib/tones";
-import { listAnalyses } from "@/modules/analyses/service";
+import { cn } from "@/lib/utils";
 import { getLatestCaseBriefSummary, type CaseBriefSummary } from "@/modules/briefs/service";
-import { ProcessValuesSummary } from "@/modules/contingency/components/process-tabs";
 import type { AuthContext } from "@/server/auth/context";
 import { can } from "@/server/auth/permissions";
 import { logger } from "@/server/lib/logger";
 import type { ProcessDetail } from "../service";
+import { COVER_FIELD_LABELS, firstSentence, isBlank as blank, missingCoverFields } from "../cover";
 import { cityWithState } from "../states";
-import { CnjCheckFlag } from "./process-badges";
+import { PROCESS_SECTION_IDS, processTabUrl } from "../tabs";
+import type { BandValuationItem } from "../decision-band";
+import { loadProcessDecisionBand, ProcessDecisionBandOrNotice } from "./process-decision-band";
 
 const BRIEF_STATUS_TONES: Record<CaseBriefStatus, Tone> = {
   generating: "info",
@@ -43,341 +40,263 @@ const BRIEF_STATUS_TONES: Record<CaseBriefStatus, Tone> = {
 };
 
 const linkClasses =
-  "self-start rounded-sm text-sm font-medium text-primary-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+  "inline-flex items-center gap-1 self-start rounded-sm text-sm font-medium text-primary-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 
-export async function ProcessOverview({
+// ---------------------------------------------------------------------------
+// Resumo tab
+// ---------------------------------------------------------------------------
+
+/**
+ * "Resumo" tab (default) of the process detail (P0.6): the decision band (P0.4), the
+ * compact cover (only fields with a value, plus the ONE "Completar cadastro" link of the
+ * tab listing the missing ones) and the short preliminary-analysis card when there is a
+ * brief. Cards without content are not rendered. The band is loaded once: its pending
+ * claim proposals (contingency:read) are also shown under the cover's valor da causa.
+ */
+export async function ProcessSummaryTab({ ctx, process: p }: { ctx: AuthContext; process: ProcessDetail }) {
+  const [band, brief] = await Promise.all([
+    loadProcessDecisionBand(ctx, p.id),
+    can(ctx, "brief:read") ? loadLatestBrief(ctx, p.id) : Promise.resolve(null),
+  ]);
+  const claimProposals = band?.valuations?.items.filter((v) => v.kind === "claim") ?? [];
+  return (
+    <>
+      <ProcessDecisionBandOrNotice band={band} />
+      <div className={cn("grid grid-cols-1 gap-6", brief && "lg:grid-cols-3")}>
+        <ProcessCover
+          ctx={ctx}
+          process={p}
+          claimProposals={claimProposals}
+          className={brief ? "lg:col-span-2" : undefined}
+          wide={!brief}
+        />
+        {brief ? <BriefCard brief={brief} href={processTabUrl(p.id, "documentos-e-analises", PROCESS_SECTION_IDS.brief)} /> : null}
+      </div>
+    </>
+  );
+}
+
+async function loadLatestBrief(ctx: AuthContext, processId: string): Promise<CaseBriefSummary | null> {
+  try {
+    return await getLatestCaseBriefSummary(ctx, processId);
+  } catch (error) {
+    logger.warn("process_latest_brief_failed", { processId, errorName: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
+
+const PARTY_POLES: { role: PartyRole; label: string }[] = [
+  { role: "plaintiff", label: "Polo ativo" },
+  { role: "defendant", label: "Polo passivo" },
+];
+
+function Muted({ children }: { children: ReactNode }) {
+  return <span className="text-muted-foreground">{children}</span>;
+}
+
+/** Compact cover: every empty field is hidden; the gaps are listed once, next to the edit link. */
+function ProcessCover({
   ctx,
   process: p,
-  tabHref,
+  claimProposals,
+  className,
+  wide,
 }: {
   ctx: AuthContext;
   process: ProcessDetail;
-  tabHref: (tab: "partes" | "valores" | "analise-preliminar" | "ia" | "instancias") => string;
+  /** Valor da causa proposals awaiting review (oldest first; empty without contingency:read). */
+  claimProposals: readonly BandValuationItem[];
+  className?: string;
+  /** Full-width cover (no side card): three columns on large screens. */
+  wide: boolean;
 }) {
   const closure = p.closureReason ? CLOSURE_REASON_LABELS[p.closureReason] : null;
-  return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <div className="flex min-w-0 flex-col gap-6 lg:col-span-2">
-        <Card>
-          <CardHeader actions={<OriginBadge origin={p.dataOrigin} />}>
-            <CardTitle>Capa do processo</CardTitle>
-            <CardDescription>Dados cadastrados ou importados — sem consulta automática a tribunais.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DescriptionList
-              columns={2}
-              items={[
-                {
-                  label: "Número (CNJ)",
-                  value: (
-                    <span className="inline-flex flex-wrap items-center gap-2">
-                      <span className="font-mono">{p.number}</span>
-                      <CnjCheckFlag check={p.cnjCheck} />
-                    </span>
-                  ),
-                },
-                {
-                  label: "Situação",
-                  value: (
-                    <span className="inline-flex flex-wrap items-center gap-2">
-                      <StatusBadge label={PROCESS_STATUS_LABELS[p.status]} tone={PROCESS_STATUS_TONES[p.status]} />
-                      {closure ? <span className="text-sm text-slate-700">{closure}</span> : null}
-                    </span>
-                  ),
-                },
-                { label: "Tribunal", value: p.court },
-                { label: "Órgão julgador / vara / turma", value: p.courtDivision },
-                { label: "Cidade/UF", value: cityWithState(p.city, p.state) },
-                { label: "Comarca / jurisdição", value: p.jurisdiction },
-                { label: "Classe", value: p.processClass },
-                { label: "Área", value: LEGAL_AREA_LABELS[p.area] },
-                {
-                  label: "Instância atual",
-                  value: p.instance ? (
-                    <span>
-                      {PROCESS_INSTANCE_LABELS[p.instance]}
-                      {p.instances.length > 1 ? (
-                        <Link href={tabHref("instancias")} className="ml-2 text-xs font-medium text-primary-700 underline-offset-2 hover:underline">
-                          {p.instances.length} instâncias vinculadas
-                        </Link>
-                      ) : null}
-                    </span>
-                  ) : null,
-                },
-                {
-                  label: "Fase",
-                  value: (
-                    <span>
-                      {PROCESS_PHASE_LABELS[p.phase]}
-                      {p.phaseDetail ? <span className="block text-xs text-muted-foreground">{p.phaseDetail}</span> : null}
-                    </span>
-                  ),
-                },
-                { label: "Empresa", value: p.companyName },
-                { label: "Unidade", value: p.unitName },
-                { label: "Responsável", value: p.responsibleName },
-                { label: "Escritório externo", value: p.lawFirmName },
-                { label: "Ajuizamento / distribuição", value: p.filedAt ? formatDate(p.filedAt) : null },
-                { label: "Última movimentação", value: p.lastMovementAt ? formatDate(p.lastMovementAt) : null },
-                Boolean(closure || p.closedAt) && {
-                  label: "Saída da carteira ativa",
-                  value: [closure, p.closedAt ? `em ${formatDate(p.closedAt)}` : null].filter(Boolean).join(" "),
-                },
-                p.needsVerification && { label: "Pendência de verificação", value: p.verificationNote ?? "Sem nota", full: true },
-                { label: "Cadastrado por", value: p.createdByName },
-                { label: "Cadastrado em", value: formatDateTime(p.createdAt) },
-                { label: "Última atualização", value: formatDateTime(p.updatedAt) },
-                { label: "Descrição", value: p.description, full: true },
-              ]}
-            />
-          </CardContent>
-        </Card>
+  const latestProposal = claimProposals.at(-1) ?? null;
+  const missing = missingCoverFields(p, { claimPending: latestProposal !== null });
+  const instancesHref = processTabUrl(p.id, "partes-e-andamento", PROCESS_SECTION_IDS.instances);
+  const text = (v: string | null | undefined) => (blank(v) ? null : v);
 
-        <PartiesSummary process={p} href={tabHref("partes")} />
+  const poles = PARTY_POLES.map((pole) => {
+    const names = p.parties.filter((x) => x.role === pole.role).map((x) => x.name);
+    if (names.length === 0) return null;
+    // The group company as the only defendant is already the "Empresa" field.
+    if (pole.role === "defendant" && names.length === 1 && names[0] === p.companyName) return null;
+    const value = names.length > 1 ? `${names[0]} e mais ${pluralize(names.length - 1, "parte", "partes")}` : names[0];
+    return { label: pole.label, value } satisfies DescriptionItem;
+  });
 
-        {p.dataOrigin === "imported" ? (
-          <Card>
-            <CardHeader actions={<OriginBadge origin="imported" />}>
-              <CardTitle>Dados importados</CardTitle>
-              <CardDescription>
-                Registro carregado de uma fonte informada. Edições feitas depois da importação ficam registradas no
-                histórico como alterações manuais.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <DescriptionList
-                columns={3}
-                items={[
-                  { label: "Fonte", value: p.externalSource },
-                  { label: "Identificador na fonte", value: p.externalId },
-                  { label: "Importado em", value: p.importedAt ? formatDateTime(p.importedAt) : null },
-                ]}
-              />
-              {p.importBatchId && can(ctx, "import:run") ? (
-                <Link href={`/importacoes/${p.importBatchId}`} className={linkClasses}>
-                  Ver lote de importação
+  const items: (DescriptionItem | null)[] = [
+    text(p.title) ? { label: "Título interno", value: p.title } : null,
+    text(p.court)
+      ? { label: "Tribunal", value: [p.court, text(p.courtDivision)].filter(Boolean).join(" · ") }
+      : text(p.courtDivision)
+        ? { label: "Vara ou órgão julgador", value: p.courtDivision }
+        : null,
+    cityWithState(text(p.city), text(p.state)) ? { label: "Cidade/UF", value: cityWithState(text(p.city), text(p.state)) } : null,
+    text(p.jurisdiction) ? { label: "Comarca", value: p.jurisdiction } : null,
+    text(p.processClass) ? { label: "Classe", value: p.processClass } : null,
+    { label: "Área", value: LEGAL_AREA_LABELS[p.area] },
+    p.instance
+      ? {
+          label: "Instância atual",
+          value: (
+            <span>
+              {PROCESS_INSTANCE_LABELS[p.instance]}
+              {p.instances.length > 1 ? (
+                <Link href={instancesHref} className="ml-2 text-xs font-medium text-primary-700 underline-offset-2 hover:underline">
+                  {pluralize(p.instances.length, "instância vinculada", "instâncias vinculadas")}
                 </Link>
               ) : null}
-            </CardContent>
-          </Card>
-        ) : null}
-      </div>
+            </span>
+          ),
+        }
+      : null,
+    {
+      label: "Fase",
+      value: (
+        <span>
+          {PROCESS_PHASE_LABELS[p.phase]}
+          {text(p.phaseDetail) ? <span className="block text-xs text-muted-foreground">{p.phaseDetail}</span> : null}
+          {p.legacyPhase ? (
+            <span className="block text-xs text-muted-foreground">
+              Antes da separação entre fase e instância: {LEGACY_PROCESS_PHASE_LABELS[p.legacyPhase]}
+            </span>
+          ) : null}
+        </span>
+      ),
+    },
+    ...poles,
+    p.companyName ? { label: "Empresa", value: p.companyName } : null,
+    p.unitName ? { label: "Unidade", value: p.unitName } : null,
+    p.responsibleName ? { label: "Responsável", value: p.responsibleName } : null,
+    p.lawFirmName ? { label: "Escritório externo", value: p.lawFirmName } : null,
+    p.filedAt ? { label: "Ajuizamento", value: formatDate(p.filedAt) } : null,
+    p.lastMovementAt ? { label: "Última movimentação", value: formatDate(p.lastMovementAt) } : null,
+    closure || p.closedAt
+      ? {
+          label: "Saída da carteira ativa",
+          value: [closure, p.closedAt ? `em ${formatDate(p.closedAt)}` : null].filter(Boolean).join(" "),
+        }
+      : null,
+  ];
 
-      <div className="flex min-w-0 flex-col gap-6">
-        {can(ctx, "contingency:read") ? (
-          <ProcessValuesSummary ctx={ctx} processId={p.id} />
-        ) : (
-          <Card>
-            <CardHeader>
-              <CardTitle>Valores</CardTitle>
-              <CardDescription>Grandezas diferentes, nunca somadas.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <DescriptionList
-                columns={1}
-                items={[
-                  { label: "Valor da causa", value: formatMoneyCents(p.claimAmountCents, "Não informado") },
-                  { label: "Valor liquidado / apurado", value: formatMoneyCents(p.liquidatedAmountCents, "Não apurado") },
-                ]}
-              />
-            </CardContent>
-          </Card>
-        )}
-
-        {can(ctx, "brief:read") ? <LatestBriefCard ctx={ctx} processId={p.id} href={tabHref("analise-preliminar")} /> : null}
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Classificação de risco</CardTitle>
-            <CardDescription>Avaliação informada pela equipe jurídica (cadastro humano). Não é previsão de resultado.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <DescriptionList
-              columns={1}
-              items={[
-                { label: "Risco interno", value: <RiskBadge level={p.riskLevel} withPrefix /> },
-                {
-                  label: "Probabilidade de perda (oficial)",
-                  value: p.lossProbability ? LOSS_PROBABILITY_LABELS[p.lossProbability] : "Não classificada",
-                },
-                { label: "Justificativa", value: p.riskRationale },
-              ]}
-            />
-            {can(ctx, "contingency:read") ? (
-              <Link href={tabHref("valores")} className={linkClasses}>
-                Valores, risco e provisão
-              </Link>
-            ) : null}
-          </CardContent>
-        </Card>
-
-        {can(ctx, "analysis:read") ? <LatestAnalysisCard ctx={ctx} processId={p.id} aiTabHref={tabHref("ia")} /> : null}
-      </div>
-    </div>
-  );
-}
-
-const PARTY_GROUPS: { role: PartyRole; label: string }[] = [
-  { role: "plaintiff", label: "Polo ativo (autor)" },
-  { role: "defendant", label: "Polo passivo (réu)" },
-  { role: "public_prosecutor", label: "Ministério Público" },
-  { role: "third_party", label: "Terceiros" },
-  { role: "other", label: "Outros" },
-];
-
-function PartiesSummary({ process: p, href }: { process: ProcessDetail; href: string }) {
-  const groups = PARTY_GROUPS.map((g) => ({ ...g, parties: p.parties.filter((x) => x.role === g.role) })).filter(
-    (g) => g.parties.length > 0 || g.role === "plaintiff" || g.role === "defendant",
-  );
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Partes</CardTitle>
-        <CardDescription>Resumo dos polos. Documentos (CPF/CNPJ) ficam na aba “Partes”, mascarados.</CardDescription>
+    <Card aria-labelledby="capa-titulo" className={cn("min-w-0", className)}>
+      <CardHeader actions={p.dataOrigin === "imported" ? <OriginBadge origin="imported" /> : null}>
+        <CardTitle id="capa-titulo">Capa do processo</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {groups.map((g) => (
-            <div key={g.role} className="min-w-0">
-              <dt className="text-xs font-medium text-muted-foreground">{g.label}</dt>
-              <dd className="mt-1 text-sm text-slate-900">
-                {g.parties.length === 0 ? (
-                  <span className="text-muted-foreground">Não cadastrado</span>
-                ) : (
-                  <ul className="flex flex-col gap-1">
-                    {g.parties.map((x) => (
-                      <li key={x.id} className="flex flex-wrap items-center gap-1.5">
-                        <span>{x.name}</span>
-                        {x.isClient ? <Badge tone="primary">Cliente</Badge> : null}
-                        {x.liabilityNature ? (
-                          <Badge tone="neutral">Resp. {LIABILITY_NATURE_LABELS[x.liabilityNature].toLowerCase()}</Badge>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+      <CardContent className="flex flex-col gap-5">
+        {/* Two columns on phones too: short values, half the height. */}
+        <DescriptionList columns={wide ? 3 : 2} items={items} className="grid-cols-2" />
+        {text(p.description) ? (
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-muted-foreground">Descrição</p>
+            <p className="mt-0.5 text-sm break-words whitespace-pre-line text-slate-900">{truncate(p.description, 600)}</p>
+          </div>
+        ) : null}
+
+        {/* Valor da causa and valor apurado: different quantities, side by side, never summed (RN-02). */}
+        <div className="flex flex-col gap-3 rounded-md border border-border bg-surface-muted px-4 py-3">
+          <dl className="grid grid-cols-2 gap-3">
+            <div className="min-w-0">
+              <dt className="text-xs font-medium text-muted-foreground">Valor da causa</dt>
+              <dd className="mt-0.5 text-sm font-semibold text-slate-900 tabular-nums">
+                {p.claimAmountCents === null ? <Muted>Não informado</Muted> : formatMoneyCents(p.claimAmountCents)}
+              </dd>
+              {latestProposal ? (
+                // Not part of the value above nor of any total until a person approves it.
+                <dd className="mt-0.5 text-xs text-amber-800 tabular-nums">
+                  {`${formatMoneyCents(latestProposal.amountCents)} proposto${latestProposal.simulated ? " por extração simulada" : ""}, aguardando conferência`}
+                  {claimProposals.length > 1 ? ` (${pluralize(claimProposals.length, "proposta", "propostas")})` : ""}
+                </dd>
+              ) : null}
+            </div>
+            <div className="min-w-0">
+              <dt className="text-xs font-medium text-muted-foreground">Valor apurado (liquidado)</dt>
+              <dd className="mt-0.5 text-sm font-semibold text-slate-900 tabular-nums">
+                {p.liquidatedAmountCents === null ? <Muted>Não apurado</Muted> : formatMoneyCents(p.liquidatedAmountCents)}
               </dd>
             </div>
-          ))}
-        </dl>
-        <Link href={href} className={linkClasses}>
-          {p.permissions.canEdit ? "Gerenciar partes" : "Ver partes"} ({p.parties.length})
-        </Link>
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            Grandezas diferentes, nunca somadas.
+            {can(ctx, "contingency:read") ? (
+              <>
+                {" "}
+                <Link href={processTabUrl(p.id, "valores-e-acordos")} className="font-medium text-primary-700 underline-offset-2 hover:underline">
+                  Ver valores, risco e provisão
+                </Link>
+              </>
+            ) : null}
+          </p>
+        </div>
+
+        {missing.length > 0 ? (
+          <div className="flex flex-col gap-1 border-t border-border pt-4 text-sm">
+            {p.permissions.canEdit ? (
+              <Link href={`/processos/${p.id}/editar`} className={linkClasses}>
+                <PencilLine aria-hidden="true" className="size-4" />
+                {`Completar cadastro (${pluralize(missing.length, "campo", "campos")})`}
+              </Link>
+            ) : (
+              <p className="font-medium text-slate-900">{`Cadastro incompleto (${pluralize(missing.length, "campo", "campos")})`}</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Não informados: {missing.map((f) => COVER_FIELD_LABELS[f]).join(", ")}.
+            </p>
+          </div>
+        ) : null}
+
+        <p className="border-t border-border pt-3 text-xs text-muted-foreground">
+          {[
+            p.createdByName ? `Cadastrado por ${p.createdByName} em ${formatDateTime(p.createdAt)}` : `Cadastrado em ${formatDateTime(p.createdAt)}`,
+            `atualizado em ${formatDateTime(p.updatedAt)}`,
+            p.dataOrigin === "imported"
+              ? `importado${p.externalSource ? ` de ${p.externalSource}` : ""}${p.importedAt ? ` em ${formatDateTime(p.importedAt)}` : ""}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          .
+          {p.importBatchId && can(ctx, "import:run") ? (
+            <>
+              {" "}
+              <Link href={`/importacoes/${p.importBatchId}`} className="font-medium text-primary-700 underline-offset-2 hover:underline">
+                Ver lote de importação
+              </Link>
+            </>
+          ) : null}
+        </p>
       </CardContent>
     </Card>
   );
 }
 
-async function LatestBriefCard({ ctx, processId, href }: { ctx: AuthContext; processId: string; href: string }) {
-  let brief: CaseBriefSummary | null = null;
-  let failed = false;
-  try {
-    brief = await getLatestCaseBriefSummary(ctx, processId);
-  } catch (error) {
-    failed = true;
-    logger.warn("process_latest_brief_failed", { processId, errorName: error instanceof Error ? error.name : "unknown" });
-  }
-
+/** Short preliminary-analysis card: status, one sentence and the link to the full analysis. */
+function BriefCard({ brief, href }: { brief: CaseBriefSummary; href: string }) {
+  const sentence = firstSentence(brief.headline);
   return (
-    <Card className="border-ai-200 bg-ai-50/50">
+    <Card aria-labelledby="resumo-analise-preliminar" className="min-w-0 self-start border-ai-200 bg-ai-50/50">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-ai-900">
+        <CardTitle id="resumo-analise-preliminar" className="flex items-center gap-2 text-ai-900">
           <FileSearch aria-hidden="true" className="size-4 text-ai-600" />
           Análise preliminar
         </CardTitle>
-        <CardDescription>Leitura inicial do caso para apoiar o advogado responsável. Requer revisão humana.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
-        {failed ? (
-          <p className="text-muted-foreground">Não foi possível carregar a análise preliminar mais recente.</p>
-        ) : brief ? (
-          <>
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusBadge label={CASE_BRIEF_STATUS_LABELS[brief.status]} tone={BRIEF_STATUS_TONES[brief.status]} />
-              <Badge tone="neutral">Versão {brief.version}</Badge>
-              {brief.mode === "demo" ? <Badge tone="warning">Simulação</Badge> : null}
-              {brief.isStale ? <Badge tone="warning">Desatualizada</Badge> : null}
-            </div>
-            {brief.headline ? (
-              <p className="whitespace-pre-line text-slate-800">{truncate(brief.headline, 320)}</p>
-            ) : (
-              <p className="text-muted-foreground">Resumo ainda não disponível.</p>
-            )}
-            <p className="text-xs text-muted-foreground">
-              {brief.approvedAt
-                ? `Aprovada${brief.approvedByName ? ` por ${brief.approvedByName}` : ""} em ${formatDateTime(brief.approvedAt)}`
-                : brief.generatedAt
-                  ? `Gerada em ${formatDateTime(brief.generatedAt)}`
-                  : "Em processamento"}
-            </p>
-            {brief.mode === "demo" ? (
-              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                {CASE_BRIEF_DEMO_NOTICE}
-              </p>
-            ) : null}
-          </>
-        ) : (
-          <p className="text-muted-foreground">Nenhuma análise preliminar gerada para este processo.</p>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge label={CASE_BRIEF_STATUS_LABELS[brief.status]} tone={BRIEF_STATUS_TONES[brief.status]} />
+          <Badge tone="neutral">Versão {brief.version}</Badge>
+          {brief.mode === "demo" ? <Badge tone="warning">Simulação</Badge> : null}
+          {brief.isStale ? <Badge tone="warning">Desatualizada</Badge> : null}
+        </div>
+        {sentence ? <p className="text-slate-800">{sentence}</p> : <Muted>Resumo ainda não disponível.</Muted>}
+        {brief.mode === "demo" ? (
+          <p className="text-xs text-amber-800">Conteúdo demonstrativo, gerado por simulação sem inteligência artificial real.</p>
+        ) : null}
         <Link href={href} className={linkClasses}>
-          {brief ? "Abrir análise preliminar" : "Ver aba de análise preliminar"}
-        </Link>
-      </CardContent>
-    </Card>
-  );
-}
-
-async function LatestAnalysisCard({ ctx, processId, aiTabHref }: { ctx: AuthContext; processId: string; aiTabHref: string }) {
-  let latest: Awaited<ReturnType<typeof listAnalyses>>["items"][number] | null = null;
-  let failed = false;
-  try {
-    const result = await listAnalyses(ctx, {
-      subjectType: "legal_process",
-      subjectId: processId,
-      status: "succeeded",
-      pageSize: 1,
-    });
-    latest = result.items[0] ?? null;
-  } catch (error) {
-    failed = true;
-    logger.warn("process_latest_analysis_failed", { processId, errorName: error instanceof Error ? error.name : "unknown" });
-  }
-
-  return (
-    <Card className="border-ai-200 bg-ai-50/50">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-ai-900">
-          <Sparkles aria-hidden="true" className="size-4 text-ai-600" />
-          Análise de IA — requer validação
-        </CardTitle>
-        <CardDescription>
-          Apoio à equipe jurídica. Não substitui a avaliação de um advogado nem prevê o resultado do processo.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3 text-sm">
-        {failed ? (
-          <p className="text-muted-foreground">Não foi possível carregar a análise mais recente.</p>
-        ) : latest ? (
-          <>
-            <div className="flex flex-wrap items-center gap-2">
-              <AiModeBadge mode={latest.mode} />
-              {latest.isStale ? <Badge tone="warning">Desatualizada</Badge> : null}
-              <span className="text-xs text-muted-foreground">{formatDateTime(latest.completedAt ?? latest.createdAt)}</span>
-            </div>
-            {latest.summaryPreview ? (
-              <p className="whitespace-pre-line text-slate-800">{truncate(latest.summaryPreview, 400)}</p>
-            ) : (
-              <p className="text-muted-foreground">Análise concluída sem resumo disponível.</p>
-            )}
-            {latest.isStale && latest.staleReason ? (
-              <p className="text-xs text-amber-800">Motivo: {latest.staleReason}</p>
-            ) : null}
-          </>
-        ) : (
-          <p className="text-muted-foreground">Nenhuma análise concluída para este processo.</p>
-        )}
-        <Link href={aiTabHref} className={linkClasses}>
-          Ver análises de IA
+          Abrir análise preliminar
+          <ArrowRight aria-hidden="true" className="size-3.5" />
         </Link>
       </CardContent>
     </Card>

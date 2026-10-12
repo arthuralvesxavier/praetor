@@ -26,6 +26,7 @@ import { OrganizationSettingsForm } from "@/modules/admin/components/org-setting
 import { RoutineForm } from "@/modules/admin/components/routine-form";
 import { getOrganizationSettings, listRoutines } from "@/modules/admin/service";
 import { getAiRuntimeInfo, getAiUsageSummary } from "@/modules/analyses/service";
+import { DefaultCorrectionIndexCard } from "@/modules/indices/components/default-index-card";
 import { requirePageContext } from "@/server/auth/session";
 import { logger } from "@/server/lib/logger";
 
@@ -40,9 +41,17 @@ const ROUTINE_DESCRIPTIONS: Record<RoutineType, string> = {
     "Relata registros encerrados elegíveis para revisão de exclusão. Não exclui nada; registros com retenção legal (legal hold) não são considerados.",
   hearing_alerts: "Gera alertas de audiências e sessões de julgamento próximas.",
   portfolio_alerts:
-    "Gera alertas de parcelas de acordo a vencer, valores aguardando conferência, execução sem valor apurado, garantias paradas e processos marcados para verificação.",
+    "Gera alertas de parcelas de acordo a vencer, valores aguardando conferência, execução sem valor apurado, garantias paradas e processos pendentes de conferência.",
   monthly_snapshot:
     "Atualiza a prévia do fechamento do mês corrente. Competências fechadas nunca são recalculadas.",
+  court_sync:
+    "Consulta a carteira ativa na API pública do DataJud (CNJ): registra movimentações novas, completa dados vazios e avisa sobre baixas e audiências designadas. Nada é encerrado automaticamente.",
+  simulated_feed:
+    "Gera, no ambiente de demonstração, a chegada de um processo fictício a cada intervalo, para mostrar o fluxo automático de entrada. Desligada por padrão.",
+  bi_access_refresh:
+    "Atualiza a lista de quem pode ver cada processo no Power BI e pede ao Power BI a atualização dos painéis depois de importações, fechamentos mensais e coletas.",
+  index_series_refresh:
+    "Busca na API do Banco Central os índices de atualização monetária dos meses que faltam. Sem índice do período, o valor atualizado aparece como indisponível.",
 };
 
 const usd = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
@@ -55,7 +64,12 @@ function formatInterval(minutes: number): string {
 
 export default async function SettingsPage() {
   const ctx = await requirePageContext("admin:organization");
-  const [org, routines] = await Promise.all([getOrganizationSettings(ctx), listRoutines(ctx)]);
+  // The index card is resolved here (not as a nested async element), like the other data of the page.
+  const [org, routines, defaultIndexCard] = await Promise.all([
+    getOrganizationSettings(ctx),
+    listRoutines(ctx),
+    DefaultCorrectionIndexCard({ ctx }),
+  ]);
 
   let runtime: { mode: AiMode; provider: string; model: string } | null = null;
   let usage: Awaited<ReturnType<typeof getAiUsageSummary>> | null = null;
@@ -204,7 +218,7 @@ export default async function SettingsPage() {
         </section>
 
         {/* Contingency parameters (RN-04, RN-05, RN-11, RNF-14) */}
-        <section aria-labelledby="contingencias-titulo" id="contingencias" className="scroll-mt-24">
+        <section aria-labelledby="contingencias-titulo" id="contingencias" className="flex scroll-mt-24 flex-col gap-6">
           <ContingencySettingsForm
             action={updateContingencySettingsAction}
             rulesVersion={s.contingency.rulesVersion}
@@ -216,6 +230,8 @@ export default async function SettingsPage() {
               idleGuaranteeDays: s.contingency.idleGuaranteeDays,
             }}
           />
+          {/* P1.7: index written into new valuations (updated value computed on read). */}
+          {defaultIndexCard}
         </section>
 
         {/* Simulated e-mail + intake pipeline */}
@@ -250,7 +266,7 @@ export default async function SettingsPage() {
               </CardTitle>
               <CardDescription>
                 Executadas periodicamente pelo processo de segundo plano (worker). “Executar agora” coloca a rotina na fila;
-                “Processar fila agora” executa até 20 tarefas pendentes imediatamente — útil quando não há worker em execução,
+                “Processar fila agora” executa até 20 tarefas pendentes imediatamente. É útil quando não há worker em execução,
                 como em demonstrações.
               </CardDescription>
             </CardHeader>
@@ -292,7 +308,7 @@ export default async function SettingsPage() {
                           {r.lastRunAt ? formatDateTime(r.lastRunAt) : <span className="text-muted-foreground">Nunca</span>}
                         </TableCell>
                         <TableCell className="min-w-56 text-sm">
-                          {r.lastStatus ? <span className="block">{r.lastStatus}</span> : <span className="text-muted-foreground">—</span>}
+                          {r.lastStatus ? <span className="block">{r.lastStatus}</span> : <span className="text-muted-foreground">Sem resultado</span>}
                           {r.lastError ? <span className="mt-1 block text-xs text-red-700">Erro: {r.lastError}</span> : null}
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
@@ -348,8 +364,8 @@ export default async function SettingsPage() {
             <CardContent className="flex flex-col gap-3 text-sm text-slate-700">
               <Callout tone="warning" title="Nenhuma exclusão automática nesta versão">
                 O Praetor não exclui dados automaticamente. A rotina “{ROUTINE_TYPE_LABELS.retention_review}” apenas relata
-                quantos processos, ocorrências e documentos já ultrapassaram o prazo de retenção e estão elegíveis para revisão
-                — a decisão de excluir é sempre humana.
+                quantos processos, ocorrências e documentos já ultrapassaram o prazo de retenção e estão elegíveis para revisão.
+                A decisão de excluir é sempre humana.
               </Callout>
               <ul className="list-disc space-y-1 pl-5">
                 <li>

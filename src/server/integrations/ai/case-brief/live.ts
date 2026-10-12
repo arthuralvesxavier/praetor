@@ -36,7 +36,7 @@ Regras obrigatórias:
 4. Cada item tem uma proveniência:
    - "extracted": lido em um documento; cite ref (D1, D2...), page (o número do marcador [página N] anterior ao trecho) e excerpt (trecho curto e literal);
    - "record": copiado do cadastro; cite ref "REG" com page e excerpt nulos;
-   - "illustrative": exemplo ou sugestão sua (teses, próximos passos, checklists) — nunca é fato do processo;
+   - "illustrative": exemplo ou sugestão sua (teses, próximos passos, checklists), que nunca é fato do processo;
    - "missing": informação procurada e não encontrada.
    Nunca use a proveniência "reviewer" (reservada ao advogado).
 5. Cite apenas as referências listadas em <task>. Não invente referências nem páginas.

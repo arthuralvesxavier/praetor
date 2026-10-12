@@ -66,7 +66,7 @@ export function GuaranteeDialog({
         )
       }
       title={isEdit ? "Editar garantia" : "Vincular garantia"}
-      description="Depósitos, penhoras, seguro garantia e cartas de fiança vinculados ao processo abatem a exposição (RN-04)."
+      description="Depósitos, penhoras, seguro garantia e cartas de fiança vinculados ao processo abatem a exposição."
       action={isEdit ? updateGuaranteeAction : createGuaranteeAction}
       hiddenFields={isEdit ? { id: guarantee!.id } : { processId }}
       submitLabel={isEdit ? "Salvar alterações" : "Vincular garantia"}
@@ -252,7 +252,7 @@ export function RiskProposalReview({ id, decision }: { id: string; decision: "ap
       {(state) => (
         <>
           {approve ? (
-            <Callout tone="info">A regra considera apenas fase, instância, encerramento e valor liquidado — não analisa o mérito.</Callout>
+            <Callout tone="info">A regra considera apenas fase, instância, encerramento e valor liquidado. Não analisa o mérito.</Callout>
           ) : null}
           <FormField label={approve ? "Parecer complementar (opcional)" : "Motivo (opcional)"} htmlFor={`risk-note-${id}`} error={fieldError(state, "note")}>
             <Textarea name="note" rows={3} maxLength={1000} />

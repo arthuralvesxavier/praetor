@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { formatMoneyCents } from "@/lib/format";
+import { formatMoneyCents, pluralize } from "@/lib/format";
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { BucketRow } from "../types";
-import { CountCell, EstimateMoneyCell, MoneyGroupCell, NumCell, NumHead } from "./report-cells";
+import { CountCell, EstimateMoneyCell, ExposureEstimateCell, MoneyGroupCell, NumCell, NumHead, ProvisionAmountCell } from "./report-cells";
 
 export type ExtraColumn<R extends BucketRow> = { header: string; cell: (row: R) => ReactNode };
 
@@ -29,7 +29,7 @@ export function BucketTable<R extends BucketRow>({
   const colSpan = 9 + extra.length;
   const line = (r: R, isTotal = false) => (
     <TableRow key={r.key} className={isTotal ? "bg-slate-50 font-semibold" : undefined}>
-      <TableCell className="min-w-44 max-w-72">
+      <TableCell className="min-w-36 max-w-72">
         {isTotal ? <span>{r.label}</span> : <span className="text-slate-900">{r.label}</span>}
       </TableCell>
       <CountCell value={r.processCount} />
@@ -49,18 +49,28 @@ export function BucketTable<R extends BucketRow>({
         unknownSingular="não apurado"
         unknownPlural="não apurados"
       />
-      <NumCell>{r.bucket.guaranteesCents ? formatMoneyCents(r.bucket.guaranteesCents) : <span className="text-muted-foreground">—</span>}</NumCell>
+      <NumCell>{r.bucket.guaranteesCents ? formatMoneyCents(r.bucket.guaranteesCents) : <span className="text-muted-foreground">Sem garantias</span>}</NumCell>
       <MoneyGroupCell
         cents={r.bucket.exposureCents}
         count={r.bucket.count}
-        unknown={r.bucket.exposureUnknown}
-        unknownLabel="Não calculável"
-        unknownSingular="não calculável"
-        unknownPlural="não calculáveis"
+        unknown={r.bucket.liquidatedUnknown}
+        unknownLabel="Não apurada"
+        unknownSingular="sem valor apurado"
+        unknownPlural="sem valor apurado"
+        showUnknownCount={false}
       />
-      <EstimateMoneyCell cents={r.bucket.exposureEstimateCents} />
-      <NumCell>{formatMoneyCents(r.bucket.provisionCents)}</NumCell>
-      <EstimateMoneyCell cents={r.bucket.provisionEstimateCents} />
+      <ExposureEstimateCell bucket={r.bucket} />
+      <ProvisionAmountCell
+        cents={r.bucket.provisionCents}
+        basis={r.provisionBasis}
+        liquidatedCount={r.bucket.count - r.bucket.liquidatedUnknown}
+        emptyLabel={r.provisionBasis && r.provisionBasis.estimate === 0 ? "Não calculada" : undefined}
+      />
+      <EstimateMoneyCell
+        cents={r.bucket.provisionEstimateCents}
+        count={r.provisionBasis?.estimate}
+        note={r.provisionBasis && r.provisionBasis.none > 0 ? pluralize(r.provisionBasis.none, "sem provisão", "sem provisão") : null}
+      />
       {extra.map((c) => (
         <NumCell key={c.header}>{c.cell(r)}</NumCell>
       ))}
@@ -76,14 +86,10 @@ export function BucketTable<R extends BucketRow>({
           <NumHead>Valor da causa</NumHead>
           <NumHead>Valor liquidado</NumHead>
           <NumHead>Garantias</NumHead>
-          <NumHead>Exposição oficial</NumHead>
-          <NumHead>
-            Exposição estimada <span className="font-normal">(RN-07)</span>
-          </NumHead>
+          <NumHead>Exposição apurada</NumHead>
+          <NumHead>Exposição estimada</NumHead>
           <NumHead>Provisão</NumHead>
-          <NumHead>
-            Provisão estimada <span className="font-normal">(RN-07)</span>
-          </NumHead>
+          <NumHead>Provisão estimada</NumHead>
           {extra.map((c) => (
             <NumHead key={c.header}>{c.header}</NumHead>
           ))}

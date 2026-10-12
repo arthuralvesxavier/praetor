@@ -20,7 +20,11 @@ import { resolveStaleAlerts, upsertAlert } from "@/modules/alerts/service";
 import { listStaleAnalysesForRefresh, requestAnalysis } from "@/modules/analyses/service";
 import { loadOrganization } from "@/modules/analyses/org-settings";
 import { runMonthlySnapshotRoutine, runPortfolioAlertsRoutine } from "@/modules/contingency/routines";
+import { runCloseGateAlertsRoutine } from "@/modules/contingency/snapshot-service";
 import { runHearingAlertsRoutine } from "@/modules/hearings/routines";
+import { runCourtSyncRoutine, runSimulatedFeedRoutine } from "@/modules/court-sync/routines";
+import { runBiAccessRefreshRoutine } from "@/modules/bi/routines";
+import { runIndexSeriesRefreshRoutine } from "@/modules/indices/routines";
 import type { OrganizationSettings } from "@/server/db/schema";
 import { safeErrorMessage } from "./queue";
 
@@ -39,6 +43,16 @@ export const DEFAULT_ROUTINES: { type: RoutineType; intervalMinutes: number; con
   { type: "hearing_alerts", intervalMinutes: 60, config: {} },
   { type: "portfolio_alerts", intervalMinutes: 360, config: {} },
   { type: "monthly_snapshot", intervalMinutes: 1440, config: {} },
+  // Hourly: each process has its own interval (settings.integrations.datajud.syncIntervalHours) and error backoff.
+  { type: "court_sync", intervalMinutes: 60, config: {} },
+  { type: "simulated_feed", intervalMinutes: 15, config: {} },
+  {
+    type: "bi_access_refresh",
+    intervalMinutes: 60,
+    config: { scheduledRefreshHours: 24, minIntervalMinutes: 60, maxRefreshesPerDay: 8 },
+  },
+  // Séries mensais do Banco Central (SGS) para o valor atualizado das valorações (P1.7).
+  { type: "index_series_refresh", intervalMinutes: 1440, config: {} },
 ];
 
 export async function ensureDefaultRoutines(organizationId: string, db: DbOrTx = getDb()): Promise<void> {
@@ -95,7 +109,12 @@ const ROUTINES: Record<RoutineType, (rc: RoutineContext) => Promise<string>> = {
   retention_review: runRetentionReview,
   hearing_alerts: runHearingAlertsRoutine,
   portfolio_alerts: runPortfolioAlertsRoutine,
-  monthly_snapshot: runMonthlySnapshotRoutine,
+  // Refreshes the current month's preview, then raises the close-gate alerts (P1.9). Never closes a competência.
+  monthly_snapshot: async (rc) => `${await runMonthlySnapshotRoutine(rc)} ${await runCloseGateAlertsRoutine(rc)}`,
+  court_sync: runCourtSyncRoutine,
+  simulated_feed: runSimulatedFeedRoutine,
+  bi_access_refresh: runBiAccessRefreshRoutine,
+  index_series_refresh: runIndexSeriesRefreshRoutine,
 };
 
 function clipTitle(t: string, max = 140): string {
@@ -291,7 +310,7 @@ async function runContractExpirationAlerts(rc: RoutineContext): Promise<string> 
       type: "obligation_due",
       severity: late ? "critical" : "warning",
       title: late ? `Obrigação contratual em atraso: ${clipTitle(o.contractTitle)}` : `Obrigação contratual próxima: ${clipTitle(o.contractTitle)}`,
-      message: `"${desc}" — vencimento em ${formatDate(due)} (${relativeDays(due, rc.today)}).`,
+      message: `"${desc}", com vencimento em ${formatDate(due)} (${relativeDays(due, rc.today)}).`,
       entityType: "contract",
       entityId: o.contractId,
       dedupeKey: key,

@@ -5,7 +5,8 @@
  * Params (MODULE_CONTRACTS "v2 — New routes and URL params"):
  *   q, status, area, phase, risco, unidade, responsavel, tribunal, instancia,
  *   cidade, uf, empresa, escritorio, classe, valor_min, valor_max (reais),
- *   liquidado=com|sem, verificar=1, carteira=ativa|encerrada|todas (default ativa), ordem, pagina
+ *   liquidado=com|sem, pendencia=tribunal|instancia|fase|cidade|empresa|unidade,
+ *   verificar=1, carteira=ativa|encerrada|todas (default ativa), ordem, pagina
  */
 import {
   LEGAL_AREAS,
@@ -16,7 +17,7 @@ import {
   type ProcessInstance,
 } from "@/domain/enums";
 import { enumParam, flagParam, idParam, pageParam, param, type SearchParams } from "@/lib/search-params";
-import type { LiquidatedFilter, PortfolioView, ProcessFilters, ProcessSort } from "./schemas";
+import type { LiquidatedFilter, PortfolioView, ProcessFilters, ProcessMissingField, ProcessSort } from "./schemas";
 
 export const PORTFOLIO_VIEW_PARAMS: Record<PortfolioView, string> = {
   active: "ativa",
@@ -40,6 +41,25 @@ export const LIQUIDATED_FILTER_PARAMS: Record<LiquidatedFilter, string> = { with
 export const LIQUIDATED_FILTER_LABELS: Record<LiquidatedFilter, string> = {
   with: "Com valor apurado",
   without: "Não apurado",
+};
+
+/** `pendencia=` values (registration gaps; the dashboard links here from "Pendências de cadastro"). */
+export const MISSING_FIELD_PARAMS: Record<ProcessMissingField, string> = {
+  court: "tribunal",
+  instance: "instancia",
+  phase: "fase",
+  city: "cidade",
+  company: "empresa",
+  unit: "unidade",
+};
+
+export const MISSING_FIELD_LABELS: Record<ProcessMissingField, string> = {
+  court: "Sem tribunal informado",
+  instance: "Sem instância informada",
+  phase: "Sem fase informada",
+  city: "Sem cidade informada",
+  company: "Sem empresa do grupo",
+  unit: "Sem unidade",
 };
 
 export const PROCESS_SORT_PARAMS: Record<ProcessSort, string> = {
@@ -92,6 +112,7 @@ export const PROCESS_LIST_PARAM_KEYS = [
   "valor_min",
   "valor_max",
   "liquidado",
+  "pendencia",
   "verificar",
 ] as const;
 
@@ -109,6 +130,7 @@ export const SECONDARY_FILTER_KEYS = [
   "valor_min",
   "valor_max",
   "liquidado",
+  "pendencia",
   "verificar",
 ] as const;
 
@@ -163,6 +185,7 @@ export function processFiltersFromSearchParams(sp: SearchParams): ProcessListPar
     claimMinCents: reaisParamToCents(param(sp, "valor_min")),
     claimMaxCents: reaisParamToCents(param(sp, "valor_max")),
     liquidated: reverse(LIQUIDATED_FILTER_PARAMS, param(sp, "liquidado")),
+    missingField: reverse(MISSING_FIELD_PARAMS, param(sp, "pendencia")),
     needsVerification: flagParam(sp, "verificar") ? true : undefined,
     portfolio,
     sort: reverse(PROCESS_SORT_PARAMS, param(sp, "ordem")) ?? "updated_desc",

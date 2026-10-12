@@ -144,11 +144,11 @@ describe("sendTemplatedEmail", () => {
       triggeredById: null,
       errorMessage: null,
     });
-    expect(m.subject).toBe("[Simulação] Análise preliminar disponível — Proc. 0000001-11.2026.5.10.0001");
+    expect(m.subject).toBe("[Simulação] Análise preliminar disponível: Proc. 0000001-11.2026.5.10.0001");
     expect(m.providerMessageId).toMatch(/^sim-/);
     expect(m.sentAt).toBeInstanceOf(Date);
     expect(m.linkUrl).toBe(`http://localhost:3000/processos/${ids.processSp}?aba=analise-preliminar`);
-    expect(m.bodyHtml).toContain("SIMULAÇÃO — este e-mail não foi enviado");
+    expect(m.bodyHtml).toContain("SIMULAÇÃO: este e-mail não foi enviado");
     expect(m.bodyHtml).toContain("Reclamação &lt;b&gt;fictícia&lt;/b&gt;");
     expect(m.bodyHtml).not.toContain("<b>fictícia</b>");
 
@@ -477,7 +477,7 @@ describe("sendDailyDigest", () => {
     expect(m.template).toBe("daily_digest");
     expect(m.toUserId).toBe(fx.ctx.lawyer.userId);
     expect(m.triggeredById).toBe(fx.ctx.lawyer.userId);
-    expect(m.subject).toMatch(/^\[Simulação\] Resumo diário de pendências — \d{2}\/\d{2}\/\d{4}$/);
+    expect(m.subject).toMatch(/^\[Simulação\] Resumo diário de pendências de \d{2}\/\d{2}\/\d{4}$/);
     expect(m.bodyText).toMatch(/Prazos com vencimento nos próximos 7 dias: 1 /);
     expect(m.bodyText).toContain("Análises preliminares prontas para revisão: 1 ");
     expect(m.bodyText).toContain("Alertas abertos: 0 ");

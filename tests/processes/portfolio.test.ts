@@ -165,8 +165,10 @@ describe("v2 fields and tenant checks", () => {
 });
 
 describe("valor da causa history (RF-09)", () => {
-  it("records an official claim valuation on create and supersedes it on change", async () => {
-    const lawyer = f.ctx.lawyer;
+  // P0.6 (deferred finding 2): only an approver (contingency:approve) makes the claim official; see
+  // tests/fixes/p06-ficha/claim-valuation.test.ts for the proposals of lawyers, external counsel and analysts.
+  it("records an official claim valuation on create and supersedes it on change (approver)", async () => {
+    const lawyer = f.ctx.manager;
     const id = await makeProcess(lawyer, { number: num(), unitId: f.unitSp, instance: "first", claimAmountCents: 100_000_00 });
     const byProcess = () =>
       f.db.select().from(processValuations).where(eq(processValuations.processId, id)).orderBy(asc(processValuations.createdAt));
@@ -204,11 +206,12 @@ describe("valor da causa history (RF-09)", () => {
     await updateProcess(lawyer, id, { claimAmountCents: 150_000_00 });
     expect(await byProcess()).toHaveLength(2);
 
-    // Removing the value supersedes the official one (no zero is invented — RN-03).
+    // Removing the value supersedes the official one (no zero is invented, RN-03) and dates the removal.
     await updateProcess(lawyer, id, { claimAmountCents: null });
     vals = await byProcess();
     expect(vals).toHaveLength(2);
     expect(vals.every((v) => v.status === "superseded")).toBe(true);
+    expect(vals.map((v) => v.clearedOn)).toEqual([null, todayISO()]);
   });
 
   it("does not create valuations when no valor da causa is informed", async () => {
@@ -380,7 +383,7 @@ describe("portfolio list: filters, summary, sort and options", () => {
     const r3 = row("0000103-00.2025.5.00.0000");
     expect(r3[col("Valor Liquidado/Apurado (R$)")]).toBe("0,00"); // zero is not null
     expect(r3[col("Valor da Causa (R$)")]).toBe("");
-    expect(row("0000104-00.2025.5.10.0002")[col("Situação")]).toBe("Encerrado — Saída do acervo / perda do patrocínio");
+    expect(row("0000104-00.2025.5.10.0002")[col("Situação")]).toBe("Encerrado: Saída do acervo / perda do patrocínio");
 
     const [audit] = (
       await f.db.select().from(auditLogs).where(eq(auditLogs.action, "legal_process.export")).orderBy(asc(auditLogs.createdAt))
@@ -700,5 +703,69 @@ describe("visibility of the v2 roles", () => {
     expect((await listProcesses(b, { pageSize: 100 })).items).toHaveLength(0);
     expect((await summarizeProcesses(b, {})).count).toBe(0);
     expect((await exportProcesses(b, {}, "csv")).processes).toHaveLength(0);
+  });
+});
+
+describe("registration gaps filter (pendencia=)", () => {
+  const g: Record<string, string> = {};
+  /** Scopes every query of this block to its own processes. */
+  const MARK = "PEND";
+
+  beforeAll(async () => {
+    const m = f.ctx.manager;
+    const [company] = await f.db.insert(companies).values({ organizationId: f.orgA, name: "Empresa Pendências (fictícia)" }).returning();
+    const base = { processClass: MARK, area: "labor" as const, court: "TRT10" };
+    g.full = await makeProcess(m, { ...base, number: num(), instance: "first", city: "Palmas", unitId: f.unitSp, companyId: company.id });
+    g.noInstance = await makeProcess(m, { ...base, number: num(), city: "Palmas", unitId: f.unitSp, companyId: company.id });
+    g.blankCity = await makeProcess(m, { ...base, number: num(), instance: "second", unitId: f.unitRe, companyId: company.id });
+    g.noUnitNoCompany = await makeProcess(m, { ...base, number: num(), instance: "first", city: "Recife", isConfidential: true });
+    g.blankCourt = await makeProcess(m, { ...base, number: num(), instance: "first", city: "Recife", unitId: f.unitRe, companyId: company.id });
+    g.closedNoInstance = await makeProcess(m, { ...base, number: num(), city: "Palmas", unitId: f.unitSp, companyId: company.id });
+    // Blank text is a gap too (imports may store it); written directly, as the form trims it to null.
+    await f.db.update(legalProcesses).set({ city: "   " }).where(eq(legalProcesses.id, g.blankCity));
+    await f.db.update(legalProcesses).set({ court: " " }).where(eq(legalProcesses.id, g.blankCourt));
+    await closeProcess(m, g.closedNoInstance, { closureReason: "archived" });
+  });
+
+  const ids = async (ctx: AuthContext, filters: Parameters<typeof listProcesses>[1]) =>
+    (await listProcesses(ctx, { processClass: MARK, portfolio: "active", pageSize: 100, ...filters })).items.map((i) => i.id).sort();
+  const sorted = (...keys: string[]) => keys.map((k) => g[k]).sort();
+
+  it("returns exactly the processes whose field is empty (null or blank), within the active portfolio", async () => {
+    const m = f.ctx.manager;
+    expect(await ids(m, { missingField: "instance" })).toEqual(sorted("noInstance"));
+    expect(await ids(m, { missingField: "instance", portfolio: "all" })).toEqual(sorted("noInstance", "closedNoInstance"));
+    expect(await ids(m, { missingField: "city" })).toEqual(sorted("blankCity"));
+    expect(await ids(m, { missingField: "court" })).toEqual(sorted("blankCourt"));
+    expect(await ids(m, { missingField: "unit" })).toEqual(sorted("noUnitNoCompany"));
+    expect(await ids(m, { missingField: "company" })).toEqual(sorted("noUnitNoCompany"));
+    // The phase is required on every process: no gap is possible.
+    expect(await ids(m, { missingField: "phase" })).toEqual([]);
+    // Without the filter, every process of the block (the gaps are a subset, never extra rows).
+    expect(await ids(m, {})).toEqual(sorted("full", "noInstance", "blankCity", "noUnitNoCompany", "blankCourt"));
+    // Summary and export use the same WHERE.
+    expect((await summarizeProcesses(m, { processClass: MARK, portfolio: "active", missingField: "city" })).count).toBe(1);
+    const exported = await exportProcesses(m, { processClass: MARK, portfolio: "active", missingField: "instance" }, "csv");
+    expect(exported.processes.map((r) => r.id)).toEqual([g.noInstance]);
+  });
+
+  it("keeps row visibility and organization isolation", async () => {
+    // Confidential process without unit: hidden from the executive, visible to the manager.
+    expect(await ids(f.ctx.executive, { missingField: "unit" })).toEqual([]);
+    // Lawyer of unit RE: sees RE and unit-less processes only.
+    expect(await ids(f.ctx.lawyerRe, { missingField: "city" })).toEqual(sorted("blankCity"));
+    expect(await ids(f.ctx.lawyerRe, { missingField: "instance" })).toEqual([]);
+    expect(await ids(f.ctx.adminB, { missingField: "court" })).toEqual([]);
+  });
+
+  it("maps the URL param (pt-BR values) and drops unknown ones", () => {
+    expect(processFiltersFromSearchParams({ pendencia: "instancia" }).missingField).toBe("instance");
+    expect(processFiltersFromSearchParams({ pendencia: "cidade" }).missingField).toBe("city");
+    expect(processFiltersFromSearchParams({ pendencia: "tribunal" }).missingField).toBe("court");
+    expect(processFiltersFromSearchParams({ pendencia: "empresa" }).missingField).toBe("company");
+    expect(processFiltersFromSearchParams({ pendencia: "unidade" }).missingField).toBe("unit");
+    expect(processFiltersFromSearchParams({ pendencia: "fase" }).missingField).toBe("phase");
+    expect(processFiltersFromSearchParams({ pendencia: "instance" }).missingField).toBeUndefined();
+    expect(processFiltersFromSearchParams({ pendencia: "x" }).missingField).toBeUndefined();
   });
 });

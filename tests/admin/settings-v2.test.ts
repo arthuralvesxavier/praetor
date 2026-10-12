@@ -108,6 +108,8 @@ describe("contingency parameters (RN-05, RN-11, RNF-14)", () => {
       confidenceThreshold: 90,
       idleGuaranteeDays: 120,
       rulesVersion: 2,
+      // P1.7: not edited by this form, kept as stored.
+      defaultCorrectionIndex: "none",
     });
     // Other sections are untouched.
     expect(after.email.mode).toBe("simulated");

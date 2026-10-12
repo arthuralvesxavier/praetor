@@ -162,11 +162,11 @@ describe("processes service", () => {
   });
 
   it("updates with a field diff in the audit and marks analyses stale", async () => {
-    await updateProcess(lawyerSp, ids.p1, { phase: "appeal", riskLevel: "high", title: base.title });
+    await updateProcess(lawyerSp, ids.p1, { phase: "liquidation", riskLevel: "high", title: base.title });
     const audit = await auditFor(ids.p1, "legal_process.update");
     expect(audit).toHaveLength(1);
     expect(audit[0].changes).toEqual({
-      phase: { from: "knowledge", to: "appeal" },
+      phase: { from: "knowledge", to: "liquidation" },
       riskLevel: { from: "medium", to: "high" },
     });
     expect(mocks.markAnalysesStaleForEntity).toHaveBeenCalledTimes(1);
@@ -178,8 +178,20 @@ describe("processes service", () => {
     expect(input.reason).toMatch(/^Dados do processo alterados: .*fase/);
 
     // No-op update writes nothing.
-    await updateProcess(lawyerSp, ids.p1, { phase: "appeal" });
+    await updateProcess(lawyerSp, ids.p1, { phase: "liquidation" });
     expect(await auditFor(ids.p1, "legal_process.update")).toHaveLength(1);
+  });
+
+  it("only accepts the three phases: appeal is an instance, settlement and closed are not phases (P0.5)", async () => {
+    for (const legacy of ["appeal", "pre_filing", "settlement", "closed"]) {
+      const err = await updateProcess(lawyerSp, ids.p1, { phase: legacy as never }).catch((e: unknown) => e);
+      expect(err, legacy).toBeInstanceOf(ValidationError);
+      expect((err as ValidationError).fieldErrors?.phase).toBeDefined();
+    }
+    // The instance is its own field (1º/2º/3º grau), independent of the phase.
+    await updateProcess(lawyerSp, ids.p1, { instance: "superior" });
+    const detail = await getProcess(lawyerSp, ids.p1);
+    expect(detail).toMatchObject({ phase: "liquidation", instance: "superior", legacyPhase: null });
   });
 
   it("rejects duplicate numbers in the same organization only", async () => {

@@ -27,7 +27,7 @@ export default async function EditDistributionRulePage(props: PageProps<"/distri
         title={`Editar regra: ${rule.name}`}
         description="As alterações valem para as próximas distribuições; processos já distribuídos não mudam de responsável."
         breadcrumbs={[
-          { label: "Dashboard", href: "/dashboard" },
+          { label: "Painel executivo", href: "/dashboard" },
           { label: "Distribuição", href: "/distribuicao?aba=regras" },
           { label: rule.name },
         ]}

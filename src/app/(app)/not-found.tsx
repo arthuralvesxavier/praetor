@@ -10,7 +10,7 @@ export default function AppNotFound() {
         icon={<SearchX />}
         title="Registro não encontrado"
         description="O endereço não existe ou você não tem permissão para acessar este registro."
-        action={<ButtonLink href="/dashboard">Voltar ao dashboard</ButtonLink>}
+        action={<ButtonLink href="/dashboard">Voltar ao painel executivo</ButtonLink>}
       />
     </div>
   );

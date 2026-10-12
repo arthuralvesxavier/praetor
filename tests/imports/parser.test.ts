@@ -4,6 +4,7 @@ import {
   detectHeader,
   matchHeader,
   normalizeCourt,
+  normalizeStoredPhase,
   parseCityCell,
   parseInstance,
   parseMoneyCell,
@@ -11,6 +12,7 @@ import {
   parsePhase,
   parseWorkbook,
   type ParsedWorkbook,
+  type PhaseParse,
 } from "@/modules/imports/parser";
 import { hasZipSignature, readWorkbook, UnreadableWorkbookError } from "@/modules/imports/xlsx";
 import { DEMO_CLIENT, demoBytes, invalidCnj, row, sheet, validCnj } from "./helpers";
@@ -131,33 +133,48 @@ describe("field normalizers", () => {
 });
 
 describe("phase parser", () => {
+  // P0.5: phase and instance are distinct axes. Phase only from Conhecimento/Liquidação/Execução terms;
+  // recurso/agravo/AIRR/RR/TST name the INSTANCE (2º/3º grau) and never the phase.
   it.each([
-    ["Conhecimento", { phase: "knowledge", closed: false, returned: false, needsVerification: false }],
-    ["Liquidação", { phase: "liquidation", closed: false }],
-    ["Execução", { phase: "enforcement", closed: false }],
-    ["Conhecimento (AIRR) — em tramitação no TST", { phase: "appeal", returned: false }],
-    ["Conhecimento (recurso) — em tramitação", { phase: "appeal" }],
-    ["Recurso decidido — baixou do 2º grau (à origem/TST)", { phase: "appeal", returned: true }],
-    ["TST decidiu (agravo/RR) — baixado à origem", { phase: "appeal", returned: true }],
-    ["Recurso baixado — retornou ao 1º grau (liquidação)", { phase: "appeal", returned: true }],
-    ["Conhecimento — Julgado; autos remetidos ao TST (Recurso de Revista)", { phase: "appeal", forwarded: true }],
-    ["Conhecimento — Acórdão publicado (2º grau julgado)", { phase: "knowledge" }],
+    ["Conhecimento", { phase: "knowledge", instance: null, closed: false, returned: false, needsVerification: false }],
+    ["Liquidação", { phase: "liquidation", instance: null, closed: false }],
+    ["Execução", { phase: "enforcement", instance: null, closed: false }],
+    ["Conhecimento (AIRR) — em tramitação no TST", { phase: "knowledge", instance: "superior", returned: false }],
+    ["Conhecimento (recurso) — em tramitação", { phase: "knowledge", instance: "second" }],
+    ["Conhecimento — Concluso p/ julgamento (recurso)", { phase: "knowledge", instance: "second" }],
+    ["Conhecimento (recursal) — AGRAVO DE PETIÇÃO pautado p/ julgamento", { phase: "knowledge", instance: "second" }],
+    // Returned rows: the appeal already came back, so the text names no current instance.
+    ["Recurso decidido — baixou do 2º grau (à origem/TST)", { phase: null, instance: null, returned: true, recognized: true }],
+    ["TST decidiu (agravo/RR) — baixado à origem", { phase: null, instance: null, returned: true, recognized: true }],
+    ["Recurso baixado — retornou ao 1º grau (liquidação)", { phase: "liquidation", instance: null, returned: true }],
+    ["Recurso (AIRO) baixado — processo em liquidação no 1º grau", { phase: "liquidation", instance: null, returned: true }],
+    ["Conhecimento — Julgado; autos remetidos ao TST (Recurso de Revista)", { phase: "knowledge", instance: "superior", forwarded: true }],
+    ["Conhecimento — Julgado (acórdão); RR interposto 2026-05-02 (10ª Turma)", { phase: "knowledge", instance: "superior", forwarded: true }],
+    ["Conhecimento — Acórdão publicado (2º grau julgado)", { phase: "knowledge", instance: null }],
     [
       "PAGO/EXTINTO — arquivado def. 2026-06-25",
-      { phase: "closed", closed: true, closureReason: "paid_extinct", closedAt: "2026-06-25", needsVerification: false },
+      { phase: null, closed: true, closureReason: "paid_extinct", closedAt: "2026-06-25", needsVerification: false, recognized: true },
     ],
-    ["PAGO/EXTINTO — extinta execução 2026-07-03", { closed: true, closureReason: "paid_extinct", closedAt: "2026-07-03" }],
-    ["Execução — EXTINTA (satisfação 20/04/2026)", { closed: true, closureReason: "paid_extinct", closedAt: "2026-04-20" }],
-    ["Execução — ARQUIVADO def. 2026-07-18", { phase: "closed", closed: true, closureReason: "archived", closedAt: "2026-07-18" }],
-    ["Conhecimento — ARQUIVADO definitivamente em 07/07/2026", { closed: true, closureReason: "archived", closedAt: "2026-07-07" }],
-    // VERIFICAR / "saiu do acervo": verification, never an automatic closure.
+    ["PAGO/EXTINTO — extinta execução 2026-07-03", { phase: "enforcement", closed: true, closureReason: "paid_extinct", closedAt: "2026-07-03" }],
+    ["Execução — EXTINTA (satisfação 20/04/2026)", { phase: "enforcement", closed: true, closureReason: "paid_extinct", closedAt: "2026-04-20" }],
+    ["Execução — ARQUIVADO def. 2026-07-18", { phase: "enforcement", closed: true, closureReason: "archived", closedAt: "2026-07-18" }],
+    ["Conhecimento — ARQUIVADO definitivamente em 07/07/2026", { phase: "knowledge", closed: true, closureReason: "archived", closedAt: "2026-07-07" }],
+    // VERIFICAR / "saiu do acervo": verification, never an automatic closure (and no instance from a doubtful text).
     ["Liquidação — VERIFICAR (menção de quitação/saiu do acervo)", { phase: "liquidation", closed: false, needsVerification: true }],
     [
       "Conhecimento — Saiu do acervo 1º grau (provável recurso ao 2º grau) — verificar",
-      { phase: "knowledge", closed: false, needsVerification: true },
+      { phase: "knowledge", instance: null, closed: false, needsVerification: true },
     ],
     ["Arquivados", { phase: null, closed: false, needsVerification: true, recognized: false }],
     ["A habilitar", { phase: null, closed: false, recognized: false }],
+    // Negated or deadline-only appeal wording names no instance (P0.5 review).
+    ["Sem recurso — aguardando sentença", { phase: null, instance: null, recognized: false }],
+    ["Conhecimento — prazo recursal em aberto", { phase: "knowledge", instance: null }],
+    ["Conhecimento — aberto prazo para recurso da sentença", { phase: "knowledge", instance: null }],
+    ["Execução — não houve recurso da reclamada", { phase: "enforcement", instance: null }],
+    ["Recurso não interposto — trânsito em julgado", { phase: null, instance: null, recognized: false }],
+    ["Conhecimento — sem recurso da ré; recurso ordinário do autor pendente", { phase: "knowledge", instance: "second" }],
+    ["Recurso Ordinário", { phase: null, instance: "second", recognized: true }],
   ] as const)("%s", (text, expected) => {
     const parsed = parsePhase(text);
     expect(parsed).toMatchObject(expected);
@@ -167,6 +184,19 @@ describe("phase parser", () => {
   it("keeps a verification note and returns an empty parse for blank cells", () => {
     expect(parsePhase("Conhecimento — VERIFICAR (menção de quitação/saiu do acervo)").verificationNote).toContain("VERIFICAR");
     expect(parsePhase(null)).toMatchObject({ phase: null, detail: null, recognized: false, needsVerification: false });
+  });
+
+  it("re-reads a parse stored before P0.5 (phase of the previous model, no instance) from the cell text", () => {
+    const appeal = { ...parsePhase("Recurso Ordinário — pautado"), phase: "appeal" } as unknown as PhaseParse;
+    delete (appeal as Partial<PhaseParse>).instance;
+    expect(normalizeStoredPhase(appeal)).toMatchObject({ phase: null, instance: "second", closed: false });
+    const closed = { ...parsePhase("Execução — PAGO/EXTINTO 2026-06-25"), phase: "closed" } as unknown as PhaseParse;
+    delete (closed as Partial<PhaseParse>).instance;
+    expect(normalizeStoredPhase(closed)).toMatchObject({ phase: "enforcement", closed: true, closureReason: "paid_extinct", closedAt: "2026-06-25" });
+    // A current parse is returned as is.
+    const current = parsePhase("Liquidação");
+    expect(normalizeStoredPhase(current)).toBe(current);
+    expect(normalizeStoredPhase(null)).toMatchObject({ phase: null, instance: null, detail: null });
   });
 });
 
@@ -227,6 +257,43 @@ describe("rows of a synthetic workbook", () => {
     expect(wb.rows[1].issues.map((i) => i.code)).toContain("area_not_derived");
     expect(wb.rows[2].data).toMatchObject({ court: "TRT10", instance: "first" });
     expect(wb.rows[2].issues.map((i) => i.code)).toEqual(expect.arrayContaining(["court_derived", "instance_assumed"]));
+  });
+
+  it("appeal terms of the Fase fill a missing instance, and never become a phase (P0.5)", () => {
+    const wb = parseWorkbook(
+      [
+        sheet("Consolidado", [
+          row({ number: validCnj(31), instance: null, phase: "Conhecimento (AIRR) — em tramitação no TST" }),
+          row({ number: validCnj(32), instance: null, phase: "Conhecimento (recurso) — em tramitação" }),
+          // The cell wins over the text; a returned appeal names no instance (falls back to 1º grau, with a warning).
+          row({ number: validCnj(33), instance: "1º Grau", phase: "Conhecimento (recurso) — em tramitação" }),
+          row({ number: validCnj(34), instance: null, phase: "Recurso decidido — baixou do 2º grau (à origem/TST)" }),
+          // Negated / deadline-only wording names no instance: 1º grau presumed, with the usual warning.
+          row({ number: validCnj(35), instance: null, phase: "Sem recurso — aguardando sentença" }),
+          row({ number: validCnj(36), instance: null, phase: "Conhecimento — prazo recursal em aberto" }),
+        ]),
+      ],
+      { clientName: DEMO_CLIENT },
+    );
+    const [airr, recurso, cell, returned, noAppeal, deadline] = wb.rows;
+    expect(airr.data).toMatchObject({ instance: "superior", instanceFromPhase: true, phase: { phase: "knowledge", instance: "superior" } });
+    // A presumption from free text: warning (as strict as instance_assumed) and verification in the plan.
+    expect(airr.issues.find((i) => i.code === "instance_from_phase")).toMatchObject({ level: "warning" });
+    expect(airr.issues.find((i) => i.code === "instance_from_phase")?.message).toContain("pendente de conferência");
+    expect(recurso.data).toMatchObject({ instance: "second", instanceFromPhase: true, phase: { phase: "knowledge" } });
+    expect(cell.data).toMatchObject({ instance: "first", instanceFromPhase: false });
+    expect(cell.issues.map((i) => i.code)).not.toContain("instance_from_phase");
+    expect(returned.data?.instance).toBe("first");
+    expect(returned.issues.map((i) => i.code)).toContain("instance_assumed");
+    expect(returned.issues.map((i) => i.code)).not.toContain("phase_unrecognized");
+    for (const r of [noAppeal, deadline]) {
+      expect(r.data).toMatchObject({ instance: "first", instanceFromPhase: false, phase: { instance: null } });
+      expect(r.issues.map((i) => i.code)).toContain("instance_assumed");
+      expect(r.issues.map((i) => i.code)).not.toContain("instance_from_phase");
+    }
+    expect(noAppeal.issues.map((i) => i.code)).toContain("phase_unrecognized");
+    expect(deadline.data?.phase.phase).toBe("knowledge");
+    for (const r of wb.rows) expect(["knowledge", "liquidation", "enforcement", null]).toContain(r.data?.phase.phase);
   });
 
   it("infers the UF of a city only from other rows of the same file", () => {

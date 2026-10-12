@@ -26,8 +26,8 @@ export function ContractLifecycleCard({ events }: { events: ContractLifecycleEve
             ),
             description:
               e.kind === "renewal"
-                ? `Término: ${formatDate(e.previousEndDate)} → ${formatDate(e.newEndDate)}${e.note ? `\n${e.note}` : ""}`
-                : `Efeito em ${formatDate(e.terminationDate)} (término anterior: ${formatDate(e.previousEndDate, "indeterminado")})${e.note ? `\n${e.note}` : ""}`,
+                ? `Término: ${formatDate(e.previousEndDate, "indeterminado")} → ${formatDate(e.newEndDate, "indeterminado")}${e.note ? `\n${e.note}` : ""}`
+                : `Efeito em ${formatDate(e.terminationDate, "data não informada")} (término anterior: ${formatDate(e.previousEndDate, "indeterminado")})${e.note ? `\n${e.note}` : ""}`,
             meta: (
               <>
                 {e.actorName ? `Por ${e.actorName}` : "Pelo sistema"}

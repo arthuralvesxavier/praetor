@@ -20,7 +20,7 @@ const display = Cormorant_Garamond({
 export const metadata: Metadata = {
   title: { default: "Praetor", template: "%s · Praetor" },
   description:
-    "Praetor — gestão jurídica corporativa preventiva e contenciosa, com prazos, contratos, documentos e análises de apoio por IA.",
+    "Praetor: gestão jurídica corporativa preventiva e contenciosa, com prazos, contratos, documentos e análises de apoio por IA.",
   applicationName: "Praetor",
   robots: { index: false, follow: false },
 };

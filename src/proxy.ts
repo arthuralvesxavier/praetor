@@ -28,7 +28,9 @@ export function proxy(request: NextRequest) {
 export const config = {
   // Upload routes are excluded so the proxy never buffers/truncates request bodies;
   // /brand/* are public static logo files (used by the public landing page).
+  // /api/v1/* is the inbound API for external systems: no session cookie, the
+  // handlers authenticate every request by API key (and bodies carry files).
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|brand/|api/documents/upload|api/imports/upload).*)",
+    "/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|brand/|api/documents/upload|api/imports/upload|api/v1/).*)",
   ],
 };

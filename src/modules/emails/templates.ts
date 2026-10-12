@@ -19,6 +19,12 @@ export type CaseBriefReadyData = {
   /** Demo-mode brief: the e-mail must say so. */
   isDemo: boolean;
   briefVersion: number;
+  /**
+   * The recipient cannot open the brief (a source document is hidden from
+   * them): the e-mail carries only the process data and the link — headline,
+   * urgencies, deadlines and counts are not rendered.
+   */
+  digestOmitted?: boolean;
 };
 
 export type IntakeAssignedData = {

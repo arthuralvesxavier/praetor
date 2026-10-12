@@ -92,7 +92,7 @@ export default async function PrazosPage(props: PageProps<"/prazos">) {
       <PageHeader
         title="Prazos e tarefas"
         description="Calendário com audiências, prazos e tarefas, controle de prazos e validação humana de prazos sugeridos pela IA ou pela análise preliminar (simulação)."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Prazos e tarefas" }]}
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Prazos e tarefas" }]}
         actions={
           <>
             {canWriteTasks ? <NewTaskDialog userOptions={userOptions} linkOptions={linkOptions} defaultAssigneeId={ctx.userId} /> : null}

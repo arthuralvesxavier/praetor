@@ -17,7 +17,7 @@ const CONFIDENTIALITY_TONES: Record<ConfidentialityLevel, Tone> = {
 };
 
 export function ExtractionStatusBadge({ status }: { status: TextExtractionStatus | null | undefined }) {
-  if (!status) return <span className="text-muted-foreground">—</span>;
+  if (!status) return <span className="text-muted-foreground">Não informado</span>;
   return <StatusBadge label={TEXT_EXTRACTION_STATUS_LABELS[status]} tone={TEXT_EXTRACTION_STATUS_TONES[status]} />;
 }
 

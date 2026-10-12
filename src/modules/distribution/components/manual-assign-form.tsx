@@ -1,12 +1,13 @@
 "use client";
 
 import { UserRoundCog } from "lucide-react";
-import { useActionState, useId } from "react";
+import { useActionState, useEffect, useId, useRef } from "react";
 import { FormField } from "@/components/ui/form-field";
 import { FormMessage } from "@/components/ui/form-message";
 import { NativeSelect } from "@/components/ui/select";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { Textarea } from "@/components/ui/textarea";
+import { usePreservingSubmit } from "@/components/ui/use-preserving-submit";
 import { fieldError, type FormState } from "@/lib/form";
 import type { Option } from "@/lib/options";
 import { cn } from "@/lib/utils";
@@ -29,8 +30,15 @@ export function ManualAssignForm<S extends FormState>({
 }: ManualAssignFormProps<S>) {
   const uid = useId();
   const [state, formAction] = useActionState<S | null, FormData>(action, null);
+  // No React form reset: the chosen responsible and the reason survive an error result.
+  const onSubmit = usePreservingSubmit(formAction);
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    // After a successful (re)assignment the fields are cleared, as before.
+    if (state?.ok) formRef.current?.reset();
+  }, [state]);
   return (
-    <form action={formAction} className={cn("grid gap-3", className)} noValidate>
+    <form ref={formRef} action={formAction} onSubmit={onSubmit} className={cn("grid gap-3", className)} noValidate>
       {Object.entries(hiddenFields).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
       ))}

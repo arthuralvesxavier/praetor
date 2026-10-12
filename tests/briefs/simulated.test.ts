@@ -249,7 +249,7 @@ describe("SimulatedCaseBriefProvider", () => {
       expect(a.provenance).toBe("extracted");
       expect(a.citations[0]).toMatchObject({ ref: "D1", page: 1 });
     }
-    expect(brief.missingDocuments.map((m) => m.text).join(" ")).not.toContain("Contestação —");
+    expect(brief.missingDocuments.map((m) => m.text).join(" ")).not.toContain("Contestação:");
   });
 });
 

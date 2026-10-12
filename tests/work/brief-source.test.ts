@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { addDaysISO, todayISO } from "@/lib/format";
 import {
@@ -5,10 +6,11 @@ import {
   createTask,
   getDeadline,
   getTask,
+  HIDDEN_SOURCE_DESCRIPTION,
   listDeadlines,
   validateDeadline,
 } from "@/modules/work/service";
-import { caseBriefs } from "@/server/db/schema";
+import { caseBriefSources, caseBriefs } from "@/server/db/schema";
 import { ValidationError } from "@/server/lib/errors";
 import { makeProcess, setupFixture, type Fixture } from "../helpers/fixtures";
 
@@ -98,5 +100,58 @@ describe("suggestions from the preliminary case analysis", () => {
     const t = await getTask(fx.ctx.lawyer, id);
     expect(t.origin).toBe("ai_suggested");
     expect(t.sourceKind).toBe("case_brief");
+  });
+
+  it("hides the description (and the excerpt) when the viewer cannot open the source brief", async () => {
+    // A brief that used a document the lawyer cannot see: only the admin opens it.
+    const [hiddenBrief] = await fx.db
+      .insert(caseBriefs)
+      .values({
+        organizationId: fx.orgA,
+        processId: ids.pSp,
+        version: 2,
+        status: "ready_for_review",
+        mode: "demo",
+        provider: "simulado",
+        model: "simulado",
+        promptVersion: "teste",
+        inputHash: "teste",
+      })
+      .returning();
+    await fx.db.insert(caseBriefSources).values({
+      organizationId: fx.orgA,
+      briefId: hiddenBrief.id,
+      ref: "D1",
+      sourceType: "document_version",
+      entityId: randomUUID(),
+      label: "Documento restrito (fictício)",
+      contentHash: "teste",
+    });
+    const quoted = "Data copiada literalmente de “Notificação” (p. 1): “comparecer à audiência designada para 26/10/2026”.";
+    const { id: deadlineId } = await createSuggestedDeadline(fx.ctx.admin, {
+      title: "Audiência: data escrita no documento",
+      dueDate: addDaysISO(todayISO(), 15),
+      kind: "procedural",
+      description: quoted,
+      sourceAnalysisId: hiddenBrief.id,
+      sourceExcerpt: "comparecer à audiência designada para 26/10/2026",
+      processId: ids.pSp,
+    });
+    const { id: taskId } = await createTask(fx.ctx.admin, {
+      title: "Conferir a notificação",
+      description: `Passo. Observação: ${quoted}`,
+      processId: ids.pSp,
+      origin: "ai_suggested",
+      sourceAnalysisId: hiddenBrief.id,
+    });
+
+    const forLawyer = await getDeadline(fx.ctx.lawyer, deadlineId);
+    expect(forLawyer.sourceAnalysisVisible).toBe(false);
+    expect(forLawyer.sourceExcerpt).toBeNull();
+    expect(forLawyer.description).toBe(HIDDEN_SOURCE_DESCRIPTION);
+    expect((await getTask(fx.ctx.lawyer, taskId)).description).toBe(HIDDEN_SOURCE_DESCRIPTION);
+
+    expect((await getDeadline(fx.ctx.admin, deadlineId)).description).toBe(quoted);
+    expect((await getTask(fx.ctx.admin, taskId)).description).toContain(quoted);
   });
 });

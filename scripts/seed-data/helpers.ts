@@ -90,6 +90,8 @@ export type SeededUser = {
   email: string;
   role: Role;
   unitId: string | null;
+  /** Law firm of an `external_counsel` user (their row scope). */
+  lawFirmId?: string | null;
 };
 
 /** The AuthContext a real session of this user would have (services enforce their rules on it). */
@@ -100,6 +102,7 @@ export function userContext(user: SeededUser, isDemoOrganization = true): AuthCo
     organizationId: user.organizationId,
     role: user.role,
     unitId: user.unitId,
+    lawFirmId: user.lawFirmId ?? null,
     name: user.name,
     email: user.email,
     isDemoOrganization,

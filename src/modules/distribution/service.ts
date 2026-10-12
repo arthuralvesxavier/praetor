@@ -11,21 +11,30 @@
  * - No rule applies → least loaded among the active lawyers of the process
  *   unit, else among every active lawyer of the organization.
  * - A process that already has a responsible keeps it (method `kept`) unless
- *   the caller forces a new decision.
+ *   the caller forces a new decision (forcing = redistribution, which needs
+ *   `distribution:manage`). The process row is locked while deciding, so two
+ *   concurrent assignments never both apply.
+ * - Changing the responsible also moves the process's open intakes to the new
+ *   responsible (`syncOpenIntakesWithResponsible`) and, when the caller asks
+ *   for it (`notify`), sends the simulated "Novo processo atribuído" e-mail.
  * - Workload figures use the row visibility of the caller (`processWhere`) and
  *   the pure contingency rules of `@/domain/contingency` (RN-02/03/04).
  *
  * Conventions (docs/dev/MODULE_CONTRACTS.md): ctx first, assertCan, tenant
  * checks on every foreign id, mutations in a transaction with recordAudit.
  */
-import { and, asc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, notExists, notInArray, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { addToBucket, emptyBucket, type MoneyBucket } from "@/domain/contingency";
 import { ASSIGNMENT_METHOD_LABELS, ROLE_LABELS, type AssignmentMethod, type Role } from "@/domain/enums";
 import { pluralize } from "@/lib/format";
+import { loadOrganization } from "@/modules/analyses/org-settings";
 import { markAnalysesStaleForEntity } from "@/modules/analyses/service";
+import { recordRiskBp } from "@/modules/contingency/position";
+import { intakeAssigneeSql, sendAssignmentEmail, syncOpenIntakesWithResponsible } from "@/modules/intake/assignment";
 import { assertLawFirmInOrg } from "@/modules/organization/service";
-import { intakeWhere, processWhere } from "@/server/auth/access";
+import { processWhere } from "@/server/auth/access";
 import type { AuthContext } from "@/server/auth/context";
 import { assertCan, can } from "@/server/auth/permissions";
 import { getDb, type DbOrTx } from "@/server/db/client";
@@ -103,6 +112,11 @@ function assertCanAssign(ctx: AuthContext): void {
   if (!can(ctx, "distribution:manage") && !can(ctx, "intake:manage")) throw new ForbiddenError();
 }
 
+const REDISTRIBUTION_FORBIDDEN =
+  "Trocar o responsável já definido de um processo exige a permissão de redistribuir demandas (gestão jurídica).";
+const EXTERNAL_COUNSEL_FORBIDDEN =
+  "Atribuir um processo a um escritório externo exige a permissão de redistribuir demandas (gestão jurídica).";
+
 const processColumns = {
   id: legalProcesses.id,
   organizationId: legalProcesses.organizationId,
@@ -139,13 +153,24 @@ type DistributionProcess = {
   lawFirmId: string | null;
 };
 
-async function loadProcess(ctx: AuthContext, processId: string, db: DbOrTx = getDb()): Promise<DistributionProcess> {
+/**
+ * `lock`: `FOR UPDATE` on the process row (inside a transaction). Assignments
+ * lock it before reading `responsibleId`, so a concurrent assignment waits and
+ * then sees the committed responsible.
+ */
+async function loadProcess(
+  ctx: AuthContext,
+  processId: string,
+  db: DbOrTx = getDb(),
+  opts: { lock?: boolean } = {},
+): Promise<DistributionProcess> {
   if (!isGuid(processId)) throw new NotFoundError(PROCESS_NOT_FOUND);
-  const [row] = await db
+  const query = db
     .select(processColumns)
     .from(legalProcesses)
     .where(and(eq(legalProcesses.id, processId), processWhere(ctx)))
     .limit(1);
+  const [row] = opts.lock ? await query.for("update", { of: legalProcesses }) : await query;
   if (!row) throw new NotFoundError(PROCESS_NOT_FOUND);
   return row;
 }
@@ -223,12 +248,15 @@ export type UserLoad = { activeProcesses: number; openIntakes: number };
 /**
  * Organization-wide load of each user (distribution is an organization-level
  * decision): active processes as responsible + intakes assigned to them that
- * are not finished (brief not yet approved/rejected).
+ * are not finished (brief not yet approved/rejected). The responsible of an
+ * open intake is the responsible of its process (`intakeAssigneeSql`), so a
+ * redistribution or a process edit moves the intake load too.
  */
 async function computeLoads(organizationId: string, userIds: readonly string[], db: DbOrTx = getDb()): Promise<Map<string, UserLoad>> {
   const ids = [...new Set(userIds)];
   const loads = new Map<string, UserLoad>(ids.map((id) => [id, { activeProcesses: 0, openIntakes: 0 }]));
   if (ids.length === 0) return loads;
+  const assignee = intakeAssigneeSql();
   const [processRows, intakeRows] = await Promise.all([
     db
       .select({ userId: legalProcesses.responsibleId, n: sql<number>`count(*)::int` })
@@ -243,18 +271,19 @@ async function computeLoads(organizationId: string, userIds: readonly string[], 
       )
       .groupBy(legalProcesses.responsibleId),
     db
-      .select({ userId: caseIntakes.assignedToId, n: sql<number>`count(*)::int` })
+      .select({ userId: assignee, n: sql<number>`count(*)::int` })
       .from(caseIntakes)
+      .innerJoin(legalProcesses, and(eq(legalProcesses.id, caseIntakes.processId), isNull(legalProcesses.deletedAt)))
       .leftJoin(caseBriefs, eq(caseBriefs.id, caseIntakes.briefId))
       .where(
         and(
           eq(caseIntakes.organizationId, organizationId),
-          inArray(caseIntakes.assignedToId, ids),
+          inArray(assignee, ids),
           notInArray(caseIntakes.status, [...CLOSED_INTAKE_STATUSES]),
           or(isNull(caseBriefs.status), notInArray(caseBriefs.status, ["approved", "rejected"])),
         ),
       )
-      .groupBy(caseIntakes.assignedToId),
+      .groupBy(assignee),
   ]);
   for (const r of processRows) if (r.userId) loads.get(r.userId)!.activeProcesses = r.n;
   for (const r of intakeRows) if (r.userId) loads.get(r.userId)!.openIntakes = r.n;
@@ -345,7 +374,7 @@ async function decideInternal(
       selected: false,
     };
     if (!rule.isActive) {
-      evaluations.push({ ...base, evaluated: false, matched: false, skippedReason: "Regra inativa — não é avaliada." });
+      evaluations.push({ ...base, evaluated: false, matched: false, skippedReason: "Regra inativa, não é avaliada." });
       continue;
     }
     if (chosen) {
@@ -388,7 +417,7 @@ async function decideInternal(
         const index = ((rule.rrCursor % eligible.length) + eligible.length) % eligible.length;
         pick = eligible[index];
         method = "round_robin";
-        how = `rodízio entre ${pluralize(eligible.length, "pessoa", "pessoas", { withCount: true })} — vez de ${pick.name} (posição ${index + 1} de ${eligible.length})`;
+        how = `rodízio entre ${pluralize(eligible.length, "pessoa", "pessoas", { withCount: true })}, vez de ${pick.name} (posição ${index + 1} de ${eligible.length})`;
         roundRobinRuleId = rule.id;
         break;
       }
@@ -409,7 +438,7 @@ async function decideInternal(
       ruleName: rule.name,
       lawFirmId: assignment.lawFirmId ?? (pick.role === "external_counsel" ? pick.lawFirmId : null),
       unitId: assignment.unitId ?? null,
-      reason: `Regra “${rule.name}” (prioridade ${rule.priority}) — ${criteriaText}; ${how}.`,
+      reason: `Regra “${rule.name}” (prioridade ${rule.priority}): ${criteriaText}; ${how}.`,
     };
     evaluations.push({ ...base, evaluated: true, matched: true, matchedOn: ev.matchedOn, skippedReason: null, selected: true });
   }
@@ -454,7 +483,7 @@ async function fallbackDecision(
       ...empty,
       userId: null,
       userName: null,
-      reason: "Nenhuma regra aplicável e nenhum advogado ativo disponível — atribua o responsável manualmente.",
+      reason: "Nenhuma regra aplicável e nenhum advogado ativo disponível. Atribua o responsável manualmente.",
     };
   }
   const loads = await computeLoads(organizationId, pool.map((u) => u.id), db);
@@ -463,7 +492,7 @@ async function fallbackDecision(
     ...empty,
     userId: pick.id,
     userName: pick.name,
-    reason: `Nenhuma regra aplicável — menor carga entre ${scope}: ${pick.name} (${loadText(loads.get(pick.id))}).`,
+    reason: `Nenhuma regra aplicável; menor carga entre ${scope}: ${pick.name} (${loadText(loads.get(pick.id))}).`,
   };
 }
 
@@ -482,31 +511,85 @@ async function keptDecision(ctx: AuthContext, process: DistributionProcess, db: 
   };
 }
 
-/** Writes responsibleId (and lawFirmId/unitId only when empty) with audit. */
+type ApplyOptions = {
+  /** Intake whose own flow records this assignment (the intake module); the other open intakes are synced here. */
+  handledIntakeId?: string | null;
+};
+
+type ApplyResult = { responsibleChanged: boolean; syncedIntakeIds: string[] };
+
+/**
+ * Writes the decision on the process, audited (`legal_process.assign`):
+ * - `responsibleId` always; `unitId` only when empty;
+ * - `lawFirmId` follows external counsel: a new responsible from a law firm
+ *   (or a rule that fixes a firm) brings that firm; when the previous
+ *   responsible was the external counsel through whom the process belonged to
+ *   their firm, a new responsible outside that firm takes the firm out (the old
+ *   firm must stop seeing the process). A firm linked to the process
+ *   independently of the responsible (internal responsible) is kept.
+ * When the responsible changes, the open intakes of the process follow it
+ * (same transaction) and their pipeline is enqueued to notify the new one.
+ */
 async function applyToProcess(
   ctx: AuthContext,
   tx: DbOrTx,
   before: DistributionProcess,
   decision: AssignmentDecision,
-): Promise<void> {
-  const patch: { responsibleId: string | null; lawFirmId?: string; unitId?: string } = { responsibleId: decision.userId };
-  if (!before.lawFirmId && decision.lawFirmId) patch.lawFirmId = decision.lawFirmId;
+  opts: ApplyOptions = {},
+): Promise<ApplyResult> {
+  const patch: { responsibleId: string | null; lawFirmId?: string | null; unitId?: string } = { responsibleId: decision.userId };
+  if (decision.lawFirmId && decision.lawFirmId !== before.lawFirmId) {
+    patch.lawFirmId = decision.lawFirmId;
+  } else if (!decision.lawFirmId && before.lawFirmId && before.responsibleId && before.responsibleId !== decision.userId) {
+    const people = await loadUsers(
+      ctx.organizationId,
+      [before.responsibleId, decision.userId].filter((x): x is string => Boolean(x)),
+      tx,
+    );
+    const previous = people.get(before.responsibleId);
+    const next = decision.userId ? people.get(decision.userId) : undefined;
+    const firmCameWithPrevious = previous?.role === "external_counsel" && previous.lawFirmId === before.lawFirmId;
+    const nextInSameFirm = next?.role === "external_counsel" && next.lawFirmId === before.lawFirmId;
+    if (firmCameWithPrevious && !nextInSameFirm) patch.lawFirmId = null;
+  }
   if (!before.unitId && decision.unitId) patch.unitId = decision.unitId;
   const changes = diffChanges(before, { ...before, ...patch }, ["responsibleId", "lawFirmId", "unitId"]);
-  if (!changes) return;
+  if (!changes) return { responsibleChanged: false, syncedIntakeIds: [] };
   await tx
     .update(legalProcesses)
     .set(patch)
     .where(and(eq(legalProcesses.id, before.id), eq(legalProcesses.organizationId, ctx.organizationId)));
+  const responsibleChanged = before.responsibleId !== decision.userId;
+  const syncedIntakeIds =
+    responsibleChanged && decision.userId
+      ? await syncOpenIntakesWithResponsible(tx, {
+          organizationId: ctx.organizationId,
+          processId: before.id,
+          change: { ...decision, userId: decision.userId },
+          actorName: ctx.name,
+          skipIntakeId: opts.handledIntakeId ?? null,
+        })
+      : [];
+  const firmNote =
+    patch.lawFirmId === null
+      ? " Escritório externo do responsável anterior desvinculado do processo."
+      : patch.lawFirmId
+        ? " Escritório externo vinculado ao processo."
+        : "";
   await recordAudit(
     ctx,
     {
       action: "legal_process.assign",
       entityType: "legal_process",
       entityId: before.id,
-      summary: `Responsável do processo ${before.number} definido: ${decision.userName ?? "—"} (${ASSIGNMENT_METHOD_LABELS[decision.method]}).`,
+      summary: `Responsável do processo ${before.number} definido: ${decision.userName ?? "Não informado"} (${ASSIGNMENT_METHOD_LABELS[decision.method]}).${firmNote}`,
       changes,
-      metadata: { method: decision.method, ruleId: decision.ruleId, reason: decision.reason },
+      metadata: {
+        method: decision.method,
+        ruleId: decision.ruleId,
+        reason: decision.reason,
+        ...(syncedIntakeIds.length > 0 ? { intakeIds: syncedIntakeIds } : {}),
+      },
     },
     tx,
   );
@@ -514,6 +597,7 @@ async function applyToProcess(
     { organizationId: ctx.organizationId, entityId: before.id, reason: "Responsável do processo alterado" },
     tx,
   );
+  return { responsibleChanged, syncedIntakeIds };
 }
 
 // ---------------------------------------------------------------------------
@@ -528,31 +612,57 @@ export async function decideAssignment(ctx: AuthContext, processId: string): Pro
   return (await decideInternal(ctx, process, { db: getDb(), lock: false })).decision;
 }
 
+export type AssignOptions = {
+  /** Replace an existing responsible (redistribution: requires `distribution:manage`). */
+  force?: boolean;
+  /**
+   * When the responsible changes, send the simulated "Novo processo atribuído"
+   * e-mail (only if `settings.email.notifyOnAssignment` is on). The
+   * distribution screen passes it; the bulk distribution after an import does not.
+   */
+  notify?: boolean;
+  /** Intake whose own flow records this assignment (intake module only). */
+  handledIntakeId?: string | null;
+};
+
 /**
- * Decides and applies the assignment (responsibleId; lawFirmId/unitId only
- * when empty), audited. Keeps an existing responsible unless `force`.
- * Requires `distribution:manage` or `intake:manage` (system context allowed).
+ * Decides and applies the assignment (see `applyToProcess`), audited. Keeps an
+ * existing responsible unless `force`. Requires `distribution:manage` or
+ * `intake:manage` (system context allowed); `force` requires
+ * `distribution:manage`. The process row is locked first, so a concurrent call
+ * waits and then keeps the responsible the first one applied.
  */
 export async function assignResponsible(
   ctx: AuthContext,
   processId: string,
-  opts: { force?: boolean } = {},
+  opts: AssignOptions = {},
 ): Promise<AssignmentDecision> {
   assertCanAssign(ctx);
-  return getDb().transaction(async (tx) => {
-    const before = await loadProcess(ctx, processId, tx);
-    if (before.responsibleId && !opts.force) return keptDecision(ctx, before, tx);
+  if (opts.force && !can(ctx, "distribution:manage")) throw new ForbiddenError(REDISTRIBUTION_FORBIDDEN);
+  const outcome = await getDb().transaction(async (tx) => {
+    const before = await loadProcess(ctx, processId, tx, { lock: true });
+    if (before.responsibleId && !opts.force) return { decision: await keptDecision(ctx, before, tx), changed: false };
     const { decision, roundRobinRuleId } = await decideInternal(ctx, before, { db: tx, lock: true });
-    if (!decision.userId) return decision;
+    if (!decision.userId) return { decision, changed: false };
     if (roundRobinRuleId) {
       await tx
         .update(distributionRules)
         .set({ rrCursor: sql`${distributionRules.rrCursor} + 1` })
         .where(and(eq(distributionRules.id, roundRobinRuleId), eq(distributionRules.organizationId, ctx.organizationId)));
     }
-    await applyToProcess(ctx, tx, before, decision);
-    return decision;
+    const applied = await applyToProcess(ctx, tx, before, decision, { handledIntakeId: opts.handledIntakeId });
+    return { decision, changed: applied.responsibleChanged };
   });
+  if (opts.notify && outcome.changed && outcome.decision.userId) {
+    await sendAssignmentEmail({
+      organizationId: ctx.organizationId,
+      processId,
+      toUserId: outcome.decision.userId,
+      reason: outcome.decision.reason,
+      actorUserId: ctx.userId,
+    });
+  }
+  return outcome.decision;
 }
 
 // ---------------------------------------------------------------------------
@@ -560,13 +670,17 @@ export async function assignResponsible(
 // ---------------------------------------------------------------------------
 
 /**
- * Manual assignment used by the intake page (caller: `intake:manage` or
- * `distribution:manage`). The reason is mandatory and goes to the audit trail.
+ * Manual assignment (intake page and distribution screen). The reason is
+ * mandatory and goes to the audit trail. `intake:manage` only allows the FIRST
+ * assignment of a process to an internal lawyer/manager; replacing an existing
+ * responsible or choosing an external counsel (which links their law firm)
+ * requires `distribution:manage`.
  */
 export async function applyManualAssignment(
   ctx: AuthContext,
   processId: string,
   input: ManualAssignmentInput,
+  opts: Pick<AssignOptions, "notify" | "handledIntakeId"> = {},
 ): Promise<AssignmentDecision> {
   assertCanAssign(ctx);
   const v = parse(manualAssignmentSchema, input);
@@ -574,11 +688,14 @@ export async function applyManualAssignment(
   if (!canReceive(person)) {
     throw fieldError("userId", "Selecione um advogado, gestor jurídico ou escritório externo ativo da organização.");
   }
-  return getDb().transaction(async (tx) => {
-    const before = await loadProcess(ctx, processId, tx);
+  const redistributes = can(ctx, "distribution:manage");
+  if (person.role === "external_counsel" && !redistributes) throw new ForbiddenError(EXTERNAL_COUNSEL_FORBIDDEN);
+  const outcome = await getDb().transaction(async (tx) => {
+    const before = await loadProcess(ctx, processId, tx, { lock: true });
     if (before.responsibleId === person.id) {
       throw new ConflictError(`${person.name} já é o responsável por este processo.`);
     }
+    if (before.responsibleId && !redistributes) throw new ForbiddenError(REDISTRIBUTION_FORBIDDEN);
     const decision: AssignmentDecision = {
       userId: person.id,
       userName: person.name,
@@ -589,19 +706,33 @@ export async function applyManualAssignment(
       unitId: null,
       reason: `Atribuição manual por ${ctx.name}. Motivo: ${v.reason}`,
     };
-    await applyToProcess(ctx, tx, before, decision);
-    return decision;
+    const applied = await applyToProcess(ctx, tx, before, decision, { handledIntakeId: opts.handledIntakeId });
+    return { decision, changed: applied.responsibleChanged };
   });
+  if (opts.notify && outcome.changed) {
+    await sendAssignmentEmail({
+      organizationId: ctx.organizationId,
+      processId,
+      toUserId: person.id,
+      reason: outcome.decision.reason,
+      actorUserId: ctx.userId,
+    });
+  }
+  return outcome.decision;
 }
 
-/** Manual redistribution from the distribution screen (`distribution:manage`). */
+/**
+ * Manual redistribution from the distribution screen (`distribution:manage`).
+ * Open intakes of the process follow the new responsible; the simulated
+ * "Novo processo atribuído" e-mail goes out when enabled in the settings.
+ */
 export async function reassignResponsible(
   ctx: AuthContext,
   processId: string,
   input: ManualAssignmentInput,
 ): Promise<AssignmentDecision> {
   assertCan(ctx, "distribution:manage");
-  return applyManualAssignment(ctx, processId, input);
+  return applyManualAssignment(ctx, processId, input, { notify: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -1109,60 +1240,121 @@ function sortRows(rows: WorkloadRow[]): WorkloadRow[] {
  * Active portfolio (status active/suspended) visible to ctx, grouped by
  * responsible and by external law firm. Money follows RN-02/RN-03 (claim and
  * liquidated are never added; unknown values are counted, not zeroed) and the
- * exposure comes from `@/domain/contingency` over the process mirrors.
+ * exposure comes from `@/domain/contingency` over the process mirrors, with
+ * the effective risk of each record (`recordRiskBp`: the bp mirror, else the
+ * organization percentage of its loss probability).
+ *
+ * The pending counters are aggregated once per process in SQL (grouped
+ * subqueries, LEFT JOINed). Rows are still grouped by responsible / law firm
+ * in memory because exposure and provision are per-process domain rules
+ * (RN-04) that must not be re-implemented in SQL.
  */
 export async function getWorkload(ctx: AuthContext): Promise<Workload> {
   assertCan(ctx, "distribution:manage");
   const db = getDb();
+  const orgId = ctx.organizationId;
   const p = legalProcesses;
   const g = processGuarantees;
   const d = deadlines;
   const v = processValuations;
   const b = caseBriefs;
   const i = caseIntakes;
-  // Drizzle renders select-field columns unqualified in single-table queries;
-  // the correlated subqueries need the outer reference spelled out.
-  const outerId = sql.raw(`"legal_processes"."id"`);
 
-  const rows = await db
-    .select({
-      id: p.id,
-      responsibleId: p.responsibleId,
-      lawFirmId: p.lawFirmId,
-      claimCents: p.claimAmountCents,
-      liquidatedCents: p.liquidatedAmountCents,
-      riskBp: p.riskPercentageBp,
-      needsVerification: p.needsVerification,
-      guaranteesCents: sql<number>`coalesce((select sum(${g.amountCents}) from ${g} where ${g.processId} = ${outerId} and ${g.status} = 'linked' and ${g.deletedAt} is null), 0)`.mapWith(
-        Number,
+  const guaranteeAgg = db
+    .select({ processId: g.processId, total: sql<number>`sum(${g.amountCents})`.as("guarantees_total") })
+    .from(g)
+    .where(and(eq(g.organizationId, orgId), eq(g.status, "linked"), isNull(g.deletedAt)))
+    .groupBy(g.processId)
+    .as("workload_guarantees");
+  // Only deadlines that count as real (manual or validated) — never AI suggestions pending validation.
+  const deadlineAgg = db
+    .select({ processId: d.processId, n: sql<number>`count(*)`.as("open_deadlines") })
+    .from(d)
+    .where(
+      and(
+        eq(d.organizationId, orgId),
+        eq(d.status, "open"),
+        inArray(d.validationStatus, ["not_required", "validated"]),
+        isNull(d.deletedAt),
       ),
-      openDeadlines: sql<number>`(select count(*) from ${d} where ${d.processId} = ${outerId} and ${d.status} = 'open' and ${d.validationStatus} in ('not_required', 'validated') and ${d.deletedAt} is null)`.mapWith(
-        Number,
+    )
+    .groupBy(d.processId)
+    .as("workload_deadlines");
+  const valuationAgg = db
+    .select({ processId: v.processId, n: sql<number>`count(*)`.as("pending_valuations") })
+    .from(v)
+    .where(and(eq(v.organizationId, orgId), eq(v.status, "proposed")))
+    .groupBy(v.processId)
+    .as("workload_valuations");
+  // Same rule as the review queue: a version superseded by a newer generated one (with
+  // content) of the same process is no longer reviewed, so it is not pending work.
+  const newerBrief = alias(caseBriefs, "workload_newer_brief");
+  const briefAgg = db
+    .select({ processId: b.processId, n: sql<number>`count(*)`.as("briefs_awaiting") })
+    .from(b)
+    .where(
+      and(
+        eq(b.organizationId, orgId),
+        inArray(b.status, ["ready_for_review", "in_review"]),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(newerBrief)
+            .where(
+              and(
+                eq(newerBrief.organizationId, b.organizationId),
+                eq(newerBrief.processId, b.processId),
+                gt(newerBrief.version, b.version),
+                isNotNull(newerBrief.content),
+              ),
+            ),
+        ),
       ),
-      pendingValuations: sql<number>`(select count(*) from ${v} where ${v.processId} = ${outerId} and ${v.status} = 'proposed')`.mapWith(
-        Number,
-      ),
-      briefsAwaitingReview: sql<number>`(select count(*) from ${b} where ${b.processId} = ${outerId} and ${b.status} in ('ready_for_review', 'in_review'))`.mapWith(
-        Number,
-      ),
-    })
-    .from(p)
-    .where(and(processWhere(ctx), inArray(p.status, [...ACTIVE_STATUSES])));
-
-  // Open intakes per visible process.
-  const intakeRows = await db
-    .select({ processId: i.processId, n: sql<number>`count(*)::int` })
+    )
+    .groupBy(b.processId)
+    .as("workload_briefs");
+  // Open intakes (same rule as computeLoads); the process join below applies the row visibility.
+  const intakeAgg = db
+    .select({ processId: i.processId, n: sql<number>`count(*)`.as("open_intakes") })
     .from(i)
     .leftJoin(b, eq(b.id, i.briefId))
     .where(
       and(
-        intakeWhere(ctx),
+        eq(i.organizationId, orgId),
         notInArray(i.status, [...CLOSED_INTAKE_STATUSES]),
         or(isNull(b.status), notInArray(b.status, ["approved", "rejected"])),
       ),
     )
-    .groupBy(i.processId);
-  const intakesByProcess = new Map(intakeRows.map((r) => [r.processId, r.n]));
+    .groupBy(i.processId)
+    .as("workload_intakes");
+
+  const [rows, org] = await Promise.all([
+    db
+      .select({
+        id: p.id,
+        responsibleId: p.responsibleId,
+        lawFirmId: p.lawFirmId,
+        claimCents: p.claimAmountCents,
+        liquidatedCents: p.liquidatedAmountCents,
+        riskBp: p.riskPercentageBp,
+        lossProbability: p.lossProbability,
+        needsVerification: p.needsVerification,
+        guaranteesCents: sql<number>`coalesce(${guaranteeAgg.total}, 0)`.mapWith(Number),
+        openDeadlines: sql<number>`coalesce(${deadlineAgg.n}, 0)`.mapWith(Number),
+        pendingValuations: sql<number>`coalesce(${valuationAgg.n}, 0)`.mapWith(Number),
+        briefsAwaitingReview: sql<number>`coalesce(${briefAgg.n}, 0)`.mapWith(Number),
+        openIntakes: sql<number>`coalesce(${intakeAgg.n}, 0)`.mapWith(Number),
+      })
+      .from(p)
+      .leftJoin(guaranteeAgg, eq(guaranteeAgg.processId, p.id))
+      .leftJoin(deadlineAgg, eq(deadlineAgg.processId, p.id))
+      .leftJoin(valuationAgg, eq(valuationAgg.processId, p.id))
+      .leftJoin(briefAgg, eq(briefAgg.processId, p.id))
+      .leftJoin(intakeAgg, eq(intakeAgg.processId, p.id))
+      .where(and(processWhere(ctx), inArray(p.status, [...ACTIVE_STATUSES]))),
+    loadOrganization(orgId),
+  ]);
+  const riskParams = org.settings.contingency.riskPercentages;
 
   const responsibleIds = rows.map((r) => r.responsibleId).filter((x): x is string => Boolean(x));
   const [assignable, others, names] = await Promise.all([
@@ -1213,13 +1405,13 @@ export async function getWorkload(ctx: AuthContext): Promise<Workload> {
       liquidatedCents: r.liquidatedCents,
       linkedGuaranteesCents: r.guaranteesCents,
       claimCents: r.claimCents,
-      riskPercentageBp: r.riskBp,
+      riskPercentageBp: recordRiskBp({ riskPercentageBp: r.riskBp, lossProbability: r.lossProbability }, riskParams),
     });
     row.pending.openDeadlines += r.openDeadlines;
     row.pending.briefsAwaitingReview += r.briefsAwaitingReview;
     row.pending.needsVerification += r.needsVerification ? 1 : 0;
     row.pending.valuationsPendingReview += r.pendingValuations;
-    row.pending.openIntakes += intakesByProcess.get(r.id) ?? 0;
+    row.pending.openIntakes += r.openIntakes;
   };
 
   for (const r of rows) {

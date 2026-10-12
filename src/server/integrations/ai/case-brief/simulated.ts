@@ -306,7 +306,8 @@ function findClaims(doc: Doc, section: Section): ClaimHit[] {
     const blank = raw.search(/\n\s*\n/);
     if (blank >= 0) raw = raw.slice(0, blank);
     raw = raw.replace(/\s+/g, " ").trim();
-    const amount = /\s*[—–-]\s*R\$\s*([\d.]+,\d{2})\s*[.;]?\s*$/.exec(raw);
+    // "a) <pedido>: R$ 1.000,00" (demo pack) or "<pedido> - R$ ..." / with a dash (other documents).
+    const amount = /\s*[:—–-]\s*R\$\s*([\d.]+,\d{2})\s*[.;]?\s*$/.exec(raw);
     const cents = amount ? parseMoney(amount[1]) : null;
     const description = (amount ? raw.slice(0, amount.index) : raw).replace(/[;.]\s*$/, "").trim();
     return { doc, letter: item.letter, description, cents, offset: item.start, raw };
@@ -458,7 +459,7 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
     field(
       "phase",
       "Fase",
-      `${PROCESS_PHASE_LABELS[record.phase]}${record.phaseDetail ? ` — ${record.phaseDetail}` : ""}`,
+      `${PROCESS_PHASE_LABELS[record.phase]}${record.phaseDetail ? ` (${record.phaseDetail})` : ""}`,
       "record",
       reg,
     ),
@@ -751,7 +752,7 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
   for (const d of docs) {
     const first = d.lines[0];
     evidence.push({
-      description: `${d.src.title} — ${DOCUMENT_CATEGORY_LABELS[d.src.category]}${d.src.pageCount ? `, ${plural(d.src.pageCount, "página", "páginas")}` : ""}`,
+      description: `${d.src.title} (${DOCUMENT_CATEGORY_LABELS[d.src.category]}${d.src.pageCount ? `, ${plural(d.src.pageCount, "página", "páginas")}` : ""})`,
       holder: holderOf(d.kind),
       provenance: "extracted",
       citations: first ? [cite(d, first.start, first.text)] : [{ ref: d.src.ref, page: 1, excerpt: clip(d.src.title) }],
@@ -806,7 +807,7 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
     for (const t of CLAIM_TYPES) {
       if (claimTypes.has(t.type) && checklist[t.type]) {
         defendantArguments.push(
-          item(checklist[t.type]!, "illustrative", claimCitationFor(t.type), "Checklist ilustrativo da simulação — não é argumento apresentado nos autos."),
+          item(checklist[t.type]!, "illustrative", claimCitationFor(t.type), "Checklist ilustrativo da simulação. Não é argumento apresentado nos autos."),
         );
       }
     }
@@ -816,9 +817,11 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
   const titles = docs.map((d) => ({ title: fold(d.src.title), category: d.src.category, kind: d.kind }));
   const has = (pred: (t: (typeof titles)[number]) => boolean) => titles.some(pred);
   const missingDocuments: BriefTextItem[] = [];
+  const missingNames: string[] = [];
   const requireDoc = (name: string, present: boolean, reason: string, citations: BriefCitation[] = []) => {
     if (!present) {
-      missingDocuments.push(item(`${name} — não localizado entre os documentos do processo.`, "missing", citations, reason));
+      missingNames.push(name);
+      missingDocuments.push(item(`${name}: não localizado entre os documentos do processo.`, "missing", citations, reason));
     }
   };
   if (claimTypes.has("overtime") || claimTypes.has("break")) {
@@ -870,7 +873,7 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
     const days = daysBetween(today, h.iso);
     const kind = h.label ?? "Audiência";
     possibleDeadlines.push({
-      description: `${kind} — data escrita no documento`,
+      description: `${kind}: data escrita no documento`,
       date: h.iso,
       basis: `Data copiada literalmente de “${h.doc.src.title}” (p. ${c.page}): “${clip(h.line, 160)}”. Conferir nos autos antes de registrar.`,
       provenance: "extracted",
@@ -973,8 +976,16 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
     }
   } else if (record.phase === "liquidation") {
     risks.push({ description: "Processo em liquidação: valores em apuração.", level: "medium", provenance: "record", citations: reg, note: "Calculado a partir do cadastro (fase)." });
-  } else if (record.phase === "appeal") {
-    risks.push({ description: "Recurso em andamento: o resultado pode alterar os valores envolvidos.", level: "medium", provenance: "record", citations: reg, note: "Calculado a partir do cadastro (fase)." });
+  }
+  // Phase and instance are distinct axes (P0.5): "em recurso" comes from the INSTANCE (2º/3º grau), never from the phase.
+  if (record.instance === "second" || record.instance === "superior") {
+    risks.push({
+      description: `Processo em grau de recurso (${PROCESS_INSTANCE_LABELS[record.instance]}): o resultado pode alterar os valores envolvidos.`,
+      level: "medium",
+      provenance: "record",
+      citations: reg,
+      note: "Calculado a partir do cadastro (instância).",
+    });
   }
   if (record.claimAmountCents !== null && record.claimAmountCents >= 10_000_000) {
     risks.push({
@@ -1047,10 +1058,7 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
   }
   if (missingDocuments.length) {
     nextSteps.push({
-      description: `Solicitar à área responsável os documentos faltantes: ${missingDocuments
-        .map((m) => m.text.split(" — ")[0])
-        .slice(0, 6)
-        .join("; ")}.`,
+      description: `Solicitar à área responsável os documentos faltantes: ${missingNames.slice(0, 6).join("; ")}.`,
       priority: "high",
       provenance: "illustrative",
       citations: [],
@@ -1107,7 +1115,7 @@ export function buildSimulatedCaseBrief(req: CaseBriefRequest): CaseBrief {
   const plaintiffLabel = plaintiffs[0] ?? docPlaintiff[0]?.value ?? "Autor não identificado";
   const defendantLabel = defendants[0] ?? docDefendant[0]?.value ?? "réu não identificado";
   const headlineParts = [
-    `${plaintiffLabel} x ${defendantLabel} (${LEGAL_AREA_LABELS[record.area].toLowerCase()}, ${PROCESS_PHASE_LABELS[record.phase].toLowerCase()}).`,
+    `${plaintiffLabel} x ${defendantLabel} (${LEGAL_AREA_LABELS[record.area].toLowerCase()}, ${PROCESS_PHASE_LABELS[record.phase].toLowerCase()}${record.instance ? `, ${PROCESS_INSTANCE_LABELS[record.instance]}` : ""}).`,
     claims.length
       ? `${plural(claims.length, "pedido identificado", "pedidos identificados")} na petição inicial${claimsWithAmount.length ? `, somando ${money(claimsTotal)}` : ""}.`
       : "Pedidos não identificados nos documentos.",

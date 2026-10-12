@@ -48,7 +48,7 @@ const FILTER_KEYS = ["q", "status", "categoria", "risco", "unidade", "responsave
 const ORIGIN_PARAM_VALUE = "inteligencia-preventiva";
 
 function LinkedProcessCell({ linked }: { linked: OccurrenceListItem["linkedProcess"] }) {
-  if (!linked) return <span className="text-muted-foreground">—</span>;
+  if (!linked) return <span className="text-muted-foreground">Sem processo vinculado</span>;
   if (!linked.visible) return <span className="text-muted-foreground">Vinculada (sem acesso ao processo)</span>;
   return (
     <Link
@@ -94,7 +94,7 @@ export default async function PreventivoPage(props: PageProps<"/preventivo">) {
       <PageHeader
         title="Jurídico preventivo"
         description="Ocorrências que ainda não se tornaram processos judiciais. Registre fatos, identifique sinais de risco e acompanhe o plano de ação."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Jurídico preventivo" }]}
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Jurídico preventivo" }]}
         actions={
           canWrite ? (
             <ButtonLink href="/preventivo/nova">
@@ -293,14 +293,18 @@ export default async function PreventivoPage(props: PageProps<"/preventivo">) {
                       {o.areasInvolved.length > 0 ? (
                         truncate(o.areasInvolved.join(", "), 60)
                       ) : (
-                        <span className="text-muted-foreground">—</span>
+                        <span className="text-muted-foreground">Não informadas</span>
                       )}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {o.responsibleName ?? <span className="text-muted-foreground">Sem responsável</span>}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-right tabular-nums">
-                      {formatMoneyCents(o.estimatedExposureCents)}
+                      {o.estimatedExposureCents === null ? (
+                        <span className="text-muted-foreground">Não informada</span>
+                      ) : (
+                        formatMoneyCents(o.estimatedExposureCents)
+                      )}
                     </TableCell>
                     <TableCell className="whitespace-nowrap tabular-nums">{formatDate(o.reportedOn)}</TableCell>
                     <TableCell className="whitespace-nowrap">

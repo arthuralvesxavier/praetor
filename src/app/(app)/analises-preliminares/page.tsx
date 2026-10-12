@@ -40,7 +40,7 @@ export default async function CaseBriefQueuePage(props: PageProps<"/analises-pre
       <PageHeader
         title="Análises preliminares"
         description="Fila de revisão das análises preliminares dos processos recebidos: conferir, editar e aprovar."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Análises preliminares" }]}
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Análises preliminares" }]}
       />
 
       <Callout tone="warning" className="mb-6" title="Simulação nesta versão">
@@ -114,7 +114,7 @@ export default async function CaseBriefQueuePage(props: PageProps<"/analises-pre
                     <div className="flex flex-col gap-1">
                       <Link href={`/analises-preliminares/${b.id}`} className={tableLinkClasses}>
                         {b.processNumber}
-                        <span className="sr-only"> — abrir análise preliminar versão {b.version}</span>
+                        <span className="sr-only">, abrir análise preliminar versão {b.version}</span>
                       </Link>
                       <span className="text-xs text-muted-foreground">{truncate(b.processTitle, 80)}</span>
                       <span className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
@@ -122,6 +122,7 @@ export default async function CaseBriefQueuePage(props: PageProps<"/analises-pre
                         {b.currentRevision > 1 ? ` · revisão ${b.currentRevision}` : ""}
                         <SimulationBadge mode={b.mode} />
                         {b.isStale ? <span className="font-medium text-amber-800">· possivelmente desatualizada</span> : null}
+                        {b.superseded ? <span className="font-medium">· substituída por versão mais recente</span> : null}
                       </span>
                     </div>
                   </TableCell>
@@ -129,9 +130,9 @@ export default async function CaseBriefQueuePage(props: PageProps<"/analises-pre
                     <BriefStatusBadge status={b.status} />
                   </TableCell>
                   <TableCell className="min-w-36">{b.responsibleName ?? <span className="text-muted-foreground">Sem responsável</span>}</TableCell>
-                  <TableCell className="text-right tabular-nums">{b.counts ? b.counts.contradictions : "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums">{b.counts ? b.counts.missingDocuments : "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums">{b.counts ? b.counts.urgencies : "—"}</TableCell>
+                  <TableCell className="text-right tabular-nums">{b.counts ? b.counts.contradictions : <span className="text-muted-foreground">Sem dados</span>}</TableCell>
+                  <TableCell className="text-right tabular-nums">{b.counts ? b.counts.missingDocuments : <span className="text-muted-foreground">Sem dados</span>}</TableCell>
+                  <TableCell className="text-right tabular-nums">{b.counts ? b.counts.urgencies : <span className="text-muted-foreground">Sem dados</span>}</TableCell>
                   <TableCell className="whitespace-nowrap">{b.generatedAt ? formatDateTime(b.generatedAt) : formatDateTime(b.createdAt)}</TableCell>
                 </TableRow>
               ))
@@ -142,7 +143,8 @@ export default async function CaseBriefQueuePage(props: PageProps<"/analises-pre
       <Pagination page={result.page} pageSize={result.pageSize} total={result.total} basePath="/analises-preliminares" searchParams={sp} />
       <p className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
         <FileSearch aria-hidden="true" className="size-4" />
-        Somente análises cujos processo e documentos de origem você pode acessar aparecem nesta lista.
+        Somente análises cujos processo e documentos de origem você pode acessar aparecem nesta lista. Versões substituídas por
+        uma mais recente não entram nas contagens de revisão.
       </p>
     </>
   );

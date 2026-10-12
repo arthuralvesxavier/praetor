@@ -19,6 +19,7 @@ import { FormMessage } from "@/components/ui/form-message";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { SubmitButton } from "@/components/ui/submit-button";
+import { usePreservingSubmit } from "@/components/ui/use-preserving-submit";
 import { LIABILITY_NATURE_LABELS, PARTY_ROLE_LABELS } from "@/domain/enums";
 import { fieldError } from "@/lib/form";
 import { formatDocument } from "@/lib/format";
@@ -83,13 +84,15 @@ function PartyForm<S extends ValuesFormState>({
     if (result.ok) onDone();
     return result;
   }, null);
+  // No automatic reset on error: the chosen polo and responsibility stay selected.
+  const onSubmit = usePreservingSubmit(formAction);
   const sent = state && !state.ok ? state.values : undefined;
   const val = (key: "name" | "role" | "documentNumber" | "counselName" | "liabilityNature", fallback: string) =>
     sent ? (sent[key] ?? "") : fallback;
   const err = (field: string) => fieldError(state, field);
 
   return (
-    <form action={formAction} className="flex flex-col gap-4" noValidate>
+    <form action={formAction} onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
       <DialogHeader>
         <DialogTitle>{mode === "add" ? "Adicionar parte" : "Editar parte"}</DialogTitle>
         <DialogDescription>

@@ -170,7 +170,7 @@ function PreviewDetails({ preview, users }: { preview: AssignmentPreview; users:
             {evaluations.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={4} className="text-sm text-muted-foreground">
-                  Nenhuma regra cadastrada — vale a distribuição padrão por menor carga.
+                  Nenhuma regra cadastrada: vale a distribuição padrão por menor carga.
                 </TableCell>
               </TableRow>
             ) : (

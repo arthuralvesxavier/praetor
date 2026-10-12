@@ -39,6 +39,8 @@ export const PERMISSIONS = [
   "contingency:approve",
   "snapshot:close",
   "report:read",
+  // Gerar e gerar nova versão de relatórios jurídicos (PDF); o tipo ainda limita os papéis (legal-reports/approvers.ts).
+  "report:generate",
   "import:run",
   "intake:manage",
   "distribution:manage",
@@ -47,6 +49,7 @@ export const PERMISSIONS = [
   "email:read",
   "email:send",
   "preventive_intel:read",
+  "court_sync:run",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -84,12 +87,14 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "contingency:read",
     "contingency:write",
     "report:read",
+    "report:generate",
     "intake:manage",
     "brief:read",
     "brief:review",
     "email:read",
     "email:send",
     "preventive_intel:read",
+    "court_sync:run",
   ],
   analyst: [
     ...READ_ONLY,
@@ -106,6 +111,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "brief:read",
     "email:read",
     "preventive_intel:read",
+    "court_sync:run",
   ],
   // Diretoria: consulta painéis, relatórios e inteligência preventiva.
   executive: [...READ_ONLY, "contingency:read", "report:read", "preventive_intel:read"],
@@ -119,6 +125,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "contingency:approve",
     "snapshot:close",
     "report:read",
+    "report:generate",
     "comment:write",
   ],
   // Auditoria e compliance: leitura, relatórios e trilha de auditoria (TE-10).
@@ -175,6 +182,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "contingency:approve": "Conferir e oficializar valores propostos",
   "snapshot:close": "Fechar competência mensal (provisão)",
   "report:read": "Consultar e exportar relatórios",
+  "report:generate": "Gerar relatórios jurídicos (PDF) para revisão",
   "import:run": "Importar planilhas da carteira",
   "intake:manage": "Registrar entrada de processos",
   "distribution:manage": "Configurar distribuição e redistribuir demandas",
@@ -183,6 +191,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "email:read": "Consultar a central de e-mails (simulados)",
   "email:send": "Gerar envios de e-mail (simulados)",
   "preventive_intel:read": "Consultar a inteligência preventiva",
+  "court_sync:run": "Consultar o DataJud (CNJ) e sincronizar processos",
 };
 
 export function can(ctx: Pick<AuthContext, "role" | "kind">, permission: Permission): boolean {

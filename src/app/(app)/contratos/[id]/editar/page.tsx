@@ -50,7 +50,7 @@ export default async function EditContractPage(props: PageProps<"/contratos/[id]
         title="Editar contrato"
         description={contract.title}
         breadcrumbs={[
-          { label: "Dashboard", href: "/dashboard" },
+          { label: "Painel executivo", href: "/dashboard" },
           { label: "Contratos", href: "/contratos" },
           { label: contract.title, href: `/contratos/${contract.id}` },
           { label: "Editar" },

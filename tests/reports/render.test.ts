@@ -177,11 +177,11 @@ describe("/relatorios", () => {
     expect(carteira).toContain("Valor da causa");
     expect(carteira).toContain("Valor liquidado");
     expect(carteira).toContain("Não apurado");
-    expect(carteira).toContain("Há valores estimados (RN-07)");
+    expect(carteira).toContain("Há valores estimados");
     expect(carteira).toContain("Carteira completa da organização, incluindo processos sigilosos.");
 
     const audit = await page(RelatoriosPage, { tipo: "auditoria", competencia: prev });
-    expect(audit).toContain("Carta de auditoria — relação de processos judiciais");
+    expect(audit).toContain("Carta de auditoria: relação de processos judiciais");
     expect(audit).toContain("Advogado(a) responsável");
     expect(audit).toContain("OAB nº");
     expect(audit).toContain("(fechada)");
@@ -235,9 +235,9 @@ describe("/inteligencia-preventiva and /preventivo", () => {
     session.current = f.ctx.admin;
     const out = await page(InteligenciaPreventivaPage);
     expect(out).toContain("Calculado a partir da carteira");
-    expect(out).toContain("Pedidos recorrentes (a partir das análises preliminares — documentos de demonstração)");
+    expect(out).toContain("Pedidos recorrentes (a partir das análises preliminares, com documentos de demonstração)");
     expect(out).toContain("Documentos fictícios de demonstração");
-    expect(out).toContain("Sugestão ilustrativa — avaliar com a área responsável");
+    expect(out).toContain("Sugestão ilustrativa, a avaliar com a área responsável");
     expect(out).toContain("Criar ocorrência preventiva");
     expect(out).toContain("Criar plano de ação");
     expect(out).toContain("Horas extras / sobrejornada");

@@ -6,7 +6,7 @@
  * plain text and table-based HTML with inline styles — so both versions always
  * carry the same information. Rules:
  *   - the subject always starts with "[Simulação]";
- *   - both bodies start with the banner "SIMULAÇÃO — este e-mail não foi enviado";
+ *   - both bodies start with the banner "SIMULAÇÃO: este e-mail não foi enviado";
  *   - every interpolated value is HTML-escaped; links are absolute http(s) URLs;
  *   - demo-mode content says it is demonstrative (CASE_BRIEF_DEMO_NOTICE).
  */
@@ -17,7 +17,7 @@ import { formatDate, formatDateTime, formatNumber, todayISO } from "@/lib/format
 import type { EmailTemplateDataMap } from "./templates";
 
 export const SUBJECT_PREFIX = "[Simulação]";
-export const SIMULATION_BANNER = "SIMULAÇÃO — este e-mail não foi enviado";
+export const SIMULATION_BANNER = "SIMULAÇÃO: este e-mail não foi enviado";
 export const SIMULATION_FOOTER =
   "Mensagem gerada automaticamente pelo Praetor em modo de simulação: nada foi entregue a servidor de e-mail algum. " +
   "O conteúdo fica disponível apenas na Central de e-mails do sistema.";
@@ -135,6 +135,42 @@ const BUILDERS: { [K in EmailTemplate]: Builder<K> } = {
     if (d.isDemo) {
       blocks.push({ kind: "notice", tone: "demo", title: "Atenção", text: CASE_BRIEF_DEMO_NOTICE });
     }
+    const facts: Block = {
+      kind: "facts",
+      rows: [
+        { label: "Processo", value: normalizeCnj(d.processNumber) ?? d.processNumber },
+        { label: "Título", value: d.processTitle },
+        { label: "Partes", value: d.parties },
+        { label: "Órgão julgador", value: d.court ?? "Não informado" },
+      ],
+    };
+    if (d.digestOmitted) {
+      return {
+        subject: buildSubject(`Análise preliminar disponível: ${ref}`),
+        preheader: `${d.isDemo ? "Análise demonstrativa · " : ""}Análise preliminar v${d.briefVersion} gerada (resumo não incluído).`,
+        heading: "Análise preliminar disponível",
+        blocks: [
+          ...blocks,
+          {
+            kind: "paragraph",
+            text:
+              `Olá, ${ctx.recipientName}. A análise preliminar (versão ${d.briefVersion}) do processo abaixo foi gerada. ` +
+              "Nada foi alterado no cadastro do processo.",
+          },
+          facts,
+          {
+            kind: "notice",
+            tone: "warning",
+            title: "Resumo não incluído",
+            text:
+              "O resumo da análise não foi incluído neste e-mail porque ela usa documentos aos quais o seu perfil não tem acesso. " +
+              "Peça à gestão jurídica para revisar o acesso aos documentos do processo antes da revisão.",
+          },
+          { kind: "notice", tone: "info", title: "Importante", text: CASE_BRIEF_DISCLAIMER },
+        ],
+        cta: { label: "Abrir o processo", url: ctx.linkUrl },
+      };
+    }
     blocks.push(
       {
         kind: "paragraph",
@@ -142,22 +178,14 @@ const BUILDERS: { [K in EmailTemplate]: Builder<K> } = {
           `Olá, ${ctx.recipientName}. A análise preliminar (versão ${d.briefVersion}) do processo abaixo foi gerada ` +
           "e aguarda a sua revisão. Nada foi alterado no cadastro do processo.",
       },
-      {
-        kind: "facts",
-        rows: [
-          { label: "Processo", value: normalizeCnj(d.processNumber) ?? d.processNumber },
-          { label: "Título", value: d.processTitle },
-          { label: "Partes", value: d.parties },
-          { label: "Órgão julgador", value: d.court ?? "Não informado" },
-        ],
-      },
+      facts,
       { kind: "paragraph", text: `Síntese: ${d.headline}` },
       { kind: "list", title: "Pontos de atenção", items: d.urgencies, empty: "Nenhum ponto de atenção indicado." },
       {
         kind: "list",
         title: "Possíveis prazos a conferir",
         items: d.possibleDeadlines.map(
-          (p) => `${p.description} — ${p.date ? formatDate(p.date) : "data não identificada"}`,
+          (p) => `${p.description}: ${p.date ? formatDate(p.date) : "data não identificada"}`,
         ),
         empty: "Nenhum possível prazo indicado.",
       },
@@ -174,7 +202,7 @@ const BUILDERS: { [K in EmailTemplate]: Builder<K> } = {
       { kind: "notice", tone: "info", title: "Importante", text: CASE_BRIEF_DISCLAIMER },
     );
     return {
-      subject: buildSubject(`Análise preliminar disponível — ${ref}`),
+      subject: buildSubject(`Análise preliminar disponível: ${ref}`),
       preheader: `${d.isDemo ? "Análise demonstrativa · " : ""}Análise preliminar v${d.briefVersion} aguardando revisão.`,
       heading: "Análise preliminar disponível para revisão",
       blocks,
@@ -183,13 +211,13 @@ const BUILDERS: { [K in EmailTemplate]: Builder<K> } = {
   },
 
   intake_assigned: (d, ctx) => ({
-    subject: buildSubject(`Novo processo atribuído — ${processRef(d.processNumber)}`),
+    subject: buildSubject(`Novo processo atribuído: ${processRef(d.processNumber)}`),
     preheader: "Um novo processo foi atribuído a você.",
     heading: "Novo processo atribuído a você",
     blocks: [
       {
         kind: "paragraph",
-        text: `Olá, ${ctx.recipientName}. Um novo processo foi registrado e você foi indicado como responsável.`,
+        text: `Olá, ${ctx.recipientName}. Você foi indicado como responsável pelo processo abaixo.`,
       },
       {
         kind: "facts",
@@ -235,7 +263,7 @@ const BUILDERS: { [K in EmailTemplate]: Builder<K> } = {
       });
     }
     return {
-      subject: buildSubject(`Lembrete de prazo — ${d.title} (${formatDate(d.dueDate)})`),
+      subject: buildSubject(`Lembrete de prazo: ${d.title} (${formatDate(d.dueDate)})`),
       preheader: `Vencimento em ${formatDate(d.dueDate)}.`,
       heading: d.pendingValidation ? "Lembrete de prazo (aguardando validação)" : "Lembrete de prazo",
       blocks,
@@ -244,7 +272,7 @@ const BUILDERS: { [K in EmailTemplate]: Builder<K> } = {
   },
 
   hearing_reminder: (d, ctx) => ({
-    subject: buildSubject(`Lembrete de audiência — ${processRef(d.processNumber)} em ${formatDateTime(d.scheduledAt)}`),
+    subject: buildSubject(`Lembrete de audiência: ${processRef(d.processNumber)} em ${formatDateTime(d.scheduledAt)}`),
     preheader: `${d.kindLabel} em ${formatDateTime(d.scheduledAt)}.`,
     heading: "Lembrete de audiência",
     blocks: [
@@ -272,7 +300,7 @@ const BUILDERS: { [K in EmailTemplate]: Builder<K> } = {
     const day = formatDate(todayISO(ctx.now ?? new Date()));
     const total = d.items.reduce((sum, i) => sum + i.count, 0);
     return {
-      subject: buildSubject(`Resumo diário de pendências — ${day}`),
+      subject: buildSubject(`Resumo diário de pendências de ${day}`),
       preheader: total > 0 ? `${plural(total, "pendência", "pendências")} no resumo de hoje.` : "Nenhuma pendência hoje.",
       heading: "Resumo diário de pendências",
       blocks: [
@@ -295,7 +323,7 @@ const BUILDERS: { [K in EmailTemplate]: Builder<K> } = {
   },
 
   brief_approved: (d, ctx) => ({
-    subject: buildSubject(`Análise preliminar aprovada — ${processRef(d.processNumber)}`),
+    subject: buildSubject(`Análise preliminar aprovada: ${processRef(d.processNumber)}`),
     preheader: `Versão ${d.briefVersion} aprovada por ${d.approvedByName}.`,
     heading: "Análise preliminar aprovada",
     blocks: [

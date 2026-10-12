@@ -25,15 +25,24 @@
  *      confidential  -> admin, legal manager, lawyers, external counsel (+ uploader)
  *      restricted    -> admin, legal manager, uploader and the responsible
  *                       person of a linked record
+ *    Unlinked documents (no process, occurrence or contract) are visible to
+ *    internal users by confidentiality level only; external counsel sees an
+ *    unlinked document only when they uploaded it (rule 10).
  * 8. AI analyses are visible when their subject is visible AND every document
  *    used as a source is visible. Question/answer analyses are private to the
  *    requester.
- * 9. Alerts and comments follow the entity they reference.
+ * 9. Alerts and comments follow the entity they reference. Alerts are further
+ *    limited by the read permission of the referenced module (the alerts
+ *    service passes the permitted entity types to `entityReferenceWhere`).
  * 10. External counsel (escritório externo) has NO unit scope: they see only
  *     processes assigned to their law firm (`legal_processes.law_firm_id =
  *     users.law_firm_id`, confidential included — the firm is the patron of
  *     the case) and records where they are responsible/creator. Occurrences
- *     and contracts only when they are responsible/creator (RF-21).
+ *     and contracts only when they are responsible/creator (RF-21). Documents
+ *     only through a visible linked record or their own uploads (never the
+ *     organization's unlinked documents). The user directory they receive in
+ *     selects and filters is limited to their firm's users and the
+ *     responsible people of the processes they see (`userDirectoryWhere`).
  * 11. Process-owned records (instances, valuations, guarantees, risk
  *     assessments, settlements, hearings, intakes) inherit the visibility of
  *     the process. Case briefs additionally require every source document to
@@ -58,7 +67,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
-import type { Role } from "@/domain/enums";
+import type { EntityType, Role } from "@/domain/enums";
 import { getDb } from "@/server/db/client";
 import {
   aiAnalyses,
@@ -78,6 +87,7 @@ import {
   processValuations,
   settlements,
   tasks,
+  users,
 } from "@/server/db/schema";
 import type { AuthContext } from "./context";
 
@@ -270,8 +280,10 @@ export function documentWhere(ctx: AuthContext): SQL {
   // Rule 12 (PD-04): health documents only for the responsible person of a linked record.
   const categoryOk = any(sql`${d.category} <> 'sensitive_health'`, responsibleOfParent);
 
-  const linksOk = parentsVisible(ctx, d);
-  // Unlinked documents: visible org-wide (subject to confidentiality level).
+  // Unlinked documents: visible org-wide to internal users (subject to the
+  // confidentiality level). External counsel has no organization scope
+  // (rule 10): only documents linked to records they see, or their own uploads.
+  const linksOk = isExternalCounsel(ctx) ? all(hasParent(d), parentsVisible(ctx, d)) : parentsVisible(ctx, d);
   return all(base, any(eq(d.uploadedById, me), all(linksOk, levelOk, categoryOk)));
 }
 
@@ -403,21 +415,72 @@ export function emailWhere(ctx: AuthContext): SQL {
 // Polymorphic references (alerts, comments)
 // ---------------------------------------------------------------------------
 
-/** Visibility for rows that reference an entity through (entity_type, entity_id) columns. */
-export function entityReferenceWhere(ctx: AuthContext, typeCol: AnyPgColumn, idCol: AnyPgColumn): SQL {
+/** Builders of the visible ids of every entity type a polymorphic reference can point to. */
+const REFERENCE_VISIBLE_IDS = {
+  legal_process: visibleProcessIds,
+  occurrence: visibleOccurrenceIds,
+  contract: visibleContractIds,
+  document: visibleDocumentIds,
+  task: visibleTaskIds,
+  deadline: visibleDeadlineIds,
+  analysis: visibleAnalysisIds,
+  hearing: visibleHearingIds,
+  settlement: visibleSettlementIds,
+  valuation: visibleValuationIds,
+  guarantee: visibleGuaranteeIds,
+  case_brief: visibleCaseBriefIds,
+  intake: visibleIntakeIds,
+} as const satisfies Partial<Record<EntityType, (ctx: AuthContext) => unknown>>;
+
+/** Entity types `entityReferenceWhere` resolves (any other type is never visible). */
+export type ReferenceEntityType = keyof typeof REFERENCE_VISIBLE_IDS;
+export const REFERENCE_ENTITY_TYPES = Object.keys(REFERENCE_VISIBLE_IDS) as ReferenceEntityType[];
+
+/**
+ * Visibility for rows that reference an entity through (entity_type, entity_id) columns.
+ *
+ * `opts.types` (optional) restricts the result to those entity types: only
+ * their branches are built, so callers can drop the types the user has no
+ * read permission for (alerts, rule 9) or that are not present in the rows
+ * being counted. Without it every resolvable type is considered (default for
+ * comments, activity feeds, etc.). An empty list matches nothing.
+ */
+export function entityReferenceWhere(
+  ctx: AuthContext,
+  typeCol: AnyPgColumn,
+  idCol: AnyPgColumn,
+  opts: { types?: readonly EntityType[] } = {},
+): SQL {
+  const allowed = opts.types ? new Set<EntityType>(opts.types) : null;
   return any(
-    all(eq(typeCol, "legal_process"), inArray(idCol, visibleProcessIds(ctx))),
-    all(eq(typeCol, "occurrence"), inArray(idCol, visibleOccurrenceIds(ctx))),
-    all(eq(typeCol, "contract"), inArray(idCol, visibleContractIds(ctx))),
-    all(eq(typeCol, "document"), inArray(idCol, visibleDocumentIds(ctx))),
-    all(eq(typeCol, "task"), inArray(idCol, visibleTaskIds(ctx))),
-    all(eq(typeCol, "deadline"), inArray(idCol, visibleDeadlineIds(ctx))),
-    all(eq(typeCol, "analysis"), inArray(idCol, visibleAnalysisIds(ctx))),
-    all(eq(typeCol, "hearing"), inArray(idCol, visibleHearingIds(ctx))),
-    all(eq(typeCol, "settlement"), inArray(idCol, visibleSettlementIds(ctx))),
-    all(eq(typeCol, "valuation"), inArray(idCol, visibleValuationIds(ctx))),
-    all(eq(typeCol, "guarantee"), inArray(idCol, visibleGuaranteeIds(ctx))),
-    all(eq(typeCol, "case_brief"), inArray(idCol, visibleCaseBriefIds(ctx))),
-    all(eq(typeCol, "intake"), inArray(idCol, visibleIntakeIds(ctx))),
+    ...REFERENCE_ENTITY_TYPES.filter((type) => !allowed || allowed.has(type)).map((type) =>
+      all(eq(typeCol, type), inArray(idCol, REFERENCE_VISIBLE_IDS[type](ctx))),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// User directory (selects and filters)
+// ---------------------------------------------------------------------------
+
+/**
+ * Users that may appear in the "responsável" selects and filters of `ctx`
+ * (rule 10). Internal roles: every user of the organization (undefined = no
+ * extra condition). External counsel: users of their own law firm, themselves
+ * and the responsible people of the processes they can see — never the whole
+ * internal staff. The caller still adds the organization/active filters.
+ */
+export function userDirectoryWhere(ctx: AuthContext): SQL | undefined {
+  if (!isExternalCounsel(ctx)) return undefined;
+  return any(
+    ctx.lawFirmId ? eq(users.lawFirmId, ctx.lawFirmId) : undefined,
+    ctx.userId ? eq(users.id, ctx.userId) : undefined,
+    inArray(
+      users.id,
+      getDb()
+        .select({ id: legalProcesses.responsibleId })
+        .from(legalProcesses)
+        .where(all(processWhere(ctx), isNotNull(legalProcesses.responsibleId))),
+    ),
   );
 }

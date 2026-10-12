@@ -22,6 +22,30 @@ const envSchema = z.object({
   /** Hard cap of output tokens per analysis request. */
   AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(16000),
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(3000),
+  /**
+   * DataJud (CNJ) public API key. It is a PUBLIC key published by the CNJ at
+   * https://datajud-wiki.cnj.jus.br/api-publica/acesso and may be rotated by
+   * the CNJ at any time. Without it the court data collection stays inactive.
+   */
+  DATAJUD_API_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== "" ? v.trim() : undefined)),
+  DATAJUD_BASE_URL: z.string().url().default("https://api-publica.datajud.cnj.jus.br"),
+  /** Per-request timeout (DataJud queries commonly take 7 to 25 s). */
+  DATAJUD_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  /**
+   * Power BI (docs/POWER_BI.md): app registration (service principal) in
+   * Microsoft Entra ID. Without the three ids/secret the BI panels stay in the
+   * setup state and no refresh is requested. Never stored in the database.
+   */
+  POWERBI_TENANT_ID: z.string().optional(),
+  POWERBI_CLIENT_ID: z.string().optional(),
+  POWERBI_CLIENT_SECRET: z.string().optional(),
+  POWERBI_API_URL: z.string().url().default("https://api.powerbi.com"),
+  POWERBI_AUTHORITY_URL: z.string().url().default("https://login.microsoftonline.com"),
+  /** Password of the read-only database role (`praetor_bi`, or the one given with --role) used only by scripts/bi-setup.ts. */
+  BI_DB_PASSWORD: z.string().optional(),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 

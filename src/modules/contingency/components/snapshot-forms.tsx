@@ -47,7 +47,7 @@ export function CloseSnapshotDialog({
         </Button>
       }
       title={`Fechar a competência ${periodLabel}?`}
-      description={`Após o fechamento, a competência fica imutável (RN-10): relatórios passam a ler exatamente estes valores, e ela não pode ser recalculada nem reaberta. Prévia calculada em ${generatedAtLabel}.`}
+      description={`Após o fechamento, a competência fica imutável: relatórios passam a ler exatamente estes valores, e ela não pode ser recalculada nem reaberta. Prévia calculada em ${generatedAtLabel}.`}
       action={closeSnapshotAction}
       hiddenFields={{ period }}
       submitLabel="Fechar competência"
@@ -61,7 +61,7 @@ export function CloseSnapshotDialog({
           ) : null}
           {estimateCount > 0 ? (
             <Callout tone="warning">
-              {estimateCount} processo(s) têm valores estimados (sem valor liquidado). Eles serão fechados com a ressalva da RN-07.
+              {estimateCount} processo(s) têm valores estimados (sem valor liquidado). Eles serão fechados com a ressalva de valores estimados.
             </Callout>
           ) : null}
         </div>

@@ -23,7 +23,7 @@ export const ALERT_AREA_LABELS: Record<AlertArea, string> = {
   intake: "Entrada de processos",
   values: "Valores e garantias",
   settlements: "Acordos",
-  verification: "Verificações",
+  verification: "Cadastros a conferir",
   briefs: "Análises preliminares",
   contracts: "Contratos e obrigações",
   analyses: "Análises de IA e sinais de risco",
@@ -35,7 +35,7 @@ export const ALERT_AREA_DESCRIPTIONS: Record<AlertArea, string> = {
   intake: "Processos recebidos e entradas ainda sem responsável.",
   values: "Valores aguardando conferência, execuções sem valor apurado e depósitos parados.",
   settlements: "Parcelas de acordos próximas do vencimento.",
-  verification: "Processos marcados para verificação na carteira.",
+  verification: "Processos pendentes de conferência na carteira.",
   briefs: "Análises preliminares (simulação) aguardando revisão do advogado.",
   contracts: "Contratos próximos do vencimento e obrigações contratuais.",
   analyses: "Sinais de risco, análises desatualizadas e falhas em análises de IA.",
@@ -62,12 +62,12 @@ export function alertAreaFromParam(value: string | null | undefined): AlertArea 
 }
 
 export const ALERT_TYPES_BY_AREA: Record<AlertArea, readonly AlertType[]> = {
-  hearings: ["hearing_upcoming"],
+  hearings: ["hearing_upcoming", "court_hearing_designated"],
   deadlines: ["deadline_overdue", "deadline_upcoming", "deadline_pending_validation"],
   intake: ["intake_unassigned", "new_process_received"],
-  values: ["valuation_pending_review", "enforcement_without_value", "guarantee_idle"],
+  values: ["valuation_pending_review", "enforcement_without_value", "guarantee_idle", "snapshot_close_blocked"],
   settlements: ["settlement_installment_due"],
-  verification: ["process_needs_verification"],
+  verification: ["process_needs_verification", "court_movement_relevant", "court_sync_failed", "claims_risk_review"],
   briefs: ["brief_pending_review"],
   contracts: ["contract_expiring", "obligation_due"],
   analyses: ["risk_signal", "analysis_stale", "analysis_failed"],

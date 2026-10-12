@@ -2,6 +2,7 @@ import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, sql, type SQ
 import { z } from "zod";
 import type { Page, Paginated } from "@/domain/entities";
 import { normalizePage } from "@/domain/entities";
+import { isExternalCounsel } from "@/server/auth/access";
 import type { AuthContext } from "@/server/auth/context";
 import { assertCan } from "@/server/auth/permissions";
 import { getDb, type DbOrTx } from "@/server/db/client";
@@ -29,7 +30,8 @@ import {
 /**
  * Companies (empresas do grupo) and external law firms (escritórios externos)
  * of the organization. Option lists are available to any authenticated user
- * (names only, used in filters and forms); CRUD requires `admin:organization`.
+ * (names only, used in filters and forms; external counsel only sees their own
+ * firm); CRUD requires `admin:organization`.
  *
  * Companies and law firms are organization-level records: every query is
  * bound to `ctx.organizationId`. A referenced record is never deleted — it is
@@ -48,11 +50,22 @@ export async function listCompanyOptions(ctx: AuthContext): Promise<CompanyOptio
     .orderBy(asc(companies.name));
 }
 
+/**
+ * Active law firms of the organization. External counsel only receives their
+ * own firm (access.ts rule 10): the names of the other firms the organization
+ * works with are not shown to a third party.
+ */
 export async function listLawFirmOptions(ctx: AuthContext): Promise<LawFirmOption[]> {
+  if (isExternalCounsel(ctx) && !ctx.lawFirmId) return [];
   return getDb()
     .select({ id: lawFirms.id, name: lawFirms.name })
     .from(lawFirms)
-    .where(and(eq(lawFirms.organizationId, ctx.organizationId), eq(lawFirms.isActive, true)))
+    .where(
+      and(
+        eq(lawFirms.organizationId, ctx.organizationId),
+        isExternalCounsel(ctx) && ctx.lawFirmId ? eq(lawFirms.id, ctx.lawFirmId) : eq(lawFirms.isActive, true),
+      ),
+    )
     .orderBy(asc(lawFirms.name));
 }
 

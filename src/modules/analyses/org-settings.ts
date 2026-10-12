@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { CORRECTION_INDEXES } from "@/domain/enums";
 import { getDb, type DbOrTx } from "@/server/db/client";
 import { DEFAULT_ORGANIZATION_SETTINGS, organizations, type OrganizationSettings } from "@/server/db/schema";
 import { NotFoundError } from "@/server/lib/errors";
@@ -17,10 +18,23 @@ export function mergeOrganizationSettings(raw: Partial<OrganizationSettings> | n
     contingency: {
       ...contingency,
       riskPercentages: { ...d.contingency.riskPercentages, ...(raw?.contingency?.riskPercentages ?? {}) },
+      // P1.7: an unknown stored value never reaches the valuations (same fallback as the DB trigger).
+      defaultCorrectionIndex: (CORRECTION_INDEXES as readonly string[]).includes(String(contingency.defaultCorrectionIndex))
+        ? contingency.defaultCorrectionIndex
+        : d.contingency.defaultCorrectionIndex,
     },
     // Only the simulated mode exists in this version, whatever an older row says.
     email: { ...d.email, ...(raw?.email ?? {}), mode: "simulated" },
     intake: { ...d.intake, ...(raw?.intake ?? {}) },
+    integrations: {
+      datajud: { ...d.integrations.datajud, ...(raw?.integrations?.datajud ?? {}) },
+      simulatedFeed: { ...d.integrations.simulatedFeed, ...(raw?.integrations?.simulatedFeed ?? {}) },
+    },
+    legalReports: {
+      ...d.legalReports,
+      ...(raw?.legalReports ?? {}),
+      bands: { ...d.legalReports.bands, ...(raw?.legalReports?.bands ?? {}) },
+    },
   };
 }
 

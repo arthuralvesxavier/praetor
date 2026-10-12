@@ -47,10 +47,23 @@
  *      verificação, sem encerramento. A data do texto vira a data de encerramento.
  *   3. "baixou"/"baixado"/"retornou ao 1º grau" → a instância DAQUELA linha foi
  *      baixada (não é a instância atual).
- *   4. Fase pelo termo inicial: Execução/Cumprimento → execução; Liquidação →
- *      liquidação; Recurso/Agravo/AIRR/RR/TST → recursal; Conhecimento →
- *      conhecimento, ou recursal quando o restante cita recurso/AIRR/RR/TST/agravo.
- *   5. Texto sem termo reconhecido → fase não reconhecida (alerta).
+ *   4. Fase e instância são eixos distintos (P0.5). A FASE vem só dos termos
+ *      Conhecimento / Liquidação / Execução (ou Cumprimento): primeiro o termo
+ *      inicial, depois o termo em qualquer posição. Encerramento não é fase.
+ *   5. Termos recursais (recurso, recursal, agravo, ROT/ROR, AIRO → 2º grau;
+ *      TST, recurso de revista, RR, AIRR → 3º grau) indicam a INSTÂNCIA, nunca a
+ *      fase. Sem efeito quando a linha foi baixada (o recurso já voltou) ou pede
+ *      verificação. Menções que negam o recurso ou falam só do prazo ("sem
+ *      recurso", "não houve recurso", "recurso não interposto", "prazo recursal",
+ *      "prazo para recurso") não contam. A instância indicada preenche a
+ *      instância da linha quando a célula e a aba não a informam, com alerta
+ *      (`instance_from_phase`) e o processo marcado para verificação.
+ *   6. Texto sem termo de fase, recursal ou de encerramento → não reconhecido (alerta).
+ *
+ * Linhas gravadas antes da P0.5 (`import_rows.normalized` de lotes analisados e
+ *   ainda não confirmados) podem ter a fase do modelo anterior ("appeal",
+ *   "closed"...): `normalizeStoredPhase` refaz a leitura a partir do texto da
+ *   célula, com as regras acima, antes do plano.
  *
  * Partes: "(e outros)" é retirado do nome e vira nota. A parte cujo nome
  *   corresponde ao da empresa selecionada (sem diferenciar maiúsculas, espaços,
@@ -59,7 +72,7 @@
  *
  * Área: trabalhista quando o segmento do número CNJ é 5 (derivado do número).
  */
-import type { ClosureReason, IssueLevel, LegalArea, PartyRole, ProcessInstance, ProcessPhase } from "@/domain/enums";
+import { isProcessPhase, type ClosureReason, type IssueLevel, type LegalArea, type PartyRole, type ProcessInstance, type ProcessPhase } from "@/domain/enums";
 import { isValidCnj, laborCourtFromCnj, normalizeCnj, parseCnj } from "@/domain/cnj";
 import { parseMoneyToCents } from "@/lib/format";
 
@@ -116,7 +129,10 @@ export type ParsedSheet = {
 };
 
 export type PhaseParse = {
+  /** Conhecimento / liquidação / execução, só pelos termos de fase (nunca por termos recursais). */
   phase: ProcessPhase | null;
+  /** Instância indicada pelos termos recursais do texto (2º / 3º grau); null sem termo recursal ou quando a linha foi baixada. */
+  instance: ProcessInstance | null;
   closed: boolean;
   closureReason: ClosureReason | null;
   /** "YYYY-MM-DD" found in the text of a closed phase. */
@@ -146,6 +162,11 @@ export type NormalizedRow = {
   cnjRaw: string | null;
   cnjValid: boolean;
   instance: ProcessInstance | null;
+  /**
+   * The instance came from the appeal terms of the Fase text (no Instância cell, no instance sheet):
+   * the plan marks the process for verification. Absent in rows stored before P0.5 (= false).
+   */
+  instanceFromPhase?: boolean;
   court: string | null;
   courtDivision: string | null;
   processClass: string | null;
@@ -366,14 +387,14 @@ export function classifySheetName(name: string): SheetClassification {
     return {
       role: "ignored",
       instance: null,
-      note: "Aba de resumo (painel) — ignorada: não contém linhas de processos.",
+      note: "Aba de resumo (painel) ignorada: não contém linhas de processos.",
     };
   }
   if (/\b(atualizacao|atualizacoes|historico|log|observacoes|notas|anotacoes|revisao)\b/.test(key)) {
     return {
       role: "ignored",
       instance: null,
-      note: "Registro narrativo de atualização — ignorado para as linhas de processos.",
+      note: "Registro narrativo de atualização, ignorado para as linhas de processos.",
     };
   }
   if (/\bconsolidad/.test(key)) return { role: "consolidated", instance: null, note: null };
@@ -459,12 +480,12 @@ export function parseMoneyCell(value: RawCell): MoneyParse {
   if (value === null || value === undefined) return { cents: null, issue: null };
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      return { cents: null, issue: { level: "warning", code: "money_unrecognized", message: "Valor numérico inválido — tratado como não informado." } };
+      return { cents: null, issue: { level: "warning", code: "money_unrecognized", message: "Valor numérico inválido, tratado como não informado." } };
     }
     if (value < 0) {
       return {
         cents: null,
-        issue: { level: "warning", code: "money_negative", message: `Valor negativo (${value}) — tratado como não informado; conferir.` },
+        issue: { level: "warning", code: "money_negative", message: `Valor negativo (${value}), tratado como não informado; conferir.` },
       };
     }
     return { cents: Math.round(value * 100), issue: null };
@@ -477,20 +498,20 @@ export function parseMoneyCell(value: RawCell): MoneyParse {
     if (cents === null) {
       return {
         cents: null,
-        issue: { level: "warning", code: "money_unrecognized", message: `Valor não reconhecido ("${truncateText(text, 40)}") — tratado como não informado.` },
+        issue: { level: "warning", code: "money_unrecognized", message: `Valor não reconhecido ("${truncateText(text, 40)}"), tratado como não informado.` },
       };
     }
     if (cents < 0) {
       return {
         cents: null,
-        issue: { level: "warning", code: "money_negative", message: `Valor negativo ("${truncateText(text, 40)}") — tratado como não informado; conferir.` },
+        issue: { level: "warning", code: "money_negative", message: `Valor negativo ("${truncateText(text, 40)}"), tratado como não informado; conferir.` },
       };
     }
     return { cents, issue: null };
   }
   return {
     cents: null,
-    issue: { level: "warning", code: "money_unrecognized", message: "Célula de valor com conteúdo não numérico — tratada como não informada." },
+    issue: { level: "warning", code: "money_unrecognized", message: "Célula de valor com conteúdo não numérico, tratada como não informada." },
   };
 }
 
@@ -515,13 +536,30 @@ function isoDateOrNull(y: string, m: string, d: string): string | null {
   return `${y.padStart(4, "0")}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
 }
 
+/** Termos recursais: indicam a INSTÂNCIA em que o processo tramita, nunca a fase (P0.5). */
 const APPEAL_TERMS = /\b(recurso|recursos|recursal|agravo|airr|rr|rrag|airo|rot|ror|rorsum|tst|revista)\b/;
+/** Termos do 3º grau (TST): recurso de revista e o agravo de instrumento em recurso de revista. */
+const SUPERIOR_TERMS = /\b(airr|rr|rrag|tst|revista)\b/;
+/**
+ * Menções que NÃO indicam recurso em andamento (texto já normalizado por `normalizeKey`): recurso
+ * negado ("sem recurso", "não houve recurso", "recurso não interposto") ou só o prazo ("prazo
+ * recursal", "prazo para recurso"). São retiradas do texto antes de procurar os termos recursais.
+ */
+const NON_APPEAL_MENTIONS = new RegExp(
+  [
+    String.raw`\b(sem|nao houve|nao ha|nao foi interposto|nao interpos|ausencia de|inexistencia de)( (a|o|interposicao de|qualquer))? (recursos?|agravos?)\b`,
+    String.raw`\b(recursos?|agravos?) nao (interpost[oa]s?|apresentad[oa]s?)\b`,
+    String.raw`\bprazos? (recursal|recursais|(para|de) (o |a )?(interposicao de )?(recursos?|recorrer|agravo))\b`,
+  ].join("|"),
+  "g",
+);
 
-/** Composite "Fase" text -> phase, closure, returned/forwarded flags and verification note (rules in the header comment). */
+/** Composite "Fase" text -> phase, instance (appeal terms), closure, returned/forwarded flags and verification note (rules in the header comment). */
 export function parsePhase(value: string | null): PhaseParse {
   const detail = value?.replace(/\s+/g, " ").trim() || null;
   const base: PhaseParse = {
     phase: null,
+    instance: null,
     closed: false,
     closureReason: null,
     closedAt: null,
@@ -536,11 +574,10 @@ export function parsePhase(value: string | null): PhaseParse {
   const key = normalizeKey(detail);
   const leadText = detail.split(/\s[—–-]\s|[(;:]/)[0] ?? detail;
   const lead = normalizeKey(leadText);
-  const rest = key.slice(lead.length);
 
   const notes: string[] = [];
   const verify = /\bverificar\b|\bconferir\b|saiu do acervo/.test(key);
-  if (verify) notes.push(`Planilha pede verificação: "${truncateText(detail, 200)}"`);
+  if (verify) notes.push(`Planilha pede conferência: "${truncateText(detail, 200)}"`);
 
   const paid = /\bpago\b|\bpaga\b|satisfacao|\bquitad[oa]s?\b|\bquitacao\b/.test(key);
   const archivedDefinitive = /\barquivad[oa]s?\s+(def|definitiv)|\barquivamento definitivo\b/.test(key);
@@ -557,9 +594,9 @@ export function parsePhase(value: string | null): PhaseParse {
       closed = true;
       closureReason = "archived";
     } else if (archivedOther) {
-      notes.push(`Arquivamento sem indicação de "definitivo" — conferir: "${truncateText(detail, 200)}"`);
+      notes.push(`Arquivamento sem indicação de "definitivo"; conferir: "${truncateText(detail, 200)}"`);
     } else if (extinct) {
-      notes.push(`Extinção sem indicação de pagamento — conferir o motivo: "${truncateText(detail, 200)}"`);
+      notes.push(`Extinção sem indicação de pagamento; conferir o motivo: "${truncateText(detail, 200)}"`);
     }
   }
 
@@ -567,20 +604,26 @@ export function parsePhase(value: string | null): PhaseParse {
   const forwarded =
     !returned && /\bremetid[oa]s? ao tst\b|\brumo ao tst\b|\b(rr|recurso de revista) interposto\b/.test(key);
 
+  // Phase: only Conhecimento / Liquidação / Execução terms (lead term first, then anywhere).
   let phase: ProcessPhase | null = null;
-  if (closed) phase = "closed";
-  else if (/^(execucao|execucoes|cumprimento)\b/.test(lead)) phase = "enforcement";
+  if (/^(execucao|execucoes|cumprimento)\b/.test(lead)) phase = "enforcement";
   else if (/^liquidacao\b/.test(lead)) phase = "liquidation";
-  else if (/^(recurso|recursos|agravo|airr|rr|airo|tst)\b/.test(lead) || (APPEAL_TERMS.test(lead) && !/^conhecimento\b/.test(lead))) {
-    phase = "appeal";
-  } else if (/^conhecimento\b/.test(lead)) phase = !verify && APPEAL_TERMS.test(rest) ? "appeal" : "knowledge";
+  else if (/^conhecimento\b/.test(lead)) phase = "knowledge";
   else if (/\bexecucao\b/.test(key)) phase = "enforcement";
   else if (/\bliquidacao\b/.test(key)) phase = "liquidation";
   else if (/\bconhecimento\b/.test(key)) phase = "knowledge";
 
+  // Instance: appeal terms (never a phase), ignoring "sem recurso" / "prazo recursal". A returned row
+  // ("baixou") or a row to verify gives none.
+  const appealKey = key.replace(NON_APPEAL_MENTIONS, " ");
+  const appeal = APPEAL_TERMS.test(appealKey);
+  const instance: ProcessInstance | null =
+    appeal && !returned && !verify ? (SUPERIOR_TERMS.test(appealKey) ? "superior" : "second") : null;
+
   const needsVerification = notes.length > 0;
   return {
     phase,
+    instance,
     closed,
     closureReason,
     closedAt: closed ? extractDate(detail) : null,
@@ -589,8 +632,20 @@ export function parsePhase(value: string | null): PhaseParse {
     needsVerification,
     verificationNote: needsVerification ? notes.join(" · ") : null,
     detail,
-    recognized: phase !== null,
+    recognized: phase !== null || appeal || closed,
   };
+}
+
+/**
+ * Phase parse of a row stored in `import_rows.normalized`. Rows analyzed before P0.5 hold a phase
+ * of the previous model ("appeal", "closed"...) and no `instance`: the parse is redone from the
+ * stored cell text with the current rules (phase, appeal instance, closure). A current parse is
+ * returned as is.
+ */
+export function normalizeStoredPhase(stored: PhaseParse | null | undefined): PhaseParse {
+  if (!stored) return parsePhase(null);
+  const legacy = stored.instance === undefined || (stored.phase !== null && stored.phase !== undefined && !isProcessPhase(stored.phase));
+  return legacy ? parsePhase(stored.detail ?? null) : stored;
 }
 
 const OTHERS_SUFFIX = /\s*\(?\s*\b(e|and)\s+outr[oa]s?\b\s*\)?\s*\.?$/i;
@@ -682,17 +737,17 @@ export function parseWorkbook(rawSheets: readonly RawSheet[], options: ParseOpti
       note = byName.note;
     } else if (!header) {
       role = "ignored";
-      note = "Cabeçalho não encontrado (coluna de número do processo ausente) — aba ignorada.";
+      note = "Cabeçalho não encontrado (coluna de número do processo ausente): aba ignorada.";
     } else if (byName) {
       role = byName.role;
       instance = byName.instance;
     } else if (!hasConsolidatedByName && !unknownPromoted) {
       role = "consolidated";
       unknownPromoted = true;
-      note = "Nome de aba não reconhecido — tratada como base consolidada.";
+      note = "Nome de aba não reconhecido: tratada como base consolidada.";
     } else {
       role = "ignored";
-      note = 'Aba não reconhecida — ignorada. Renomeie para "Consolidado" ou "1º Grau"/"2º Grau"/"3º Grau" para incluí-la.';
+      note = 'Aba não reconhecida e ignorada. Renomeie para "Consolidado" ou "1º Grau"/"2º Grau"/"3º Grau" para incluí-la.';
     }
 
     if (role === "ignored" || !header) {
@@ -730,7 +785,7 @@ export function parseWorkbook(rawSheets: readonly RawSheet[], options: ParseOpti
           kind: "total",
           raw,
           data: null,
-          issues: [{ level: "info", code: "total_row", field: null, message: "Linha de totalização — ignorada (a leitura continua nas linhas seguintes)." }],
+          issues: [{ level: "info", code: "total_row", field: null, message: "Linha de totalização ignorada (a leitura continua nas linhas seguintes)." }],
           error: false,
         });
         continue;
@@ -751,7 +806,7 @@ export function parseWorkbook(rawSheets: readonly RawSheet[], options: ParseOpti
           level: "warning",
           code: "client_not_found",
           field: null,
-          message: `Nenhuma parte corresponde à empresa selecionada ("${truncateText(options.clientName, 80)}") — o cliente não foi marcado nas partes.`,
+          message: `Nenhuma parte corresponde à empresa selecionada ("${truncateText(options.clientName, 80)}"): o cliente não foi marcado nas partes.`,
         });
       }
     }
@@ -793,7 +848,7 @@ function parseDataRow(cells: RawCell[], header: HeaderDetection, rc: RowContext)
       level: "info",
       code: "after_total",
       field: null,
-      message: `Linha abaixo da linha TOTAL (linha ${rc.totalRowNumber}) — lida normalmente; conferir se pertence à carteira.`,
+      message: `Linha abaixo da linha TOTAL (linha ${rc.totalRowNumber}), lida normalmente; conferir se pertence à carteira.`,
     });
   }
 
@@ -804,23 +859,26 @@ function parseDataRow(cells: RawCell[], header: HeaderDetection, rc: RowContext)
   const cnjValid = isValidCnj(cnj);
   if (!cnjRaw) {
     error = true;
-    issues.push({ level: "error", code: "cnj_missing", field: label("number"), message: "Número do processo não informado — linha não importada." });
+    issues.push({ level: "error", code: "cnj_missing", field: label("number"), message: "Número do processo não informado: linha não importada." });
   } else if (!cnj) {
     error = true;
     issues.push({
       level: "error",
       code: "cnj_invalid_format",
       field: label("number"),
-      message: `Número fora do padrão CNJ (20 dígitos): "${truncateText(cnjRaw, 40)}" — linha não importada.`,
+      message: `Número fora do padrão CNJ (20 dígitos): "${truncateText(cnjRaw, 40)}". Linha não importada.`,
     });
   } else if (!cnjValid) {
     issues.push({
       level: "warning",
       code: "cnj_invalid_check_digit",
       field: label("number"),
-      message: "Dígito verificador do número CNJ não confere — conferir. O número foi mantido como informado (não é corrigido).",
+      message: "Dígito verificador do número CNJ não confere; conferir. O número foi mantido como informado (não é corrigido).",
     });
   }
+
+  // Phase text is read first: its appeal terms may fill a missing instance (P0.5).
+  const phase = parsePhase(text("phase"));
 
   // Instance
   const instanceText = text("instance");
@@ -832,7 +890,7 @@ function parseDataRow(cells: RawCell[], header: HeaderDetection, rc: RowContext)
       code: "instance_unrecognized",
       field: label("instance"),
       message: rc.instance
-        ? `Instância não reconhecida ("${truncateText(instanceText, 40)}") — usada a instância da aba.`
+        ? `Instância não reconhecida ("${truncateText(instanceText, 40)}"): usada a instância da aba.`
         : `Instância não reconhecida ("${truncateText(instanceText, 40)}").`,
     });
   } else if (fromCell && rc.instance && fromCell !== rc.instance) {
@@ -840,32 +898,43 @@ function parseDataRow(cells: RawCell[], header: HeaderDetection, rc: RowContext)
       level: "warning",
       code: "instance_sheet_mismatch",
       field: label("instance"),
-      message: `Instância da linha ("${truncateText(instanceText, 40)}") difere da aba "${rc.sheet}" — usada a instância da linha.`,
+      message: `Instância da linha ("${truncateText(instanceText, 40)}") difere da aba "${rc.sheet}": usada a instância da linha.`,
     });
   }
 
   // Court
   const courtText = text("court");
   let court = normalizeCourt(courtText);
+  let instanceFromPhase = false;
   if (!instance) {
-    if (court === "TST") {
+    if (phase.instance) {
+      // Free text is a presumption: as strict as instance_assumed, plus verification (the plan marks it).
+      instance = phase.instance;
+      instanceFromPhase = true;
+      issues.push({
+        level: "warning",
+        code: "instance_from_phase",
+        field: label("instance"),
+        message: `Instância não informada: ${phase.instance === "superior" ? "3º grau" : "2º grau"} conforme os termos recursais da fase; conferir (processo pendente de conferência).`,
+      });
+    } else if (court === "TST") {
       instance = "superior";
-      issues.push({ level: "info", code: "instance_from_court", field: label("instance"), message: "Instância não informada — considerada tribunal superior (TST)." });
+      issues.push({ level: "info", code: "instance_from_court", field: label("instance"), message: "Instância não informada: considerada 3º grau (TST)." });
     } else {
       instance = "first";
-      issues.push({ level: "warning", code: "instance_assumed", field: label("instance"), message: "Instância não informada — considerada 1º grau; conferir." });
+      issues.push({ level: "warning", code: "instance_assumed", field: label("instance"), message: "Instância não informada: considerada 1º grau; conferir." });
     }
   }
   if (!court && cnj) {
     const derived = instance === "superior" && parseCnj(cnj)?.segment === "5" ? "TST" : laborCourtFromCnj(cnj);
     if (derived) {
       court = derived;
-      issues.push({ level: "info", code: "court_derived", field: label("court"), message: `Tribunal não informado — derivado do número CNJ (${derived}).` });
+      issues.push({ level: "info", code: "court_derived", field: label("court"), message: `Tribunal não informado: derivado do número CNJ (${derived}).` });
     }
   }
   if (!court && !error) {
     error = true;
-    issues.push({ level: "error", code: "court_missing", field: label("court"), message: "Tribunal não informado e não derivável do número — linha não importada." });
+    issues.push({ level: "error", code: "court_missing", field: label("court"), message: "Tribunal não informado e não derivável do número: linha não importada." });
   }
   if (court && cnj && instance !== "superior") {
     const fromNumber = laborCourtFromCnj(cnj);
@@ -874,7 +943,7 @@ function parseDataRow(cells: RawCell[], header: HeaderDetection, rc: RowContext)
         level: "warning",
         code: "court_cnj_mismatch",
         field: label("court"),
-        message: `Tribunal informado (${court}) difere do tribunal indicado no número CNJ (${fromNumber}) — conferir.`,
+        message: `Tribunal informado (${court}) difere do tribunal indicado no número CNJ (${fromNumber}); conferir.`,
       });
     }
   }
@@ -886,14 +955,14 @@ function parseDataRow(cells: RawCell[], header: HeaderDetection, rc: RowContext)
       level: "warning",
       code: "city_non_geographic",
       field: label("city"),
-      message: `"${truncateText(cityParse.raw, 60)}" não é um município (órgão/unidade judicial) — cidade não preenchida${cityParse.state ? `; UF ${cityParse.state} mantida` : ""}.`,
+      message: `"${truncateText(cityParse.raw, 60)}" não é um município (órgão/unidade judicial): cidade não preenchida${cityParse.state ? `; UF ${cityParse.state} mantida` : ""}.`,
     });
   } else if (cityParse.kind === "ambiguous") {
     issues.push({
       level: "warning",
       code: "city_ambiguous",
       field: label("city"),
-      message: `Mais de uma localidade informada ("${truncateText(cityParse.raw, 60)}") — cidade não preenchida; conferir.`,
+      message: `Mais de uma localidade informada ("${truncateText(cityParse.raw, 60)}"): cidade não preenchida; conferir.`,
     });
   }
 
@@ -905,7 +974,7 @@ function parseDataRow(cells: RawCell[], header: HeaderDetection, rc: RowContext)
       level: "warning",
       code: "claim_symbolic",
       field: label("claimAmount"),
-      message: `Valor da causa simbólico (${formatCentsPlain(claim.cents)}) — conferir.`,
+      message: `Valor da causa simbólico (${formatCentsPlain(claim.cents)}); conferir.`,
     });
   }
   const hasLiquidatedColumn = col.liquidatedAmount !== undefined;
@@ -913,16 +982,15 @@ function parseDataRow(cells: RawCell[], header: HeaderDetection, rc: RowContext)
   if (liquidated.issue) issues.push({ ...liquidated.issue, field: label("liquidatedAmount") });
 
   // Phase
-  const phase = parsePhase(text("phase"));
   if (phase.detail && !phase.recognized) {
-    issues.push({ level: "warning", code: "phase_unrecognized", field: label("phase"), message: `Fase não reconhecida ("${truncateText(phase.detail, 80)}") — conferir.` });
+    issues.push({ level: "warning", code: "phase_unrecognized", field: label("phase"), message: `Fase não reconhecida ("${truncateText(phase.detail, 80)}"); conferir.` });
   }
   if (phase.needsVerification) {
     issues.push({
       level: "warning",
       code: "phase_verification",
       field: label("phase"),
-      message: `${phase.verificationNote} — processo marcado para verificação; nenhum encerramento automático.`,
+      message: `${phase.verificationNote}. Processo pendente de conferência, sem encerramento automático.`,
     });
   }
   if (phase.closed) {
@@ -951,27 +1019,27 @@ function parseDataRow(cells: RawCell[], header: HeaderDetection, rc: RowContext)
       continue;
     }
     if (party.hasOthers) {
-      issues.push({ level: "info", code: "party_others", field: label(field), message: `"e outros" retirado do nome de ${party.name} — há outras partes não identificadas na planilha.` });
+      issues.push({ level: "info", code: "party_others", field: label(field), message: `"e outros" retirado do nome de ${party.name}: há outras partes não identificadas na planilha.` });
     }
     if (party.role === "public_prosecutor") {
       issues.push({ level: "info", code: "party_public_prosecutor", field: label(field), message: `${party.name}: papel registrado como Ministério Público.` });
     }
   }
   if (plaintiff?.isClient && defendant?.isClient) {
-    issues.push({ level: "warning", code: "client_both_sides", field: null, message: "A empresa aparece nos dois polos da linha — conferir as partes." });
+    issues.push({ level: "warning", code: "client_both_sides", field: null, message: "A empresa aparece nos dois polos da linha; conferir as partes." });
   } else if (plaintiff?.isClient && rc.role === "instance" && rc.instance !== "first") {
     issues.push({
       level: "info",
       code: "client_plaintiff_side",
       field: label("plaintiff"),
-      message: "Empresa na coluna da parte autora nesta instância (provável recorrente) — polos mantidos conforme a planilha.",
+      message: "Empresa na coluna da parte autora nesta instância (provável recorrente): polos mantidos conforme a planilha.",
     });
   }
 
   // Area
   const derivedArea = areaFromCnj(cnj);
   if (cnj && !derivedArea) {
-    issues.push({ level: "info", code: "area_not_derived", field: label("number"), message: "Área não derivável do número (segmento diferente de 5) — registrada como \"Outra\"." });
+    issues.push({ level: "info", code: "area_not_derived", field: label("number"), message: "Área não derivável do número (segmento diferente de 5): registrada como \"Outra\"." });
   }
 
   const data: NormalizedRow = {
@@ -979,6 +1047,7 @@ function parseDataRow(cells: RawCell[], header: HeaderDetection, rc: RowContext)
     cnjRaw,
     cnjValid,
     instance,
+    instanceFromPhase,
     court,
     courtDivision: truncateText(text("courtDivision"), 200),
     processClass: truncateText(text("processClass"), 40),
@@ -1037,7 +1106,7 @@ function inferStatesFromFile(rows: ParsedRow[]): void {
         level: "warning",
         code: "city_state_conflict",
         field: "Cidade",
-        message: `A cidade ${d.city} aparece com UFs diferentes (${[...states].sort().join(", ")}) — UF não preenchida; conferir.`,
+        message: `A cidade ${d.city} aparece com UFs diferentes (${[...states].sort().join(", ")}): UF não preenchida; conferir.`,
       });
     }
   }

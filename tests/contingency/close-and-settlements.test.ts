@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, notExists, sql } from "drizzle-orm";
 import { periodReferenceDate, previousPeriod } from "@/domain/contingency";
 import { addDaysISO, todayISO } from "@/lib/format";
 import { addValuation, proposeValuation } from "@/modules/contingency/service";
@@ -26,7 +26,14 @@ import {
 import { periodOf } from "@/modules/contingency/rules";
 import { mergeOrganizationSettings } from "@/modules/analyses/org-settings";
 import type { RoutineContext } from "@/server/jobs/routines";
-import { alerts, auditLogs, legalProcesses, portfolioSnapshotItems, processGuarantees } from "@/server/db/schema";
+import {
+  alerts,
+  auditLogs,
+  legalProcesses,
+  portfolioSnapshotItems,
+  processGuarantees,
+  processRiskAssessments,
+} from "@/server/db/schema";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { setupFixture, type Fixture } from "../helpers/fixtures";
 
@@ -53,6 +60,36 @@ async function insertProcess(overrides: Partial<typeof legalProcesses.$inferInse
     })
     .returning({ id: legalProcesses.id });
   return p.id;
+}
+
+/**
+ * Records an official classification (opinion + identified person, through the real service)
+ * for every live process of organization A that has none, keeping the classification typed on
+ * the record ("remoto" when there is none), in force from `effectiveFrom`.
+ */
+async function classifyPending(effectiveFrom: string): Promise<void> {
+  const pending = await f.db
+    .select({ id: legalProcesses.id, loss: legalProcesses.lossProbability })
+    .from(legalProcesses)
+    .where(
+      and(
+        eq(legalProcesses.organizationId, f.orgA),
+        isNull(legalProcesses.deletedAt),
+        notExists(
+          f.db
+            .select({ one: sql`1` })
+            .from(processRiskAssessments)
+            .where(and(eq(processRiskAssessments.processId, legalProcesses.id), eq(processRiskAssessments.status, "official"))),
+        ),
+      ),
+    );
+  for (const p of pending) {
+    await addRiskAssessment(f.ctx.manager, p.id, {
+      classification: p.loss ?? "remote",
+      opinion: "Parecer fictício de teste para o fechamento mensal.",
+      effectiveFrom,
+    });
+  }
 }
 
 async function expectError<T extends Error>(p: Promise<unknown>, type: new (...args: never[]) => T): Promise<T> {
@@ -163,6 +200,9 @@ describe("monthly close (RN-05, RN-10, RF-16)", () => {
     p2 = await insertProcess({ claimAmountCents: 800_000, lossProbability: "possible", number: "1000002-00.2026.5.10.0001" });
     // Confidential process: org-wide totals only.
     secret = await insertProcess({ claimAmountCents: 100_000, lossProbability: "probable", isConfidential: true, number: "1000003-00.2026.5.10.0001" });
+    // P1.9 close gate: every active process needs an OFFICIAL classification in force on the
+    // reference date (the record classification does not count), the settlements ones included.
+    await classifyPending(`${beforePrevious}-01`);
   });
 
   it("generates the preview with values on/before the reference date", async () => {
@@ -192,7 +232,8 @@ describe("monthly close (RN-05, RN-10, RF-16)", () => {
     await expectError(closeSnapshot(f.ctx.lawyer, previous), ForbiddenError);
     await expectError(generateSnapshot(f.ctx.lawyer, previous), ForbiddenError);
     await expectError(closeSnapshot(f.ctx.accountant, "2099-01"), ValidationError);
-    await closeSnapshot(f.ctx.accountant, previous);
+    const closed = await closeSnapshot(f.ctx.accountant, previous);
+    expect(closed.override).toBeNull(); // every item classified: closed without reservation
     await expectError(closeSnapshot(f.ctx.accountant, previous), ConflictError);
     await expectError(generateSnapshot(f.ctx.manager, previous), ConflictError);
 
@@ -245,7 +286,8 @@ describe("monthly close (RN-05, RN-10, RF-16)", () => {
     const { fileName, content } = await exportSnapshotCsv(f.ctx.accountant, previous);
     expect(fileName).toBe(`fechamento-${previous}.csv`);
     expect(content.startsWith("﻿")).toBe(true);
-    expect(content).toContain("ATENÇÃO (RN-07)");
+    expect(content).toContain("ATENÇÃO: ");
+    expect(content).not.toMatch(/\b(RN|RF|TE)-\d/);
     expect(content).toContain("sigiloso(s) não listado(s)");
     expect(content).not.toContain("1000003-00.2026.5.10.0001");
     expect(content).toContain("1000002-00.2026.5.10.0001");

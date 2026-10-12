@@ -65,7 +65,7 @@ export function HearingStatusDialog({ hearingId, hearingLabel, target, current, 
       <Button type="button" variant="ghost" size="sm" disabled aria-disabled="true" title={disabledReason}>
         {trigger.icon}
         <span>{trigger.label}</span>
-        {disabledReason ? <span className="sr-only"> — {disabledReason}</span> : null}
+        {disabledReason ? <span className="sr-only"> ({disabledReason})</span> : null}
       </Button>
     );
   }

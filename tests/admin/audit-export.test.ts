@@ -51,7 +51,7 @@ describe("audit CSV (pure)", () => {
     expect(lines[1]).toContain(";Acesso a processo sigiloso;legal_process.view_confidential;Processo;");
     expect(lines[1]).toContain('"Processo sigiloso consultado; detalhe"');
     expect(lines[2]).toContain(";Sistema;");
-    expect(lines[2]).toContain("Percentual de provisão — possível: 50% → 40% | Versão das regras de risco: 1 → 2");
+    expect(lines[2]).toContain("Percentual de provisão (possível): 50% → 40% | Versão das regras de risco: 1 → 2");
     expect(lines[3]).toBe("Exportação limitada.");
     expect(lines[4]).toBe("");
   });
@@ -60,9 +60,11 @@ describe("audit CSV (pure)", () => {
     expect(actionLabel("company.create")).toBe("Empresa cadastrada");
     expect(actionLabel("law_firm.deactivate")).toBe("Escritório externo desativado");
     expect(actionLabel("audit.export")).toBe("Exportação da trilha de auditoria");
-    expect(actionLabel("valuation.approve")).toBe("Aprovação · Valoração");
+    expect(actionLabel("valuation.approve")).toBe("Valor conferido e oficializado");
     expect(actionLabel("case_brief.generate")).toBe("Geração · Análise preliminar");
-    expect(actionLabel("import_batch.rollback")).toBe("Desfazimento · Importação de planilha");
+    expect(actionLabel("import_batch.rollback")).toBe("Importação de planilha desfeita");
+    // Actions without a specific label fall back to "<verbo> · <entidade>".
+    expect(actionLabel("snapshot.reopen")).toBe("Reabertura · Fechamento mensal");
     expect(formatChangeValue("riskPercentageBp", 5000, "legal_process")).toBe("50%");
     expect(formatChangeValue("instance", "second", "legal_process")).toBe("2º grau");
     expect(formatChangeValue("status", "homologated", "settlement")).toBe("Homologado");

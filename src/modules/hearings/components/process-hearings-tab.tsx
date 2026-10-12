@@ -10,7 +10,10 @@ import { startOfZonedDay } from "../time";
 import { HearingFormDialog } from "./hearing-form-dialog";
 import { HearingRow } from "./hearing-row";
 
-/** "Audiências" tab of the process page (`/processos/<id>?aba=audiencias`). */
+/**
+ * Hearings section of the "Prazos e audiências" tab of the process page
+ * (`/processos/<id>?aba=prazos-e-audiencias#audiencias`).
+ */
 export async function ProcessHearingsTab({ ctx, processId }: { ctx: AuthContext; processId: string }) {
   if (!can(ctx, "process:read")) {
     return <p className="text-sm text-muted-foreground">Seu perfil não permite consultar as audiências deste processo.</p>;
@@ -41,8 +44,8 @@ export async function ProcessHearingsTab({ ctx, processId }: { ctx: AuthContext;
         >
           <CardTitle id="audiencias-proximas">Próximas audiências</CardTitle>
           <CardDescription>
-            Cadastro manual a partir da intimação ou da pauta publicada. Integração com tribunais (DataJud, PJe, MNI): não
-            integrado nesta versão.
+            Cadastro manual a partir da intimação ou da pauta publicada. A coleta do DataJud, quando ativa, avisa que uma
+            audiência foi designada, mas não informa a data. PJe e MNI não estão integrados nesta versão.
           </CardDescription>
         </CardHeader>
         <CardContent>

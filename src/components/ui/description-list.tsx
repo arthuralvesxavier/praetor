@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 export type DescriptionItem = {
   label: ReactNode;
-  /** null / undefined / "" render an em dash. */
+  /** null / undefined / "" render a muted "Não informado". */
   value: ReactNode;
   /** Span all columns (long text such as descriptions). */
   full?: boolean;
@@ -39,12 +39,7 @@ export function DescriptionList({ items, columns = 2, className }: DescriptionLi
             <dt className="text-xs font-medium text-muted-foreground">{item.label}</dt>
             <dd className="mt-0.5 text-sm break-words whitespace-pre-line text-slate-900">
               {empty ? (
-                <>
-                  <span aria-hidden="true" className="text-slate-400">
-                    —
-                  </span>
-                  <span className="sr-only">Não informado</span>
-                </>
+                <span className="text-muted-foreground">Não informado</span>
               ) : (
                 item.value
               )}

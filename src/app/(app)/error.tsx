@@ -34,7 +34,7 @@ export default function AppError({ error, retry }: { error: Error & { digest?: s
         retry={() => retry()}
         action={
           <ButtonLink href="/dashboard" variant="ghost">
-            Ir para o dashboard
+            Ir para o painel executivo
           </ButtonLink>
         }
       />

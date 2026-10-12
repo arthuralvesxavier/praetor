@@ -35,6 +35,7 @@ function Milestone({
   detail,
   passed,
   highlight,
+  emptyLabel = "Não informado",
 }: {
   icon: ReactNode;
   label: string;
@@ -42,6 +43,8 @@ function Milestone({
   detail?: string | null;
   passed: boolean;
   highlight?: boolean;
+  /** Muted text when there is no date ("Não informado"; "Não calculada" for a derived date). */
+  emptyLabel?: string;
 }) {
   return (
     <li className="relative flex gap-3 sm:flex-1 sm:flex-col sm:gap-2">
@@ -60,7 +63,9 @@ function Milestone({
       </span>
       <div className="min-w-0">
         <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
-        <p className="text-sm font-semibold text-slate-900 tabular-nums">{date ? formatDate(date) : "Não informado"}</p>
+        <p className="text-sm font-semibold text-slate-900 tabular-nums">
+          {date ? formatDate(date) : <span className="font-normal text-muted-foreground">{emptyLabel}</span>}
+        </p>
         {detail ? <p className={cn("text-xs", highlight ? "font-medium text-amber-800" : "text-muted-foreground")}>{detail}</p> : null}
       </div>
     </li>
@@ -104,6 +109,7 @@ export function VigencyCard({
             icon={<CalendarClock />}
             label={NOTICE_DATE_LABEL}
             date={noticeDeadline}
+            emptyLabel="Não calculada"
             detail={
               noticeDeadline
                 ? `${relativeTo(noticeDeadline, today, "encerrou", (n) => `em ${pluralize(n, "dia", "dias", { withCount: true })}`)} · ${NOTICE_DATE_HINT}`

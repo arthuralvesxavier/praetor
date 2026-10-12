@@ -37,7 +37,8 @@ export function ColumnChart({
   return (
     <ChartTooltip>
       <figure aria-label={label} className="m-0">
-        <div className="flex gap-2">
+        {/* pt-2: room for the top tick label, centered on its gridline. */}
+        <div className="flex gap-2 pt-2">
           {/* Y axis */}
           <div className="relative w-10 shrink-0 text-right text-[11px] text-subtle-foreground tabular-nums" style={{ height }} aria-hidden="true">
             {scale.ticks.map((t) => (

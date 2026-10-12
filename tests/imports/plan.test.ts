@@ -30,7 +30,8 @@ describe("grouping by CNJ and current instance (RN-01/RN-09)", () => {
       ["first", false],
       ["second", true],
     ]);
-    expect(proc.target).toMatchObject({ instance: "second", phase: "appeal", city: "Palmas", state: "TO", claimAmountCents: 100000, area: "labor" });
+    // P0.5: "recurso" names the instance (2º grau), never the phase.
+    expect(proc.target).toMatchObject({ instance: "second", phase: "knowledge", city: "Palmas", state: "TO", claimAmountCents: 100000, area: "labor" });
     expect(p.stats).toMatchObject({ processesDetected: 1, toCreate: 1, instanceLinks: 1, rowsRead: 2 });
     expect(p.outcomes.get(rowKey("Consolidado Geral", 3))?.action).toBe("create");
     expect(p.outcomes.get(rowKey("Consolidado Geral", 2))?.action).toBe("merge_instance");
@@ -45,6 +46,71 @@ describe("grouping by CNJ and current instance (RN-01/RN-09)", () => {
       ]),
     ]);
     expect(p.processes[0].target).toMatchObject({ instance: "first", phase: "liquidation", needsVerification: false });
+  });
+
+  it("a 1º grau line whose Fase cites an appeal keeps its instance and asks to check it (P0.5)", () => {
+    const { plan: p } = plan([
+      sheet("Consolidado Geral", [row({ number: validCnj(16), instance: "1º Grau", phase: "Conhecimento (recurso) — em tramitação" })]),
+    ]);
+    const proc = p.processes[0];
+    // The instance links are the source of truth: no 2º grau line is invented, the phase stays conhecimento.
+    expect(proc.target).toMatchObject({ instance: "first", phase: "knowledge", needsVerification: true });
+    expect(proc.target.verificationNote).toContain("A fase cita recurso no 2º grau, mas não há linha dessa instância");
+    expect(p.outcomes.get(proc.primaryRowKey)?.issues.map((i) => i.code)).toContain("forwarded_without_row");
+  });
+
+  it("a Fase that only names the instance gets its own message, not 'não reconhecida' (P0.5)", () => {
+    const { wb, plan: p } = plan([
+      sheet("Consolidado Geral", [row({ number: validCnj(17), instance: "2º Grau", phase: "Recurso Ordinário" })]),
+    ]);
+    // The parser recognized the text (as the instance): no phase_unrecognized.
+    expect(wb.rows[0].issues.map((i) => i.code)).not.toContain("phase_unrecognized");
+    const proc = p.processes[0];
+    expect(proc.target).toMatchObject({ instance: "second", phase: "knowledge", needsVerification: true });
+    expect(proc.target.verificationNote).toBe(
+      "Fase não informada (o texto indica só a instância: 2º grau). Registrada como Conhecimento; conferir.",
+    );
+    const codes = p.outcomes.get(proc.primaryRowKey)?.issues.map((i) => i.code);
+    expect(codes).toContain("phase_fallback_instance_only");
+    expect(codes).not.toContain("phase_fallback");
+  });
+
+  it("an instance taken from the appeal terms of the Fase marks the process for verification (P0.5)", () => {
+    const { plan: p } = plan([
+      sheet("Consolidado Geral", [row({ number: validCnj(18), instance: null, phase: "Conhecimento (recurso) — em tramitação" })]),
+    ]);
+    const proc = p.processes[0];
+    expect(proc.target).toMatchObject({ instance: "second", phase: "knowledge", needsVerification: true });
+    expect(proc.target.verificationNote).toContain("2º grau deduzido dos termos recursais da fase; conferir.");
+  });
+
+  it("re-reads rows stored before P0.5 with phase 'appeal' / 'closed': no legacy phase reaches the target", () => {
+    const wb = parseWorkbook(
+      [
+        sheet("Consolidado Geral", [
+          row({ number: validCnj(19), instance: "2º Grau", phase: "Conhecimento (recurso) — em tramitação" }),
+          row({ number: validCnj(20), instance: "1º Grau", phase: "Execução — PAGO/EXTINTO 2026-06-25" }),
+          row({ number: validCnj(21), instance: "1º Grau", phase: "PAGO/EXTINTO — arquivado def. 2026-06-25" }),
+        ]),
+      ],
+      { clientName: DEMO_CLIENT },
+    );
+    // import_rows.normalized written by the parser before P0.5: legacy phase, no phase.instance.
+    const legacyPhases = ["appeal", "closed", "closed"];
+    const rows = wb.rows.map((r, i) => {
+      const { instance: _dropped, ...phase } = r.data!.phase;
+      void _dropped;
+      return { ...r, data: { ...r.data!, phase: { ...phase, phase: legacyPhases[i] } } } as unknown as typeof r;
+    });
+    const p = buildImportPlan({ rows, existing: new Map(), companyId: COMPANY, defaultUnitId: null, fileName: "antiga.xlsx" });
+    const byCnj = new Map(p.processes.map((x) => [x.cnj, x]));
+    expect(byCnj.get(validCnj(19))!.target).toMatchObject({ phase: "knowledge", instance: "second", status: "active" });
+    expect(byCnj.get(validCnj(20))!.target).toMatchObject({ phase: "enforcement", status: "closed", closureReason: "paid_extinct", closedAt: "2026-06-25" });
+    expect(byCnj.get(validCnj(21))!.target).toMatchObject({ phase: "knowledge", status: "closed", needsVerification: false });
+    for (const proc of p.processes) {
+      expect(["knowledge", "liquidation", "enforcement"]).toContain(proc.target.phase);
+      for (const inst of proc.instances) expect(["knowledge", "liquidation", "enforcement", null]).toContain(inst.values.phase);
+    }
   });
 
   it("marks the process for verification when every instance was returned", () => {
@@ -68,7 +134,7 @@ describe("grouping by CNJ and current instance (RN-01/RN-09)", () => {
       ]),
     ]);
     const paidPlan = p.processes.find((x) => x.cnj === paid)!;
-    expect(paidPlan.target).toMatchObject({ status: "closed", phase: "closed", closureReason: "paid_extinct", closedAt: "2026-06-25", liquidatedAmountCents: 0 });
+    expect(paidPlan.target).toMatchObject({ status: "closed", phase: "knowledge", closureReason: "paid_extinct", closedAt: "2026-06-25", liquidatedAmountCents: 0 });
     const liq = paidPlan.valuations.find((v) => v.kind === "liquidated")!;
     expect(liq).toMatchObject({ amountCents: 0, status: "official" });
     expect(liq.reason).toMatch(/^Quitação/);
@@ -212,7 +278,7 @@ describe("diff against existing processes", () => {
   });
 
   it("does not repeat a proposal already recorded and never reopens a closed process", () => {
-    const ex = existing({ status: "closed", phase: "closed", closureReason: "lost_patronage" });
+    const ex = existing({ status: "closed", phase: "knowledge", closureReason: "lost_patronage" });
     const { plan: p } = plan(sheetFor({ number: cnj, claim: 1500, phase: "Conhecimento" }), {
       existing: new Map([[cnj, ex]]),
       existingValuationKeys: new Map([[ex.id, new Set(["claim:150000"])]]),

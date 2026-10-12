@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { Textarea } from "@/components/ui/textarea";
+import { usePreservingSubmit } from "@/components/ui/use-preserving-submit";
 import {
   LEGAL_AREA_LABELS,
   PROCESS_INSTANCE_LABELS,
@@ -27,7 +28,7 @@ export type ProcessMirrorValues = {
   liquidated: string;
   provision: string;
   lossProbability: string;
-  /** Link to the "Valores e risco" tab. */
+  /** Link to the values section ("Valores e acordos" tab). */
   href: string;
 };
 
@@ -54,6 +55,11 @@ export type ProcessFormProps<S extends ValuesFormState> = {
   mirrorValues?: ProcessMirrorValues | null;
   /** When creating from a preventive occurrence. */
   fromOccurrence?: { id: string; title: string } | null;
+  /**
+   * True when the user cannot make values official (no contingency:approve): a valor da causa
+   * typed here goes to the review queue ("Valor aguardando conferência") before it counts.
+   */
+  claimNeedsReview?: boolean;
   cancelHref: string;
 };
 
@@ -85,7 +91,7 @@ function NumberHint({ value }: { value: string }) {
   if (check === "invalid_check_digit") {
     return (
       <span className="font-medium text-amber-800">
-        Atenção: o dígito verificador não confere com o restante do número. Confira nos autos — o cadastro não é
+        Atenção: o dígito verificador não confere com o restante do número. Confira nos autos: o cadastro não é
         bloqueado e o número será salvo como informado.
       </span>
     );
@@ -116,10 +122,13 @@ export function ProcessForm<S extends ValuesFormState>({
   statusEditable,
   mirrorValues,
   fromOccurrence,
+  claimNeedsReview = false,
   cancelHref,
 }: ProcessFormProps<S>) {
   const [state, formAction] = useActionState(action, null);
-  // After a failed submit React resets the form; re-fill it with what was sent.
+  // No automatic form reset on error: inputs AND selects keep what the user chose.
+  const onSubmit = usePreservingSubmit(formAction);
+  // Without JavaScript the page re-renders with the action state: re-fill from what was sent.
   const sent = state && !state.ok ? state.values : undefined;
   const val = (key: Exclude<keyof ProcessFormDefaults, "isConfidential">): string =>
     sent ? (sent[key] ?? "") : defaults[key];
@@ -130,7 +139,7 @@ export function ProcessForm<S extends ValuesFormState>({
   const err = (field: string) => fieldError(state, field);
 
   return (
-    <form action={formAction} className="flex flex-col gap-6" noValidate>
+    <form action={formAction} onSubmit={onSubmit} className="flex flex-col gap-6" noValidate>
       {mode === "edit" && processId ? <input type="hidden" name="id" value={processId} /> : null}
       {fromOccurrence ? <input type="hidden" name="fromOccurrenceId" value={fromOccurrence.id} /> : null}
       <FormMessage state={state} />
@@ -170,7 +179,7 @@ export function ProcessForm<S extends ValuesFormState>({
           htmlFor="title"
           required
           error={err("title")}
-          hint="Identificação interna, ex.: “Reclamação trabalhista — ex-colaborador”."
+          hint="Identificação interna, ex.: “Reclamação trabalhista de ex-colaborador”."
         >
           <Input name="title" defaultValue={val("title")} required maxLength={200} />
         </FormField>
@@ -197,14 +206,14 @@ export function ProcessForm<S extends ValuesFormState>({
           <div className="flex flex-col gap-1.5">
             <span className="text-sm font-medium text-slate-900">Situação</span>
             <p className="rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-slate-700">
-              {PROCESS_STATUS_LABELS[defaults.status as keyof typeof PROCESS_STATUS_LABELS] ?? defaults.status} — fora da
+              {PROCESS_STATUS_LABELS[defaults.status as keyof typeof PROCESS_STATUS_LABELS] ?? defaults.status}, fora da
               carteira ativa. Use “Reativar” na página do processo para trazê-lo de volta.
             </p>
           </div>
         )}
       </Section>
 
-      <Section title="Tribunal e localização" description="Dados da instância atual. Os demais graus ficam na aba “Instâncias”.">
+      <Section title="Tribunal e localização" description="Dados da instância atual. Os demais graus ficam na aba “Partes e andamento”.">
         <FormField label="Tribunal" htmlFor="court" required error={err("court")} hint="Ex.: TRT10, TST, TJSP.">
           <Input name="court" defaultValue={val("court")} required maxLength={120} />
         </FormField>
@@ -236,7 +245,7 @@ export function ProcessForm<S extends ValuesFormState>({
           label="Detalhe da fase"
           htmlFor="phaseDetail"
           error={err("phaseDetail")}
-          hint="Texto livre, como consta na planilha ou nos autos (ex.: “Execução — aguardando cálculos”)."
+          hint="Texto livre, como consta na planilha ou nos autos (ex.: “Execução, aguardando cálculos”)."
         >
           <Input name="phaseDetail" defaultValue={val("phaseDetail")} maxLength={500} />
         </FormField>
@@ -247,7 +256,7 @@ export function ProcessForm<S extends ValuesFormState>({
           label="Última movimentação"
           htmlFor="lastMovementAt"
           error={err("lastMovementAt")}
-          hint="Atualizada também ao registrar uma movimentação na aba “Movimentações”."
+          hint="Atualizada também ao registrar uma movimentação na aba “Partes e andamento”."
         >
           <Input name="lastMovementAt" type="date" defaultValue={val("lastMovementAt")} />
         </FormField>
@@ -265,7 +274,7 @@ export function ProcessForm<S extends ValuesFormState>({
           <div className="flex flex-col gap-1.5">
             <span className="text-sm font-medium text-slate-900">Escritório externo</span>
             <p className="rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-slate-700">
-              {lawFirmLabel ?? "Seu escritório"} — definido pelo seu acesso.
+              {lawFirmLabel ?? "Seu escritório"}, definido pelo seu acesso.
             </p>
             {err("lawFirmId") ? (
               <p role="alert" className="text-sm font-medium text-red-700">
@@ -284,13 +293,17 @@ export function ProcessForm<S extends ValuesFormState>({
 
       <Section
         title="Valores e risco"
-        description="Valor da causa e valor liquidado são grandezas diferentes e nunca são somados. A classificação de risco é uma avaliação da equipe jurídica — não é previsão de resultado."
+        description="Valor da causa e valor liquidado são grandezas diferentes e nunca são somados. A classificação de risco é uma avaliação da equipe jurídica, não uma previsão de resultado."
       >
         <FormField
           label="Valor da causa (R$)"
           htmlFor="claimAmountCents"
           error={err("claimAmountCents")}
-          hint="Cada alteração fica registrada no histórico de valores. Deixe em branco se não informado."
+          hint={
+            claimNeedsReview
+              ? "Seu perfil não oficializa valores: o valor informado vai para a conferência de valores e só passa a valer, inclusive nos totais, quando for aprovado. Deixe em branco se não informado."
+              : "Cada alteração fica registrada no histórico de valores. Deixe em branco se não informado."
+          }
         >
           <Input name="claimAmountCents" inputMode="decimal" placeholder="0,00" defaultValue={val("claimAmountCents")} />
         </FormField>
@@ -300,7 +313,7 @@ export function ProcessForm<S extends ValuesFormState>({
         <div className="rounded-md border border-dashed border-border-strong bg-surface-muted px-3 py-3 text-sm sm:col-span-2">
           {mirrorValues ? (
             <>
-              <p className="font-medium text-slate-900">Mantidos na aba “Valores e risco” (somente leitura aqui)</p>
+              <p className="font-medium text-slate-900">Mantidos na aba “Valores e acordos” (somente leitura aqui)</p>
               <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-3">
                 <div>
                   <dt className="text-xs text-muted-foreground">Valor liquidado / apurado</dt>
@@ -319,13 +332,13 @@ export function ProcessForm<S extends ValuesFormState>({
                 href={mirrorValues.href}
                 className="mt-2 inline-block rounded-sm text-sm font-medium text-primary-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               >
-                Abrir “Valores e risco”
+                Abrir “Valores e acordos”
               </Link>
             </>
           ) : (
             <p className="text-muted-foreground">
               Valor liquidado/apurado, classificação de perda (remota/possível/provável), garantias e provisão são
-              lançados na aba “Valores e risco” do processo, depois do cadastro, com conferência e histórico.
+              lançados na aba “Valores e acordos” do processo, depois do cadastro, com conferência e histórico.
             </p>
           )}
         </div>

@@ -39,7 +39,7 @@ export async function ProcessEmailsTab({ ctx, processId }: { ctx: AuthContext; p
           <CardDescription>
             {result.total > TAB_LIMIT
               ? `Mostrando os ${TAB_LIMIT} mais recentes de ${formatNumber(result.total)}.`
-              : "Avisos de análise preliminar, atribuição, prazos e audiências gerados para este processo."}
+              : "Avisos simulados de análise preliminar, atribuição (quando ativada nas configurações) e audiências gerados para este processo."}
           </CardDescription>
         </CardHeader>
         <CardContent className="px-0">
@@ -48,7 +48,7 @@ export async function ProcessEmailsTab({ ctx, processId }: { ctx: AuthContext; p
             hideProcess
             label="E-mails simulados do processo"
             emptyMessage="Nenhum e-mail simulado para este processo."
-            emptyDescription="Os avisos aparecem aqui quando a análise preliminar fica pronta, quando o processo é atribuído ou em lembretes."
+            emptyDescription="Os avisos aparecem aqui quando a análise preliminar fica pronta, quando o processo é atribuído (se o aviso estiver ativado nas configurações) e nos lembretes de audiência."
           />
         </CardContent>
       </Card>

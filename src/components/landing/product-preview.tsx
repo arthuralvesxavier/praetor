@@ -307,7 +307,7 @@ type DecisionMock = {
 
 const DECISION: DecisionMock[] = [
   {
-    title: "Audiências em 7 dias",
+    title: "Audiências",
     icon: Gavel,
     count: 1,
     noun: "audiência",
@@ -322,7 +322,7 @@ const DECISION: DecisionMock[] = [
     item: { ref: SAMPLE.liquidation.number, text: "Impugnação aos cálculos", when: "ontem", overdue: true },
   },
   {
-    title: "Parcelas de acordo",
+    title: "Parcelas de acordo a vencer",
     icon: Handshake,
     count: 1,
     noun: "parcela",
@@ -330,14 +330,14 @@ const DECISION: DecisionMock[] = [
     item: { ref: SAMPLE.appeal.number, text: "Parcela 3 de 10", when: "20/10" },
   },
   {
-    title: "Garantias paradas",
+    title: "Garantias sem movimentação",
     icon: Landmark,
     count: 1,
     noun: "garantia",
     item: { ref: SAMPLE.appeal.number, text: "Depósito recursal", when: "desde 12/03" },
   },
   {
-    title: "Valores a conferir",
+    title: "Valores pendentes de conferência",
     icon: ClipboardCheck,
     count: 1,
     noun: "valor proposto",
@@ -413,9 +413,10 @@ function DecisionCard({ block }: { block: DecisionMock }) {
   const Icon = block.icon;
   return (
     <MiniCard className="flex flex-col p-2">
-      <p className="flex min-w-0 items-center gap-1 text-[10px] font-semibold text-slate-900">
-        <Icon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
-        <span className="truncate">{block.title}</span>
+      {/* Same titles as the real band (decision-band.tsx); the long ones wrap instead of being cut. */}
+      <p className="flex min-w-0 items-start gap-1 text-[10px] leading-tight font-semibold text-slate-900">
+        <Icon aria-hidden="true" className="mt-px size-3 shrink-0 text-muted-foreground" />
+        <span className="min-w-0">{block.title}</span>
       </p>
       <p className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-1 gap-y-0.5">
         <span className="text-[15px] leading-none font-semibold text-slate-900 tabular-nums">{block.count}</span>

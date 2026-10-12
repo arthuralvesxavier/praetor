@@ -82,7 +82,7 @@ export async function BatchRows({ ctx, batch, sp }: { ctx: AuthContext; batch: I
                           <span className="font-medium">{r.cnj}</span>
                         )
                       ) : (
-                        <span className="text-muted-foreground">—</span>
+                        <span className="text-muted-foreground">Sem número</span>
                       )}
                       {r.cnj && !r.cnjValid && r.action !== "error" ? (
                         <Badge tone="warning" className="ml-2">
@@ -90,20 +90,20 @@ export async function BatchRows({ ctx, batch, sp }: { ctx: AuthContext; batch: I
                         </Badge>
                       ) : null}
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">{r.instance ? PROCESS_INSTANCE_LABELS[r.instance] : "—"}</TableCell>
-                    <TableCell>{r.court ?? "—"}</TableCell>
+                    <TableCell className="whitespace-nowrap">{r.instance ? PROCESS_INSTANCE_LABELS[r.instance] : <span className="text-muted-foreground">Não informada</span>}</TableCell>
+                    <TableCell>{r.court ?? <span className="text-muted-foreground">Não informado</span>}</TableCell>
                     <TableCell className="min-w-48 text-sm" title={r.phaseDetail ?? undefined}>
-                      {r.phaseDetail ? truncate(r.phaseDetail, 70) : "—"}
+                      {r.phaseDetail ? truncate(r.phaseDetail, 70) : <span className="text-muted-foreground">Não informada</span>}
                     </TableCell>
                     <TableCell className="text-right whitespace-nowrap">
-                      {isData ? formatMoneyCents(r.claimAmountCents, "Não informado") : "—"}
+                      {isData ? formatMoneyCents(r.claimAmountCents, "Não informado") : <span className="text-muted-foreground">Não se aplica</span>}
                     </TableCell>
                     <TableCell className="text-right whitespace-nowrap">
                       {isData && r.hasLiquidatedColumn ? (
                         formatMoneyCents(r.liquidatedAmountCents, "Não apurado")
                       ) : (
                         <span className="text-muted-foreground" title={isData ? "A aba não tem a coluna de valor liquidado" : undefined}>
-                          —
+                          {isData ? "Sem coluna" : "Não se aplica"}
                         </span>
                       )}
                     </TableCell>

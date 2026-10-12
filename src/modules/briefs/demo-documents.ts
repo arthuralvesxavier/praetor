@@ -1,11 +1,11 @@
 /**
  * Fictitious demonstration documents (PDF) coherent with a spreadsheet case.
  *
- * Every page carries "DOCUMENTO FICTÍCIO — GERADO PARA DEMONSTRAÇÃO" in the
+ * Every page carries "DOCUMENTO FICTÍCIO, GERADO PARA DEMONSTRAÇÃO" in the
  * header and in the footer. The pack is deterministic for a given CNJ number
  * and variant (same bytes every time), so seeds and tests are reproducible.
  *
- * Content rules: plain narrative only — no case law, no súmulas, no article
+ * Content rules: plain narrative only: no case law, no súmulas, no article
  * numbers, no real lawyer/OAB data, no court movements. Dates and values are
  * fictitious and derived deterministically from the case data (the hearing
  * date in the notification is fictitious document content, not a computed
@@ -42,7 +42,7 @@ export type DemoDocument = {
   bytes: Uint8Array;
 };
 
-export const DEMO_DOCUMENT_BANNER = "DOCUMENTO FICTÍCIO — GERADO PARA DEMONSTRAÇÃO";
+export const DEMO_DOCUMENT_BANNER = "DOCUMENTO FICTÍCIO, GERADO PARA DEMONSTRAÇÃO";
 
 export const DEMO_VARIANTS = [
   { id: 0, label: "Pacote completo (com planilha de cálculos)" },
@@ -126,7 +126,8 @@ export function brl(cents: number): string {
 }
 
 // WinAnsi (Windows-1252) characters above 0x7F that are not in Latin-1's 0xA0-0xFF block.
-const WIN_ANSI_EXTRA = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
+// En dash and em dash are written as escapes, so the source holds no dash as text.
+const WIN_ANSI_EXTRA = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•\u2013\u2014˜™š›œžŸ");
 
 /** Keeps only characters the standard Helvetica font can encode (WinAnsi). */
 export function toWinAnsi(text: string): string {
@@ -441,7 +442,7 @@ async function renderPdf(title: string, blocks: Block[]): Promise<{ bytes: Uint8
   const pdf = await PDFDocument.create({ updateMetadata: false });
   const fixedDate = new Date(Date.UTC(2026, 0, 1, 12, 0, 0));
   pdf.setTitle(toWinAnsi(`${title} (documento fictício)`));
-  pdf.setAuthor("Praetor — dados de demonstração");
+  pdf.setAuthor("Praetor, dados de demonstração");
   pdf.setSubject(toWinAnsi(DEMO_DOCUMENT_BANNER));
   pdf.setCreator("Praetor");
   pdf.setProducer("Praetor (pdf-lib)");
@@ -592,7 +593,7 @@ function petitionBlocks(f: CaseFacts): Block[] {
   blocks.push({ kind: "heading", text: "DOS PEDIDOS" });
   blocks.push({ kind: "para", text: "Diante do exposto, requer a condenação da reclamada ao pagamento das seguintes parcelas:" });
   f.claims.forEach((c, i) => {
-    blocks.push({ kind: "item", text: `${String.fromCharCode(97 + i)}) ${c.spec.item} — ${brl(c.amountCents)}` });
+    blocks.push({ kind: "item", text: `${String.fromCharCode(97 + i)}) ${c.spec.item}: ${brl(c.amountCents)}` });
   });
   blocks.push({ kind: "heading", text: "VALOR DA CAUSA" });
   blocks.push({ kind: "para", text: `Dá-se à causa o valor de ${brl(f.petitionClaimCents)}.` });
@@ -613,7 +614,7 @@ function petitionBlocks(f: CaseFacts): Block[] {
   blocks.push({ kind: "para", text: "Nestes termos, pede deferimento." });
   blocks.push({ kind: "line", text: `${f.place}, ${brDate(f.filedAt)}.` });
   blocks.push({ kind: "gap" });
-  blocks.push({ kind: "line", text: `${f.lawyer} — advogado(a) do reclamante — OAB/${f.state} nº 00.000 (número fictício)` });
+  blocks.push({ kind: "line", text: `${f.lawyer}, advogado(a) do reclamante, OAB/${f.state} nº 00.000 (número fictício)` });
   return blocks;
 }
 
@@ -641,7 +642,8 @@ function powerOfAttorneyBlocks(f: CaseFacts): Block[] {
 
 function plaintiffDocumentsBlocks(f: CaseFacts): Block[] {
   const blocks: Block[] = [
-    { kind: "title", text: "DOCUMENTOS DO RECLAMANTE — RESUMO DA CTPS" },
+    { kind: "title", text: "DOCUMENTOS DO RECLAMANTE" },
+    { kind: "title", text: "RESUMO DA CTPS" },
     { kind: "line", text: `Empregado: ${f.plaintiff}` },
     { kind: "line", text: `Empregador: ${f.defendant}` },
     { kind: "line", text: `Data de admissão: ${brDate(f.ctpsAdmission)}` },
@@ -678,8 +680,9 @@ function plaintiffDocumentsBlocks(f: CaseFacts): Block[] {
 
 function noticeBlocks(f: CaseFacts): Block[] {
   return [
-    { kind: "title", text: `${f.court.toUpperCase()}${f.courtDivision ? ` — ${f.courtDivision.toUpperCase()}` : ""}` },
-    { kind: "title", text: "NOTIFICAÇÃO — AUDIÊNCIA INICIAL" },
+    { kind: "title", text: f.court.toUpperCase() },
+    ...(f.courtDivision ? [{ kind: "title" as const, text: f.courtDivision.toUpperCase() }] : []),
+    { kind: "title", text: "NOTIFICAÇÃO DE AUDIÊNCIA INICIAL" },
     { kind: "line", text: `Processo: ${f.number}` },
     { kind: "line", text: `Reclamante: ${f.plaintiff}` },
     { kind: "line", text: `Reclamada: ${f.defendant}` },
@@ -718,7 +721,8 @@ function calculationBlocks(f: CaseFacts): Block[] {
   const subtotal = rows.reduce((a, r) => a + r.cents, 0);
   const update = Math.round(subtotal * 0.047);
   const blocks: Block[] = [
-    { kind: "title", text: "PLANILHA DE CÁLCULOS — ESTIMATIVA APRESENTADA PELO RECLAMANTE" },
+    { kind: "title", text: "PLANILHA DE CÁLCULOS" },
+    { kind: "title", text: "ESTIMATIVA APRESENTADA PELO RECLAMANTE" },
     { kind: "line", text: `Processo: ${f.calcNumber}` },
     { kind: "line", text: `Reclamante: ${f.plaintiff}` },
     { kind: "line", text: `Reclamada: ${f.defendant}` },
@@ -776,7 +780,7 @@ export async function buildDemoCaseDocuments(info: DemoCaseInfo, opts: { variant
   await add("Documentos do reclamante (CTPS e holerites)", "evidence", "documentos-reclamante", plaintiffDocumentsBlocks(f), () =>
     f.includePayslips ? "Resumo da CTPS e amostra de holerites apresentados pelo reclamante." : "Resumo da CTPS apresentado pelo reclamante.",
   );
-  await add("Notificação — audiência inicial", "correspondence", "notificacao-audiencia", noticeBlocks(f), () =>
+  await add("Notificação de audiência inicial", "correspondence", "notificacao-audiencia", noticeBlocks(f), () =>
     "Notificação da reclamada para a audiência inicial.",
   );
   if (f.includeCalculation) {

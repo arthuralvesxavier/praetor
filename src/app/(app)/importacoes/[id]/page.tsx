@@ -14,6 +14,7 @@ import { BatchIssues } from "@/modules/imports/components/batch-issues";
 import { BatchRows } from "@/modules/imports/components/batch-rows";
 import { BatchSummary } from "@/modules/imports/components/batch-summary";
 import { BatchStatusBadge } from "@/modules/imports/components/badges";
+import { DistributionCallout } from "@/modules/imports/components/distribution-callout";
 import { getImportBatch, getRollbackBlockers, type ImportBatchDetail, type RollbackBlocker } from "@/modules/imports/service";
 import { requirePageContext } from "@/server/auth/session";
 import { NotFoundError } from "@/server/lib/errors";
@@ -48,7 +49,7 @@ export default async function ImportBatchPage(props: PageProps<"/importacoes/[id
     <>
       <PageHeader
         title={<span className="break-all">{batch.fileName}</span>}
-        description={`${batch.companyName ?? "Empresa não informada"} · enviada por ${batch.createdByName ?? "—"} em ${formatDateTime(batch.createdAt)}`}
+        description={`${batch.companyName ?? "Empresa não informada"} · enviada por ${batch.createdByName ?? "usuário não informado"} em ${formatDateTime(batch.createdAt)}`}
         breadcrumbs={[
           { label: "Painel executivo", href: "/dashboard" },
           { label: "Importação de planilhas", href: "/importacoes" },
@@ -58,7 +59,8 @@ export default async function ImportBatchPage(props: PageProps<"/importacoes/[id
         actions={
           <>
             {batch.hasStoredFile ? (
-              <ButtonLink href={`/api/imports/${batch.id}/file`} variant="outline" prefetch={false}>
+              // `download`: a plain browser download (next/link would request the route twice, auditing two downloads).
+              <ButtonLink href={`/api/imports/${batch.id}/file`} variant="outline" prefetch={false} download>
                 <Download aria-hidden="true" />
                 Planilha original
               </ButtonLink>
@@ -83,7 +85,7 @@ export default async function ImportBatchPage(props: PageProps<"/importacoes/[id
           </Callout>
         ) : null}
         {batch.status === "analyzed" ? (
-          <Callout tone="info" title="Análise concluída — nada foi gravado na carteira ainda">
+          <Callout tone="info" title="Análise concluída: nada foi gravado na carteira ainda">
             Confira o resumo, as inconsistências e as divergências. Ao confirmar, a situação da base é conferida de novo e os processos são
             gravados numa única operação.{" "}
             {s && s.errors > 0
@@ -109,35 +111,15 @@ export default async function ImportBatchPage(props: PageProps<"/importacoes/[id
             . Reimportar o mesmo arquivo não duplica processos, instâncias nem valores.
           </Callout>
         ) : null}
-        {batch.distribution ? (
-          <Callout
-            tone={batch.distribution.failed > 0 ? "warning" : "success"}
-            title={`Distribuição após a importação: ${pluralize(batch.distribution.assigned, "processo atribuído", "processos atribuídos")}`}
-          >
-            {batch.distribution.failed > 0 ? (
-              <>
-                {pluralize(batch.distribution.failed, "processo ficou", "processos ficaram")} sem responsável:
-                <ul className="mt-1 list-disc pl-5">
-                  {batch.distribution.failures.slice(0, 10).map((f) => (
-                    <li key={f.processId}>
-                      <Link href={`/processos/${f.processId}`}>{f.number}</Link> — {f.message}
-                    </li>
-                  ))}
-                </ul>
-                {batch.distribution.failed > 10 ? <p className="mt-1">e mais {formatNumber(batch.distribution.failed - 10)}.</p> : null}
-              </>
-            ) : (
-              "Todos os processos novos receberam responsável pelas regras de distribuição."
-            )}
-          </Callout>
-        ) : null}
+        <DistributionCallout batch={batch} />
         {blockers.length > 0 ? (
           <Callout tone="warning" title="Esta importação não pode mais ser desfeita automaticamente">
-            {pluralize(blockers.length, "processo foi alterado", "processos foram alterados")} depois dela:
+            {pluralize(blockers.length, "processo foi alterado", "processos foram alterados")} depois dela ou já{" "}
+            {blockers.length === 1 ? "consta" : "constam"} de competência fechada:
             <ul className="mt-1 list-disc pl-5">
               {blockers.slice(0, 10).map((b) => (
                 <li key={b.processId}>
-                  <Link href={`/processos/${b.processId}`}>{b.number}</Link> — {b.reasons.join("; ")}
+                  <Link href={`/processos/${b.processId}`}>{b.number}</Link>: {b.reasons.join("; ")}
                 </li>
               ))}
             </ul>

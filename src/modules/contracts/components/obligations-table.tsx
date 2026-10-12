@@ -66,14 +66,14 @@ export function ObligationsTable({ contractId, obligations, users, canWrite, tod
                   ) : null}
                   {o.origin === "ai_suggested" ? (
                     <p className="mt-1 text-xs text-ai-800">
-                      Item sugerido a partir de análise de IA — confirme com a leitura do contrato.
+                      Item sugerido a partir de análise de IA. Confirme com a leitura do contrato.
                     </p>
                   ) : null}
                   {o.origin === "system" ? (
                     <p className="mt-1 text-xs text-muted-foreground">Ocorrência gerada pela recorrência da obrigação anterior.</p>
                   ) : null}
                 </TableCell>
-                <TableCell>{o.responsibleName ?? <span className="text-muted-foreground">—</span>}</TableCell>
+                <TableCell>{o.responsibleName ?? <span className="text-muted-foreground">Sem responsável</span>}</TableCell>
                 <TableCell className="whitespace-nowrap">
                   {o.dueDate ? (
                     <>
@@ -98,7 +98,7 @@ export function ObligationsTable({ contractId, obligations, users, canWrite, tod
                     <span className="text-muted-foreground">Única</span>
                   )}
                   {o.recurrenceKind === "custom" ? (
-                    <span className="block text-xs text-muted-foreground">Texto livre — sem geração automática</span>
+                    <span className="block text-xs text-muted-foreground">Texto livre, sem geração automática</span>
                   ) : null}
                 </TableCell>
                 <TableCell>

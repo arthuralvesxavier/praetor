@@ -11,7 +11,7 @@ export function Brand({ className }: { className?: string }) {
   return (
     <Link
       href="/dashboard"
-      aria-label="Praetor — ir para o painel executivo"
+      aria-label="Praetor: ir para o painel executivo"
       className={cn(
         "inline-flex items-center rounded-md px-1 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sidebar-indicator",
         className,

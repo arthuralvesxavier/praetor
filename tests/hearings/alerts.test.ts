@@ -132,7 +132,7 @@ describe("link resolution", () => {
     expect(alertHref("case_brief", "b1")).toBe("/analises-preliminares/b1");
     expect(alertHref("intake", "i1")).toBe("/entrada/i1");
     expect(alertHref("legal_process", "p1")).toBe("/processos/p1");
-    expect(alertHref("legal_process", "p1", "enforcement_without_value")).toBe("/processos/p1?aba=valores");
+    expect(alertHref("legal_process", "p1", "enforcement_without_value")).toBe("/processos/p1?aba=valores-e-acordos");
     expect(alertHref("deadline", "d1")).toBe("/prazos?aba=prazos&prazo=d1");
     expect(alertHref("deadline", "d1", "deadline_pending_validation")).toBe("/prazos?aba=validacao&prazo=d1");
     expect(alertHref("hearing", "h1")).toBeNull();
@@ -146,10 +146,10 @@ describe("link resolution", () => {
       { type: "guarantee_idle", entityType: "guarantee", entityId: ids.guarantee },
       { type: "valuation_pending_review", entityType: "valuation", entityId: ids.valuation },
     ]);
-    expect(map.get(`hearing:${ids.hearing}`)).toBe(`/processos/${ids.pSp}?aba=audiencias`);
-    expect(map.get(`settlement:${ids.settlement}`)).toBe(`/processos/${ids.pSp}?aba=acordos`);
-    expect(map.get(`guarantee:${ids.guarantee}`)).toBe(`/processos/${ids.pSp}?aba=valores`);
-    expect(map.get(`valuation:${ids.valuation}`)).toBe(`/processos/${ids.pSp}?aba=valores`);
+    expect(map.get(`hearing:${ids.hearing}`)).toBe(`/processos/${ids.pSp}?aba=prazos-e-audiencias#audiencias`);
+    expect(map.get(`settlement:${ids.settlement}`)).toBe(`/processos/${ids.pSp}?aba=valores-e-acordos#acordos`);
+    expect(map.get(`guarantee:${ids.guarantee}`)).toBe(`/processos/${ids.pSp}?aba=valores-e-acordos`);
+    expect(map.get(`valuation:${ids.valuation}`)).toBe(`/processos/${ids.pSp}?aba=valores-e-acordos`);
     const other = await resolveAlertHrefs(fx.orgB, [{ type: "hearing_upcoming", entityType: "hearing", entityId: ids.hearing }]);
     expect(other.get(`hearing:${ids.hearing}`)).toBeNull();
   });
@@ -157,11 +157,11 @@ describe("link resolution", () => {
   it("listAlerts returns the resolved links for every new entity type", async () => {
     const items = await listAlerts(fx.ctx.admin, { limit: 100 });
     const href = (id: string) => items.find((a) => a.id === id)?.href;
-    expect(href(ids.aHearing)).toBe(`/processos/${ids.pSp}?aba=audiencias`);
-    expect(href(ids.aSettlement)).toBe(`/processos/${ids.pSp}?aba=acordos`);
-    expect(href(ids.aGuarantee)).toBe(`/processos/${ids.pSp}?aba=valores`);
-    expect(href(ids.aValuation)).toBe(`/processos/${ids.pSp}?aba=valores`);
-    expect(href(ids.aValuationProcess)).toBe(`/processos/${ids.pRe}?aba=valores`);
+    expect(href(ids.aHearing)).toBe(`/processos/${ids.pSp}?aba=prazos-e-audiencias#audiencias`);
+    expect(href(ids.aSettlement)).toBe(`/processos/${ids.pSp}?aba=valores-e-acordos#acordos`);
+    expect(href(ids.aGuarantee)).toBe(`/processos/${ids.pSp}?aba=valores-e-acordos`);
+    expect(href(ids.aValuation)).toBe(`/processos/${ids.pSp}?aba=valores-e-acordos`);
+    expect(href(ids.aValuationProcess)).toBe(`/processos/${ids.pRe}?aba=valores-e-acordos`);
     expect(href(ids.aVerification)).toBe(`/processos/${ids.pSp}`);
     expect(href(ids.aBrief)).toBe(`/analises-preliminares/${ids.brief}`);
     expect(href(ids.aIntake)).toBe(`/entrada/${ids.intake}`);

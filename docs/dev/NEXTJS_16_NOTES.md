@@ -58,3 +58,15 @@ Download: `return new Response(stream, { headers: { "Content-Type": ..., "Conten
 - `next lint` was removed: use `npm run lint` (eslint flat config).
 - Turbopack is the default bundler for dev and build.
 - `next build` type-checks.
+
+## v2 additions
+
+- The proxy matcher also excludes `/api/imports/upload` (spreadsheet upload, same reason as the
+  document upload) and `/brand/*` (public logo files used by the landing page). Any new upload route
+  must be added to the exclusion and must do its own session, permission, `Origin` and size checks.
+- Route handlers that return files (`/api/processes/export`, `/api/reports/[tipo]`,
+  `/api/contingency/snapshots/[period]/csv`, `/api/imports/[id]/issues`, `/api/imports/[id]/file`,
+  `/admin/auditoria/exportar`) call `getCurrentUser()` and then `can(ctx, perm)`; the service re-checks
+  the permission and applies row visibility.
+- Header search uses `next/form` (`<Form action="/busca">`): a GET form with client-side navigation that
+  also works without JavaScript.

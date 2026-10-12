@@ -84,7 +84,7 @@ describe("renderEmail", () => {
 
   it("formats the CNJ number in the brief subject", () => {
     const r = renderEmail("case_brief_ready", SAMPLE.case_brief_ready, ctx);
-    expect(r.subject).toBe("[Simulação] Análise preliminar disponível — Proc. 0001234-56.2026.5.10.0001");
+    expect(r.subject).toBe("[Simulação] Análise preliminar disponível: Proc. 0001234-56.2026.5.10.0001");
   });
 
   it("labels demo-mode briefs and omits the notice otherwise", () => {
@@ -98,14 +98,39 @@ describe("renderEmail", () => {
     expect(real.html).not.toContain("Análise demonstrativa");
     // Possible deadlines are always "a conferir" and missing dates are said so.
     expect(real.text).toContain("Possíveis prazos a conferir");
-    expect(real.text).toContain("Contestação — 20/10/2026");
-    expect(real.text).toContain("Manifestação — data não identificada");
+    expect(real.text).toContain("Contestação: 20/10/2026");
+    expect(real.text).toContain("Manifestação: data não identificada");
+  });
+
+  it("without the digest (recipient cannot open the brief): process data and link only, still labeled", () => {
+    const parsed = templateDataSchemas.case_brief_ready.parse({
+      ...SAMPLE.case_brief_ready,
+      headline: "",
+      urgencies: [],
+      possibleDeadlines: [],
+      digestOmitted: true,
+    });
+    const r = renderEmail("case_brief_ready", parsed, ctx);
+    expect(r.subject.startsWith(`${SUBJECT_PREFIX} `)).toBe(true);
+    expect(r.text).toContain("não foi incluído neste e-mail");
+    expect(r.text).toContain(CASE_BRIEF_DEMO_NOTICE);
+    expect(r.text).toContain("Autor Fictício x EMPRESA MODELO TESTE LTDA");
+    expect(r.text).not.toContain("Síntese:");
+    expect(r.text).not.toContain("Possíveis prazos a conferir");
+    expect(r.text).not.toContain("Lacunas de informação");
+    expect(r.text).toContain(ctx.linkUrl);
+  });
+
+  it("the assignment e-mail does not claim the process is new", () => {
+    const r = renderEmail("intake_assigned", SAMPLE.intake_assigned, ctx);
+    expect(r.text).toContain("Você foi indicado como responsável pelo processo abaixo.");
+    expect(r.text).toContain("Regra por tribunal (TRT-10) e menor carga.");
   });
 
   it("flags AI-suggested deadlines that still need validation", () => {
     const r = renderEmail("deadline_reminder", SAMPLE.deadline_reminder, ctx);
     expect(r.text).toContain("aguarda validação humana");
-    expect(r.subject).toBe("[Simulação] Lembrete de prazo — Contestação (20/10/2026)");
+    expect(r.subject).toBe("[Simulação] Lembrete de prazo: Contestação (20/10/2026)");
     const confirmed = renderEmail("deadline_reminder", { ...SAMPLE.deadline_reminder, pendingValidation: false }, ctx);
     expect(confirmed.text).not.toContain("aguarda validação humana");
   });
@@ -118,7 +143,7 @@ describe("renderEmail", () => {
 
   it("digest items become absolute links with their counts", () => {
     const r = renderEmail("daily_digest", SAMPLE.daily_digest, ctx);
-    expect(r.subject).toBe("[Simulação] Resumo diário de pendências — 11/10/2026");
+    expect(r.subject).toBe("[Simulação] Resumo diário de pendências de 11/10/2026");
     expect(r.text).toContain("Alertas abertos: 3 (http://localhost:3000/alertas?situacao=abertos)");
     expect(r.html).toContain('href="http://localhost:3000/prazos?aba=prazos&amp;situacao=vencidos"');
   });
@@ -150,7 +175,7 @@ describe("renderEmail", () => {
 
   it("never lets a value break the subject line", () => {
     const r = renderEmail("deadline_reminder", { ...SAMPLE.deadline_reminder, title: "Prazo\r\nBcc: alguem@exemplo.com" }, ctx);
-    expect(r.subject).toBe("[Simulação] Lembrete de prazo — Prazo Bcc: alguem@exemplo.com (20/10/2026)");
+    expect(r.subject).toBe("[Simulação] Lembrete de prazo: Prazo Bcc: alguem@exemplo.com (20/10/2026)");
     expect(buildSubject("x".repeat(500)).length).toBeLessThanOrEqual(200);
   });
 

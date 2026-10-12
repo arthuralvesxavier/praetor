@@ -1,4 +1,5 @@
 import type {
+  ClosureReason,
   ContractStatus,
   ContractType,
   DeadlineKind,
@@ -13,6 +14,7 @@ import type {
   PartyRole,
   Priority,
   ProcessEventType,
+  ProcessInstance,
   ProcessPhase,
   ProcessStatus,
   RenewalType,
@@ -36,9 +38,9 @@ export const AURORA_ORG = {
 
 export type UnitKey = "sp" | "rec" | "cwb";
 export const AURORA_UNITS: { key: UnitKey; name: string; code: string }[] = [
-  { key: "sp", name: "Matriz — São Paulo", code: "SP" },
-  { key: "rec", name: "Filial — Recife", code: "REC" },
-  { key: "cwb", name: "Centro de Distribuição — Curitiba", code: "CWB" },
+  { key: "sp", name: "Matriz São Paulo", code: "SP" },
+  { key: "rec", name: "Filial Recife", code: "REC" },
+  { key: "cwb", name: "Centro de Distribuição Curitiba", code: "CWB" },
 ];
 
 export type UserKey = "admin" | "gestor" | "advogada" | "advogadoRecife" | "analista" | "executivo";
@@ -225,7 +227,7 @@ export const AURORA_OCCURRENCES: OccurrenceSeed[] = [
   {
     key: "rescisaoRecife",
     createdBy: "advogadoRecife",
-    title: "Divergência no cálculo de verbas rescisórias — Filial Recife",
+    title: "Divergência no cálculo de verbas rescisórias (Filial Recife)",
     facts:
       "Ex-colaborador da Filial Recife contestou o cálculo das verbas rescisórias (férias proporcionais e horas extras do último mês). Sem acordo na conversa com o RH, o ex-colaborador ajuizou reclamação trabalhista. (dados fictícios)",
     category: "labor",
@@ -265,7 +267,7 @@ export const AURORA_OCCURRENCES: OccurrenceSeed[] = [
   {
     key: "procon",
     createdBy: "advogadoRecife",
-    title: "Reclamação no Procon sobre cobrança em duplicidade — Recife",
+    title: "Reclamação no Procon sobre cobrança em duplicidade (Recife)",
     facts:
       "Consumidora registrou reclamação no Procon alegando cobrança em duplicidade no cartão de crédito. O financeiro confirmou o erro e estornou o valor; a resposta foi protocolada e a reclamação foi encerrada como atendida. (dados fictícios)",
     category: "consumer_complaint",
@@ -318,16 +320,24 @@ export type ProcessSeed = {
   jurisdiction: string;
   area: LegalArea;
   phase: ProcessPhase;
+  /** Current instance (grau); omitted = not informed. "Em recurso" is the instance, never the phase (P0.5). */
+  instance?: ProcessInstance;
   status: ProcessStatus;
   unit: UnitKey;
   responsible: UserKey;
   claim: number | null;
-  provision: number | null;
   riskLevel: RiskLevel;
+  /**
+   * Official risk classification, registered through the contingency service
+   * (`addRiskAssessment`) with `riskRationale` as the opinion. Since v2 the
+   * provision is not typed in: it is computed from the classification (RN-05).
+   */
   lossProbability: LossProbability | null;
   riskRationale: string;
   filedAt: number;
   closedAt?: number;
+  /** Required when the process is out of the active portfolio (RN-12). */
+  closureReason?: ClosureReason;
   description: string;
   isConfidential?: boolean;
   fromOccurrence?: OccurrenceKey;
@@ -338,14 +348,14 @@ export type ProcessSeed = {
 };
 
 const AURORA_CLIENT = "Grupo Aurora Exemplo S.A.";
-export const IMPORT_SOURCE = "Planilha de migração — exemplo fictício";
+export const IMPORT_SOURCE = "Planilha de migração (exemplo fictício)";
 
 export const AURORA_PROCESSES: ProcessSeed[] = [
   {
     key: "horasExtras",
     createdBy: "advogada",
     number: "0001001-00.2025.5.02.0000",
-    title: "Reclamação trabalhista — horas extras e adicional noturno",
+    title: "Reclamação trabalhista: horas extras e adicional noturno",
     court: "TRT-2 (São Paulo)",
     courtDivision: "Vara do Trabalho fictícia nº 1",
     jurisdiction: "São Paulo/SP",
@@ -355,7 +365,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "sp",
     responsible: "advogada",
     claim: 185000,
-    provision: 62000,
     riskLevel: "high",
     lossProbability: "probable",
     riskRationale: "Cartões de ponto incompletos em dois meses do período; jornada noturna documentada parcialmente.",
@@ -369,7 +378,7 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     events: [
       { days: -210, type: "filing", title: "Distribuição da reclamação trabalhista" },
       { days: -190, type: "publication", title: "Notificação para audiência inicial recebida" },
-      { days: -160, type: "hearing", title: "Audiência inicial — sem acordo", description: "Partes presentes; conciliação recusada. (dados fictícios)" },
+      { days: -160, type: "hearing", title: "Audiência inicial: sem acordo", description: "Partes presentes; conciliação recusada. (dados fictícios)" },
       { days: -150, type: "petition", title: "Contestação protocolada com documentos" },
       { days: -95, type: "petition", title: "Réplica do reclamante juntada aos autos" },
       { days: -30, type: "publication", title: "Intimação: audiência de instrução designada" },
@@ -379,7 +388,7 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "equiparacaoRecife",
     createdBy: "advogadoRecife",
     number: "0001002-00.2025.5.06.0000",
-    title: "Reclamação trabalhista — equiparação salarial",
+    title: "Reclamação trabalhista: equiparação salarial",
     court: "TRT-6 (Pernambuco)",
     courtDivision: "Vara do Trabalho fictícia nº 3",
     jurisdiction: "Recife/PE",
@@ -389,7 +398,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "rec",
     responsible: "advogadoRecife",
     claim: 96000,
-    provision: 30000,
     riskLevel: "medium",
     lossProbability: "possible",
     riskRationale: "Paradigma indicado exercia atividades parcialmente diferentes; prova testemunhal será decisiva.",
@@ -401,7 +409,7 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     ],
     events: [
       { days: -140, type: "filing", title: "Distribuição da reclamação trabalhista" },
-      { days: -110, type: "hearing", title: "Audiência inicial — proposta de acordo recusada" },
+      { days: -110, type: "hearing", title: "Audiência inicial: proposta de acordo recusada" },
       { days: -100, type: "petition", title: "Contestação protocolada" },
       { days: -12, type: "decision", title: "Despacho determinando a apresentação de contrarrazões" },
     ],
@@ -410,8 +418,8 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "geladeiraJec",
     createdBy: "advogada",
     number: "0001003-00.2025.8.26.0000",
-    title: "Ação indenizatória — produto entregue com defeito",
-    court: "TJSP — Juizado Especial Cível",
+    title: "Ação indenizatória: produto entregue com defeito",
+    court: "TJSP (Juizado Especial Cível)",
     courtDivision: "Juizado Especial Cível fictício",
     jurisdiction: "São Paulo/SP",
     area: "consumer",
@@ -420,7 +428,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "sp",
     responsible: "advogada",
     claim: 25000,
-    provision: 6000,
     riskLevel: "medium",
     lossProbability: "possible",
     riskRationale: "Laudo da assistência técnica confirma defeito de fábrica; discute-se apenas o dano moral.",
@@ -440,17 +447,17 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "coletivaRecife",
     createdBy: "advogadoRecife",
     number: "0001004-00.2024.8.17.0000",
-    title: "Ação coletiva de consumo — prazos de entrega no Nordeste",
+    title: "Ação coletiva de consumo: prazos de entrega no Nordeste",
     court: "TJPE",
     courtDivision: "Vara Cível fictícia nº 12",
     jurisdiction: "Recife/PE",
     area: "consumer",
-    phase: "appeal",
+    phase: "knowledge",
+    instance: "second",
     status: "active",
     unit: "rec",
     responsible: "advogadoRecife",
     claim: 420000,
-    provision: 120000,
     riskLevel: "high",
     lossProbability: "possible",
     riskRationale: "Sentença parcialmente desfavorável; recurso pendente de julgamento.",
@@ -483,7 +490,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "sp",
     responsible: "advogada",
     claim: 310000,
-    provision: null,
     riskLevel: "low",
     lossProbability: "remote",
     riskRationale: "Empresa é autora; risco limitado à dificuldade de recuperar o crédito.",
@@ -505,7 +511,7 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "revisionalLocacao",
     createdBy: "gestor",
     number: "0001006-00.2025.8.16.0000",
-    title: "Ação revisional de aluguel — Centro de Distribuição de Curitiba",
+    title: "Ação revisional de aluguel: Centro de Distribuição de Curitiba",
     court: "TJPR",
     courtDivision: "Vara Cível fictícia nº 2",
     jurisdiction: "Curitiba/PR",
@@ -515,7 +521,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "cwb",
     responsible: "gestor",
     claim: 150000,
-    provision: 40000,
     riskLevel: "medium",
     lossProbability: "possible",
     riskRationale: "Laudo de avaliação do imóvel ainda não produzido.",
@@ -535,7 +540,7 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "execucaoFiscal",
     createdBy: "gestor",
     number: "0001007-00.2022.8.26.0000",
-    title: "Execução fiscal — ICMS (auto de infração fictício)",
+    title: "Execução fiscal: ICMS (auto de infração fictício)",
     court: "TJSP",
     courtDivision: "Vara de Execuções Fiscais fictícia",
     jurisdiction: "São Paulo/SP",
@@ -545,7 +550,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "sp",
     responsible: "gestor",
     claim: 1250000,
-    provision: 400000,
     riskLevel: "critical",
     lossProbability: "probable",
     riskRationale: "Defesa administrativa rejeitada; discussão restrita à multa e aos juros.",
@@ -559,7 +563,7 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
       { days: -1100, type: "filing", title: "Distribuição da execução fiscal" },
       { days: -1050, type: "petition", title: "Oferecimento de seguro garantia" },
       { days: -900, type: "petition", title: "Embargos à execução apresentados" },
-      { days: -200, type: "decision", title: "Sentença nos embargos — parcial procedência" },
+      { days: -200, type: "decision", title: "Sentença nos embargos: parcial procedência" },
       { days: -170, type: "petition", title: "Recurso interposto pela empresa" },
       { days: -10, type: "publication", title: "Intimação sobre renovação do seguro garantia" },
     ],
@@ -568,17 +572,17 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "mandadoSeguranca",
     createdBy: "gestor",
     number: "0001008-00.2024.4.03.0000",
-    title: "Mandado de segurança — base de cálculo de PIS/COFINS",
+    title: "Mandado de segurança: base de cálculo de PIS/COFINS",
     court: "TRF-3",
     courtDivision: "Vara Federal fictícia nº 5",
     jurisdiction: "São Paulo/SP",
     area: "tax",
-    phase: "appeal",
+    phase: "knowledge",
+    instance: "second",
     status: "suspended",
     unit: "sp",
     responsible: "gestor",
     claim: 780000,
-    provision: null,
     riskLevel: "low",
     lossProbability: "remote",
     riskRationale: "Empresa é impetrante; não há valores a provisionar.",
@@ -600,7 +604,7 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "acpAmbiental",
     createdBy: "gestor",
     number: "0001009-00.2025.8.16.0000",
-    title: "Ação civil pública ambiental — descarte de resíduos no CD Curitiba",
+    title: "Ação civil pública ambiental: descarte de resíduos no CD Curitiba",
     court: "TJPR",
     courtDivision: "Vara da Fazenda Pública fictícia",
     jurisdiction: "Curitiba/PR",
@@ -610,7 +614,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "cwb",
     responsible: "gestor",
     claim: 2000000,
-    provision: 350000,
     riskLevel: "high",
     lossProbability: "possible",
     riskRationale: "Discussão técnica sobre o volume de resíduos; perícia ambiental pendente.",
@@ -624,7 +627,7 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     events: [
       { days: -160, type: "filing", title: "Distribuição da ação civil pública" },
       { days: -130, type: "petition", title: "Contestação com relatório técnico preliminar" },
-      { days: -60, type: "hearing", title: "Audiência de conciliação — suspensa para tratativas" },
+      { days: -60, type: "hearing", title: "Audiência de conciliação: suspensa para tratativas" },
       { days: -18, type: "decision", title: "Decisão determinando perícia ambiental" },
     ],
   },
@@ -642,7 +645,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "sp",
     responsible: "advogada",
     claim: 180000,
-    provision: 45000,
     riskLevel: "medium",
     lossProbability: "possible",
     riskRationale: "Discute-se a rotulagem de produto importado; documentação técnica favorável.",
@@ -662,7 +664,7 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "assedioConfidencial",
     createdBy: "gestor",
     number: "0001011-00.2025.5.02.0000",
-    title: "Reclamação trabalhista — alegação de assédio moral (confidencial)",
+    title: "Reclamação trabalhista: alegação de assédio moral (confidencial)",
     court: "TRT-2 (São Paulo)",
     courtDivision: "Vara do Trabalho fictícia nº 4",
     jurisdiction: "São Paulo/SP",
@@ -672,7 +674,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "sp",
     responsible: "advogada",
     claim: 350000,
-    provision: 150000,
     riskLevel: "high",
     lossProbability: "probable",
     riskRationale: "Mensagens juntadas pela reclamante indicam conduta inadequada de gestor.",
@@ -694,7 +695,7 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "rescisaoRecife",
     createdBy: "advogadoRecife",
     number: "0001012-00.2025.5.06.0000",
-    title: "Reclamação trabalhista — diferenças de verbas rescisórias",
+    title: "Reclamação trabalhista: diferenças de verbas rescisórias",
     court: "TRT-6 (Pernambuco)",
     courtDivision: "Vara do Trabalho fictícia nº 8",
     jurisdiction: "Recife/PE",
@@ -704,7 +705,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "rec",
     responsible: "advogadoRecife",
     claim: 48000,
-    provision: 12000,
     riskLevel: "medium",
     lossProbability: "possible",
     riskRationale: "Divergência pontual no cálculo das férias proporcionais.",
@@ -718,14 +718,14 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     events: [
       { days: -40, type: "filing", title: "Distribuição da reclamação trabalhista" },
       { days: -28, type: "publication", title: "Notificação para audiência inicial" },
-      { days: -3, type: "hearing", title: "Audiência inicial — prazo para proposta de acordo" },
+      { days: -3, type: "hearing", title: "Audiência inicial: prazo para proposta de acordo" },
     ],
   },
   {
     key: "acidenteTransito",
     createdBy: "gestor",
     number: "0001013-00.2024.8.16.0000",
-    title: "Ação indenizatória — colisão envolvendo veículo de entrega",
+    title: "Ação indenizatória: colisão envolvendo veículo de entrega",
     court: "TJPR",
     courtDivision: "Vara Cível fictícia nº 5",
     jurisdiction: "Curitiba/PR",
@@ -735,7 +735,6 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     unit: "cwb",
     responsible: "gestor",
     claim: 95000,
-    provision: 30000,
     riskLevel: "medium",
     lossProbability: "possible",
     riskRationale: "Classificação importada da planilha; precisa ser revisada pela equipe.",
@@ -761,17 +760,17 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "terceirizado",
     createdBy: "advogada",
     number: "0001014-00.2023.5.02.0000",
-    title: "Reclamação trabalhista — ex-terceirizado (responsabilidade subsidiária)",
+    title: "Reclamação trabalhista: ex-terceirizado (responsabilidade subsidiária)",
     court: "TRT-2 (São Paulo)",
     courtDivision: "Vara do Trabalho fictícia nº 6",
     jurisdiction: "São Paulo/SP",
     area: "labor",
-    phase: "appeal",
+    phase: "knowledge",
+    instance: "second",
     status: "active",
     unit: "sp",
     responsible: "advogada",
     claim: 72000,
-    provision: 20000,
     riskLevel: "medium",
     lossProbability: "possible",
     riskRationale: "Classificação importada da planilha; responsabilidade subsidiária discutida em recurso.",
@@ -798,22 +797,22 @@ export const AURORA_PROCESSES: ProcessSeed[] = [
     key: "acordoEncerrado",
     createdBy: "advogada",
     number: "0001015-00.2024.8.26.0000",
-    title: "Ação de consumo encerrada por acordo — troca de mercadoria",
-    court: "TJSP — Juizado Especial Cível",
+    title: "Ação de consumo encerrada por acordo: troca de mercadoria",
+    court: "TJSP (Juizado Especial Cível)",
     courtDivision: "Juizado Especial Cível fictício",
     jurisdiction: "Santo André/SP",
     area: "consumer",
-    phase: "closed",
+    phase: "knowledge",
     status: "closed",
     unit: "sp",
     responsible: "advogada",
     claim: 12000,
-    provision: null,
     riskLevel: "low",
     lossProbability: "remote",
     riskRationale: "Encerrado com acordo cumprido.",
     filedAt: -260,
     closedAt: -150,
+    closureReason: "settlement_fulfilled",
     description: "Pedido de troca de mercadoria e indenização, encerrado por acordo homologado e cumprido. (dados fictícios)",
     parties: [
       { name: "Consumidora Exemplo Andrade", role: "plaintiff" },
@@ -875,7 +874,7 @@ export const AURORA_CONTRACTS: ContractSeed[] = [
   {
     key: "logistica",
     createdBy: "gestor",
-    title: "Prestação de serviços de transporte e logística — rota Sul e Sudeste",
+    title: "Prestação de serviços de transporte e logística: rota Sul e Sudeste",
     counterparty: "TransLog Exemplo Transportes Ltda.",
     type: "services",
     status: "active",
@@ -942,7 +941,7 @@ export const AURORA_CONTRACTS: ContractSeed[] = [
   {
     key: "ndaStartup",
     createdBy: "advogada",
-    title: "Acordo de confidencialidade — projeto de roteirização",
+    title: "Acordo de confidencialidade: projeto de roteirização",
     counterparty: "Startup Exemplo Tecnologia Ltda.",
     type: "nda",
     status: "active",
@@ -982,7 +981,7 @@ export const AURORA_CONTRACTS: ContractSeed[] = [
   {
     key: "limpezaRecife",
     createdBy: "advogadoRecife",
-    title: "Prestação de serviços de limpeza e conservação — Filial Recife",
+    title: "Prestação de serviços de limpeza e conservação: Filial Recife",
     counterparty: "Limpeza Exemplar Serviços Ltda.",
     type: "services",
     status: "active",
@@ -1021,7 +1020,7 @@ export const AURORA_CONTRACTS: ContractSeed[] = [
   {
     key: "consultoriaAmbiental",
     createdBy: "gestor",
-    title: "Consultoria ambiental — licenciamento do CD Curitiba",
+    title: "Consultoria ambiental: licenciamento do CD Curitiba",
     counterparty: "Consultoria Verde Exemplo Ltda.",
     type: "services",
     status: "expired",
@@ -1070,7 +1069,7 @@ export const AURORA_DOCUMENTS: DocumentSeed[] = [
     key: "contratoLogistica",
     uploadedBy: "gestor",
     file: "contrato-logistica-v1.txt",
-    title: "Contrato de transporte e logística — TransLog",
+    title: "Contrato de transporte e logística: TransLog",
     category: "contract",
     confidentiality: "internal",
     description: "Instrumento assinado (texto fictício para demonstração).",
@@ -1081,7 +1080,7 @@ export const AURORA_DOCUMENTS: DocumentSeed[] = [
     key: "notificacaoEmbalagens",
     uploadedBy: "advogada",
     file: "notificacao-extrajudicial-embalagens.txt",
-    title: "Notificação extrajudicial — Embalagens Modelo",
+    title: "Notificação extrajudicial: Embalagens Modelo",
     category: "correspondence",
     confidentiality: "internal",
     description: "Notificação recebida pela Matriz (texto fictício).",
@@ -1092,7 +1091,7 @@ export const AURORA_DOCUMENTS: DocumentSeed[] = [
     key: "resumoHorasExtras",
     uploadedBy: "advogada",
     file: "resumo-reclamacao-trabalhista.txt",
-    title: "Resumo interno da reclamação trabalhista — horas extras",
+    title: "Resumo interno da reclamação trabalhista: horas extras",
     category: "report",
     confidentiality: "internal",
     description: "Resumo preparado pela equipe para a audiência de instrução (texto fictício).",
@@ -1122,7 +1121,7 @@ export const AURORA_DOCUMENTS: DocumentSeed[] = [
     key: "ataAmbiental",
     uploadedBy: "gestor",
     file: "ata-reuniao-comite-ambiental.txt",
-    title: "Ata do comitê de meio ambiente — autuação preliminar",
+    title: "Ata do comitê de meio ambiente: autuação preliminar",
     category: "internal",
     confidentiality: "internal",
     description: "Ata da reunião sobre a autuação no CD de Curitiba (texto fictício).",
@@ -1143,7 +1142,7 @@ export const AURORA_DOCUMENTS: DocumentSeed[] = [
     key: "relatoDenuncia",
     uploadedBy: "gestor",
     file: "relato-canal-denuncias.txt",
-    title: "Registro do canal de denúncias — relato EX-0007",
+    title: "Registro do canal de denúncias: relato EX-0007",
     category: "evidence",
     confidentiality: "restricted",
     description: "Relato sigiloso; acesso restrito (texto fictício).",
@@ -1181,7 +1180,7 @@ export const AURORA_DEADLINES: DeadlineSeed[] = [
   },
   {
     createdBy: "advogada",
-    title: "Audiência de instrução — reclamação de horas extras",
+    title: "Audiência de instrução: reclamação de horas extras",
     due: 12,
     kind: "procedural",
     priority: "high",
@@ -1190,7 +1189,7 @@ export const AURORA_DEADLINES: DeadlineSeed[] = [
   },
   {
     createdBy: "advogadoRecife",
-    title: "Apresentar contrarrazões — equiparação salarial",
+    title: "Apresentar contrarrazões: equiparação salarial",
     due: 4,
     kind: "procedural",
     priority: "urgent",

@@ -160,7 +160,7 @@ export function ImportForm({ companies, units, today }: ImportFormProps) {
         </Button>
         <p className="text-xs text-muted-foreground" aria-live="polite">
           {pending
-            ? "Lendo as abas e conferindo cada linha — planilhas grandes podem levar alguns segundos."
+            ? "Lendo as abas e conferindo cada linha. Planilhas grandes podem levar alguns segundos."
             : "Nada é gravado na carteira nesta etapa: você confere o relatório antes de confirmar."}
         </p>
       </div>

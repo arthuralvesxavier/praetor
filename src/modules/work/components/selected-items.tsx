@@ -55,7 +55,7 @@ export function SelectedDeadline({ ctx, item, today }: { ctx: AuthContext; item:
             item.validatedAt
               ? {
                   label: item.validationStatus === "rejected" ? "Rejeitado por" : "Validado por",
-                  value: `${item.validatedByName ?? "—"} em ${formatDateTime(item.validatedAt)}`,
+                  value: `${item.validatedByName ?? "Responsável não informado"} em ${formatDateTime(item.validatedAt)}`,
                 }
               : null,
             item.validationNote ? { label: "Observação da validação", value: item.validationNote, full: true } : null,

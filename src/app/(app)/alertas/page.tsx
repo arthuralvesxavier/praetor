@@ -82,7 +82,7 @@ export default async function AlertasPage(props: PageProps<"/alertas">) {
 
   const typeOptions = (area ? [...ALERT_TYPES_BY_AREA[area]] : ALERT_TYPES_IN_AREA_ORDER).map((t: AlertType) => ({
     value: t,
-    label: area ? ALERT_TYPE_LABELS[t] : `${ALERT_AREA_LABELS[alertAreaOf(t)]} — ${ALERT_TYPE_LABELS[t]}`,
+    label: area ? ALERT_TYPE_LABELS[t] : `${ALERT_AREA_LABELS[alertAreaOf(t)]}: ${ALERT_TYPE_LABELS[t]}`,
   }));
 
   return (
@@ -90,7 +90,7 @@ export default async function AlertasPage(props: PageProps<"/alertas">) {
       <PageHeader
         title="Alertas e pendências"
         description="Painel de pendências da carteira, agrupado por área. Os alertas são gerados pelas rotinas e pelos módulos; resolva-os quando a pendência for tratada."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Alertas e pendências" }]}
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Alertas e pendências" }]}
       />
 
       <div className="flex flex-col gap-6">

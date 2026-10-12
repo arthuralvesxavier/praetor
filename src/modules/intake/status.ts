@@ -6,6 +6,8 @@
 import {
   ASSIGNMENT_METHOD_LABELS,
   INTAKE_SOURCE_LABELS,
+  INTAKE_STATUS_LABELS,
+  INTAKE_STATUSES,
   type AssignmentMethod,
   type CaseBriefStatus,
   type IntakeSource,
@@ -13,7 +15,22 @@ import {
 } from "@/domain/enums";
 import type { Tone } from "@/lib/tones";
 
-export const INTAKE_STATUS_TONES: Record<IntakeStatus, Tone> = {
+/**
+ * Status shown to users. Besides the stored statuses it has `brief_rejected`:
+ * the lawyer rejected the preliminary analysis and a new version must be
+ * generated. It is computed at read time only (never stored, not part of
+ * `INTAKE_STATUSES`).
+ */
+export type EffectiveIntakeStatus = IntakeStatus | "brief_rejected";
+
+export const EFFECTIVE_INTAKE_STATUSES = [...INTAKE_STATUSES, "brief_rejected"] as const satisfies readonly EffectiveIntakeStatus[];
+
+export const EFFECTIVE_INTAKE_STATUS_LABELS: Record<EffectiveIntakeStatus, string> = {
+  ...INTAKE_STATUS_LABELS,
+  brief_rejected: "Análise rejeitada: gerar nova versão",
+};
+
+export const INTAKE_STATUS_TONES: Record<EffectiveIntakeStatus, Tone> = {
   received: "neutral",
   assigned: "info",
   analyzing: "info",
@@ -21,6 +38,7 @@ export const INTAKE_STATUS_TONES: Record<IntakeStatus, Tone> = {
   notified: "primary",
   in_review: "warning",
   approved: "success",
+  brief_rejected: "alert",
   failed: "danger",
   cancelled: "neutral",
 };
@@ -38,15 +56,22 @@ export const PIPELINE_STATUSES = [
 
 /**
  * Status shown to users: the brief review happens in the briefs module, so an
- * intake whose brief is being edited reads "Em revisão" and an approved brief
- * reads "Análise aprovada" — computed here, never written into other modules.
- * Failures and cancellations stay visible.
+ * intake whose brief is being edited reads "Em revisão", an approved brief
+ * reads "Análise aprovada" and a rejected one "Análise rejeitada" — computed
+ * here, never written into other modules. Failures and cancellations stay
+ * visible. Keep in sync with `effectiveStatusSql` in ./service.ts.
  */
-export function effectiveIntakeStatus(status: IntakeStatus, briefStatus: CaseBriefStatus | null | undefined): IntakeStatus {
+export function effectiveIntakeStatus(status: IntakeStatus, briefStatus: CaseBriefStatus | null | undefined): EffectiveIntakeStatus {
   if (status === "failed" || status === "cancelled") return status;
   if (briefStatus === "approved") return "approved";
   if (briefStatus === "in_review") return "in_review";
+  if (briefStatus === "rejected") return "brief_rejected";
   return status;
+}
+
+/** An intake is still open (its responsible follows the process) until it is cancelled or its brief approved. */
+export function isOpenIntake(status: IntakeStatus, briefStatus: CaseBriefStatus | null | undefined): boolean {
+  return status !== "cancelled" && briefStatus !== "approved";
 }
 
 /** The pipeline still has automatic work to do (used for auto-refresh). */
@@ -217,7 +242,7 @@ export function buildPipelineStages(i: PipelineInput): PipelineStage[] {
       state: "done",
       at: i.email?.createdAt ?? stepDate(step),
       actor: step?.actorName ?? "Sistema",
-      detail: `Envio simulado para ${i.email?.toName ?? i.assignedToName ?? "o advogado responsável"} — nenhuma mensagem foi enviada.`,
+      detail: `Envio simulado para ${i.email?.toName ?? i.assignedToName ?? "o advogado responsável"}. Nenhuma mensagem foi enviada.`,
     });
   } else if (!analysisDone) {
     stages.push({ key: "email", label: STAGE_LABELS.email, state: "pending", at: null, actor: null, detail: null });
@@ -280,7 +305,7 @@ export function buildPipelineStages(i: PipelineInput): PipelineStage[] {
       state: "failed",
       at: brief.rejectedAt,
       actor: brief.rejectedByName,
-      detail: "Análise rejeitada pelo advogado — pode ser gerada novamente.",
+      detail: "Análise rejeitada pelo advogado. Pode ser gerada novamente.",
     });
   } else {
     stages.push({ key: "approval", label: STAGE_LABELS.approval, state: "pending", at: null, actor: null, detail: null });

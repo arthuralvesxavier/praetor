@@ -6,12 +6,41 @@ import { listAlerts } from "@/modules/alerts/service";
 import { runHearingAlertsRoutine } from "@/modules/hearings/routines";
 import { createHearing, setHearingStatus, updateHearing } from "@/modules/hearings/service";
 import type { RoutineContext } from "@/server/jobs/routines";
-import { alerts, hearings, organizations } from "@/server/db/schema";
+import { alerts, emailMessages, hearings, organizations } from "@/server/db/schema";
 import { makeProcess, setupFixture, type Fixture } from "../helpers/fixtures";
 
-const sendTemplatedEmail = vi.fn<(...args: unknown[]) => Promise<{ emailId: string }>>(async () => ({
-  emailId: "00000000-0000-0000-0000-000000000001",
-}));
+/**
+ * The routine reads "already reminded" from `email_messages`, so the mock
+ * stores a minimal simulated message (like the real service does).
+ */
+const sendTemplatedEmail = vi.fn<(...args: unknown[]) => Promise<{ emailId: string }>>(async (...args: unknown[]) => {
+  const [ctx, input] = args as [
+    { organizationId: string },
+    { template: "hearing_reminder"; toUserId: string; processId: string; entity: { type: "hearing"; id: string } },
+  ];
+  const [row] = await fx.db
+    .insert(emailMessages)
+    .values({
+      organizationId: ctx.organizationId,
+      mode: "simulated",
+      provider: "simulated",
+      template: input.template,
+      status: "simulated",
+      toUserId: input.toUserId,
+      toName: "Destinatário (fictício)",
+      toAddress: "destinatario@example.com",
+      fromName: "Praetor (simulação)",
+      fromAddress: "nao-responda@example.com",
+      subject: "[Simulação] Lembrete de audiência",
+      bodyText: "Corpo fictício.",
+      bodyHtml: "<p>Corpo fictício.</p>",
+      entityType: input.entity.type,
+      entityId: input.entity.id,
+      processId: input.processId,
+    })
+    .returning({ id: emailMessages.id });
+  return { emailId: row.id };
+});
 vi.mock("@/modules/emails/service", () => ({
   sendTemplatedEmail: (...args: unknown[]) => sendTemplatedEmail(...args),
 }));
@@ -80,9 +109,10 @@ describe("runHearingAlertsRoutine", () => {
     expect(await openHearingAlerts(fx.orgB)).toHaveLength(0);
   });
 
-  it("sends the simulated reminder only for newly created alerts with a responsible person", async () => {
-    // First run happened in the previous test with the mock cleared afterwards: run again on a fresh window.
+  it("sends the simulated reminder once per hearing with a responsible person", async () => {
+    // First run happened in the previous test with the mock cleared afterwards: start again from a clean state.
     await fx.db.update(alerts).set({ resolvedAt: new Date() }).where(eq(alerts.organizationId, fx.orgA));
+    await fx.db.delete(emailMessages).where(eq(emailMessages.organizationId, fx.orgA));
     sendTemplatedEmail.mockClear();
     await runHearingAlertsRoutine(rc(fx.orgA));
     expect(sendTemplatedEmail).toHaveBeenCalledTimes(2); // tomorrow + inFive (the third has no responsible)
@@ -91,7 +121,7 @@ describe("runHearingAlertsRoutine", () => {
     expect(ctxArg.organizationId).toBe(fx.orgA);
     expect(input.template).toBe("hearing_reminder");
     expect(input.toUserId).toBe(fx.ctx.lawyer.userId);
-    expect(input.linkPath).toBe(`/processos/${ids.pSp}?aba=audiencias`);
+    expect(input.linkPath).toBe(`/processos/${ids.pSp}?aba=prazos-e-audiencias#audiencias`);
     expect(input.entity).toEqual({ type: "hearing", id: expect.any(String) });
 
     sendTemplatedEmail.mockClear();
@@ -99,10 +129,18 @@ describe("runHearingAlertsRoutine", () => {
     expect(sendTemplatedEmail).not.toHaveBeenCalled();
     expect(again).not.toContain("lembrete");
     expect(await openHearingAlerts(fx.orgA)).toHaveLength(3);
+
+    // Resolving the alerts reopens them on the next run (convention), but the reminder is not sent again.
+    await fx.db.update(alerts).set({ resolvedAt: new Date() }).where(eq(alerts.organizationId, fx.orgA));
+    const afterResolve = await runHearingAlertsRoutine(rc(fx.orgA));
+    expect(sendTemplatedEmail).not.toHaveBeenCalled();
+    expect(afterResolve).not.toContain("lembrete");
+    expect(await openHearingAlerts(fx.orgA)).toHaveLength(3);
   });
 
   it("never fails because of the e-mail", async () => {
     await fx.db.update(alerts).set({ resolvedAt: new Date() }).where(eq(alerts.organizationId, fx.orgA));
+    await fx.db.delete(emailMessages).where(eq(emailMessages.organizationId, fx.orgA));
     sendTemplatedEmail.mockRejectedValueOnce(new Error("smtp down"));
     const summary = await runHearingAlertsRoutine(rc(fx.orgA));
     expect(summary).toContain("não gerado");
@@ -146,7 +184,7 @@ describe("runHearingAlertsRoutine", () => {
   it("hearing alerts follow the visibility of the process and link to its tab", async () => {
     const forLawyer = await listAlerts(fx.ctx.lawyer, { limit: 50 });
     const hearingAlert = forLawyer.find((a) => a.entityId === ids.far);
-    expect(hearingAlert?.href).toBe(`/processos/${ids.pSp}?aba=audiencias`);
+    expect(hearingAlert?.href).toBe(`/processos/${ids.pSp}?aba=prazos-e-audiencias#audiencias`);
     expect(hearingAlert?.area).toBe("hearings");
     expect((await listAlerts(fx.ctx.lawyerRe, { limit: 50 })).some((a) => a.type === "hearing_upcoming")).toBe(false);
     expect((await listAlerts(fx.ctx.adminB, { limit: 50 })).some((a) => a.type === "hearing_upcoming")).toBe(false);

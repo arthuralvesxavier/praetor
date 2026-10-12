@@ -60,7 +60,7 @@ export default async function LawFirmDetailPage(props: PageProps<"/admin/escrito
                 triggerLabel="Desativar"
                 triggerVariant="outline"
                 title="Desativar escritório?"
-                description="O escritório deixa de aparecer para novas atribuições e regras. Usuários e processos já vinculados não são alterados — para retirar o acesso, desative os usuários do escritório."
+                description="O escritório deixa de aparecer para novas atribuições e regras. Usuários e processos já vinculados não são alterados. Para retirar o acesso, desative os usuários do escritório."
                 confirmLabel="Desativar"
                 pendingLabel="Desativando…"
               />

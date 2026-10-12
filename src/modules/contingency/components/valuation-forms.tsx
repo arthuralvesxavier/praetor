@@ -70,7 +70,7 @@ function ValuationFields({
       <Callout tone={canApprove ? "info" : "warning"} className="sm:col-span-2">
         {canApprove
           ? "Você confere valores: este lançamento entra como OFICIAL, com você identificado como responsável pela conferência."
-          : "Este lançamento entra como PROPOSTO e só passa a valer depois da conferência de uma pessoa autorizada (RN-11)."}
+          : "Este lançamento entra como PROPOSTO e só passa a valer depois da conferência de uma pessoa autorizada."}
       </Callout>
       <FormField label="Tipo de valor" htmlFor="valuation-kind" required error={err("kind")}>
         <NativeSelect name="kind" options={optionsFromLabels(VALUATION_KIND_LABELS)} defaultValue="liquidated" required />
@@ -121,7 +121,7 @@ export function ExtinctionDialog({
   processId,
   documents,
   canApprove,
-  triggerLabel = "Registrar quitação (RN-06)",
+  triggerLabel = "Registrar quitação",
   triggerVariant = "outline",
 }: {
   processId: string;
@@ -139,7 +139,7 @@ export function ExtinctionDialog({
         </Button>
       }
       title="Registrar quitação"
-      description="Extinção pela satisfação (RN-06): registra um valor liquidado de R$ 0,00 com motivo “Quitação”. O histórico de valores é mantido."
+      description="Extinção pela satisfação: registra um valor liquidado de R$ 0,00 com motivo “Quitação”. O histórico de valores é mantido."
       action={registerExtinctionAction}
       hiddenFields={{ processId }}
       submitLabel={canApprove ? "Registrar quitação" : "Enviar para conferência"}

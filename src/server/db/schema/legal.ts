@@ -1,10 +1,11 @@
 import { sql } from "drizzle-orm";
-import { bigint, boolean, date, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, check, date, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type {
   ClosureReason,
   ContractStatus,
   ContractType,
   DataOrigin,
+  LegacyProcessPhase,
   LegalArea,
   LiabilityNature,
   LossProbability,
@@ -61,6 +62,16 @@ export const legalProcesses = pgTable(
     state: text("state"),
     /** Fase como veio da fonte (ex.: "Execução — ARQUIVADO def. …"), preservada para conferência. */
     phaseDetail: text("phase_detail"),
+    /**
+     * Fase do modelo anterior (pre_filing, appeal, settlement, closed) guardada pela migração
+     * 0012_phase_instance_split, que separou fase e instância. Só leitura (histórico); nunca gravada
+     * pelo sistema. Null = o processo já estava numa das três fases atuais.
+     */
+    legacyPhase: text("legacy_phase").$type<LegacyProcessPhase>(),
+    /** A migração 0012 preencheu a instância (antes vazia) a partir da fase "Recursal" (a reversão a esvazia). */
+    legacyInstanceSet: boolean("legacy_instance_set").notNull().default(false),
+    /** A migração 0012 ligou a marcação de verificação (antes desligada) (a reversão a desliga). */
+    legacyVerificationSet: boolean("legacy_verification_set").notNull().default(false),
     /** Valor da causa (exposição declarada). Nunca somado ao liquidado (RN-02). Null = não informado. */
     claimAmountCents: cents("claim_amount_cents"),
     /** Valor liquidado/apurado oficial vigente (espelho da última valoração oficial). Null = não apurado (RN-03). */
@@ -80,6 +91,8 @@ export const legalProcesses = pgTable(
     needsVerification: boolean("needs_verification").notNull().default(false),
     verificationNote: text("verification_note"),
     lastMovementAt: date("last_movement_at", { mode: "string" }),
+    /** Assuntos (tabela unificada do CNJ) como informados pelo tribunal (DataJud). Null = não coletado. */
+    subjects: jsonb("subjects").$type<{ code: number; name: string }[]>(),
     description: text("description"),
     /** Confidential records are only visible to admins, legal managers and the responsible user. */
     isConfidential: boolean("is_confidential").notNull().default(false),
@@ -107,6 +120,19 @@ export const legalProcesses = pgTable(
     index("legal_processes_org_court_idx").on(t.organizationId, t.court),
     index("legal_processes_org_phase_idx").on(t.organizationId, t.phase),
     index("legal_processes_law_firm_idx").on(t.lawFirmId),
+    // P0.6: filtros da carteira (cidade, classe) e a reversão de importação (lote).
+    index("legal_processes_org_city_idx").on(t.organizationId, t.city),
+    index("legal_processes_org_class_idx").on(t.organizationId, t.processClass),
+    index("legal_processes_import_batch_idx")
+      .on(t.organizationId, t.importBatchId)
+      .where(sql`${t.importBatchId} is not null`),
+    // P0.6: casamento por número CNJ na importação. A expressão é a MESMA de
+    // `loadExistingProcesses` (src/modules/imports/service.ts); mudou uma, mude a outra.
+    index("legal_processes_org_number_digits_idx")
+      .on(t.organizationId, sql`regexp_replace(${t.number}, '[^0-9]', '', 'g')`)
+      .where(sql`${t.deletedAt} is null`),
+    // P0.5: fase e instância são eixos distintos; só as três fases atuais podem ser gravadas.
+    check("legal_processes_phase_ck", sql`${t.phase} in ('knowledge', 'liquidation', 'enforcement')`),
   ],
 );
 
@@ -129,6 +155,8 @@ export const processInstances = pgTable(
     processClass: text("process_class"),
     phase: text("phase").$type<ProcessPhase>(),
     phaseDetail: text("phase_detail"),
+    /** Fase do modelo anterior guardada pela migração 0012_phase_instance_split (só leitura). */
+    legacyPhase: text("legacy_phase").$type<LegacyProcessPhase>(),
     claimAmountCents: cents("claim_amount_cents"),
     liquidatedAmountCents: cents("liquidated_amount_cents"),
     /** True for the instance where the process currently is. */
@@ -144,6 +172,10 @@ export const processInstances = pgTable(
   (t) => [
     uniqueIndex("process_instances_process_instance_uq").on(t.processId, t.instance),
     index("process_instances_org_idx").on(t.organizationId, t.instance),
+    index("process_instances_import_batch_idx")
+      .on(t.organizationId, t.importBatchId)
+      .where(sql`${t.importBatchId} is not null`),
+    check("process_instances_phase_ck", sql`${t.phase} is null or ${t.phase} in ('knowledge', 'liquidation', 'enforcement')`),
   ],
 );
 
@@ -183,10 +215,17 @@ export const processEvents = pgTable(
     /** Código da tabela de movimentos do CNJ, quando conhecido (nunca inventado). */
     cnjMovementCode: integer("cnj_movement_code"),
     instance: text("instance").$type<ProcessInstance>(),
+    /** Identificador estável na fonte externa (DataJud: código|dataHora|grau), para nunca duplicar a movimentação. */
+    externalId: text("external_id"),
     createdById: uuid("created_by_id").references(() => users.id),
     createdAt: createdAt(),
   },
-  (t) => [index("process_events_process_idx").on(t.processId, t.occurredAt)],
+  (t) => [
+    index("process_events_process_idx").on(t.processId, t.occurredAt),
+    uniqueIndex("process_events_external_uq")
+      .on(t.processId, t.externalSource, t.externalId)
+      .where(sql`${t.externalId} is not null`),
+  ],
 );
 
 // ---------------------------------------------------------------------------

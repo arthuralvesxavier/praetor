@@ -115,8 +115,8 @@ describe("pages", () => {
     const html = await renderPage(Page as never, fx.ctx.lawyer);
     expect(html).toContain("Alertas e pendências");
     expect(html).toContain("Audiências e pauta");
-    expect(html).toContain("Verificações");
-    expect(html).toContain(`/processos/${ids.p}?aba=audiencias`);
+    expect(html).toContain("Cadastros a conferir");
+    expect(html).toContain(`/processos/${ids.p}?aba=prazos-e-audiencias#audiencias`);
     expect(html).toContain("Resolver");
 
     const area = await renderPage(Page as never, fx.ctx.lawyer, { area: "audiencias" });

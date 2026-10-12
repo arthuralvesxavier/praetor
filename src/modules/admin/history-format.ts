@@ -29,7 +29,7 @@ import {
   OCCURRENCE_STATUS_LABELS,
   PRIORITY_LABELS,
   PROCESS_INSTANCE_LABELS,
-  PROCESS_PHASE_LABELS,
+  PROCESS_PHASE_DISPLAY_LABELS,
   PROCESS_STATUS_LABELS,
   RENEWAL_TYPE_LABELS,
   RISK_LEVEL_LABELS,
@@ -44,6 +44,7 @@ import {
   VALUATION_SOURCE_LABELS,
   VALUATION_STATUS_LABELS,
   ANALYSIS_REVIEW_STATUS_LABELS,
+  CORRECTION_INDEX_LABELS,
   type EntityType,
 } from "@/domain/enums";
 import { formatDate, formatDateTime, formatMoneyCents, formatNumber } from "@/lib/format";
@@ -160,8 +161,8 @@ const FIELD_LABELS: Record<string, string> = {
   liquidatedAmountCents: "Valor liquidado / apurado",
   riskPercentageBp: "Percentual de risco",
   closureReason: "Motivo de saída da carteira",
-  needsVerification: "Marcado para verificação",
-  verificationNote: "Nota de verificação",
+  needsVerification: "Pendente de conferência",
+  verificationNote: "Nota da conferência",
   lastMovementAt: "Última movimentação",
   liabilityNature: "Natureza da responsabilidade",
   // v2 — empresas e escritórios
@@ -169,9 +170,9 @@ const FIELD_LABELS: Record<string, string> = {
   contactName: "Contato",
   contactEmail: "E-mail do contato",
   // v2 — parâmetros
-  riskPercentRemote: "Percentual de provisão — remota",
-  riskPercentPossible: "Percentual de provisão — possível",
-  riskPercentProbable: "Percentual de provisão — provável",
+  riskPercentRemote: "Percentual de provisão (remota)",
+  riskPercentPossible: "Percentual de provisão (possível)",
+  riskPercentProbable: "Percentual de provisão (provável)",
   confidenceThreshold: "Confiança mínima para conferência em lote",
   idleGuaranteeDays: "Garantia parada após (dias)",
   rulesVersion: "Versão das regras de risco",
@@ -182,6 +183,14 @@ const FIELD_LABELS: Record<string, string> = {
   autoAssign: "Distribuição automática na entrada",
   autoGenerateBrief: "Análise preliminar automática (simulada)",
   autoNotify: "Notificação automática ao advogado (simulada)",
+  datajudEnabled: "Acompanhamento automático no DataJud",
+  syncIntervalHours: "Intervalo entre consultas ao DataJud (horas)",
+  maxRequestsPerMinute: "Requisições por minuto por tribunal",
+  batchSize: "Números por consulta ao DataJud",
+  autoApplyPhase: "Aplicar mudanças de fase inequívocas do DataJud",
+  enrichOnIntake: "Completar processos recebidos por API com o DataJud",
+  simulatedFeedEnabled: "Chegada automática simulada",
+  simulatedFeedIntervalMinutes: "Intervalo da chegada simulada (minutos)",
   // v2 — contingências, acordos, audiências, entrada
   amountCents: "Valor",
   totalAmountCents: "Valor total",
@@ -190,6 +199,8 @@ const FIELD_LABELS: Record<string, string> = {
   percentageBp: "Percentual aplicado",
   opinion: "Parecer",
   effectiveFrom: "Vigente desde",
+  correctionIndex: "Índice de atualização",
+  defaultCorrectionIndex: "Índice de atualização dos novos valores",
   source: "Fonte",
   reason: "Motivo",
   confidence: "Confiança",
@@ -213,6 +224,14 @@ const FIELD_LABELS: Record<string, string> = {
   template: "Modelo de e-mail",
   approvalNote: "Nota da aprovação",
   rejectionReason: "Motivo da rejeição",
+  // pedidos do processo
+  claimCategory: "Categoria do pedido",
+  claimedAmountCents: "Valor do pedido",
+  claimAmountBaseDate: "Data-base do valor do pedido",
+  claimCorrectionIndex: "Índice de atualização do pedido",
+  claimInstance: "Instância do pedido",
+  claimDescription: "Descrição do pedido",
+  claimStatus: "Situação do pedido",
 };
 
 export function fieldLabel(key: string): string {
@@ -281,11 +300,15 @@ function enumLabels(entityType: EntityType | null, key: string): Record<string, 
     case "area":
       return LEGAL_AREA_LABELS;
     case "phase":
-      return PROCESS_PHASE_LABELS;
+      // History may hold phases of the previous model (before P0.5): shown with their former labels.
+      return PROCESS_PHASE_DISPLAY_LABELS;
     case "confidentiality":
       return CONFIDENTIALITY_LABELS;
     case "lossProbability":
       return LOSS_PROBABILITY_LABELS;
+    case "correctionIndex":
+    case "defaultCorrectionIndex":
+      return CORRECTION_INDEX_LABELS;
     case "role":
       return ROLE_LABELS;
     case "renewalType":
@@ -408,20 +431,22 @@ const ACTION_LABELS: Record<string, string> = {
   // v2 — carteira
   "legal_process.close": "Processo retirado da carteira ativa",
   "legal_process.reactivate": "Processo reativado na carteira ativa",
-  "legal_process.verification_flag": "Processo marcado para verificação",
-  "legal_process.verification_resolve": "Verificação do processo concluída",
+  "legal_process.verification_flag": "Processo marcado como pendente de conferência",
+  "legal_process.verification_resolve": "Conferência do processo concluída",
   "legal_process.export": "Exportação da carteira de processos",
   "legal_process.instance_add": "Instância incluída no processo",
   "legal_process.instance_update": "Instância do processo alterada",
   "legal_process.instance_remove": "Instância removida do processo",
   "legal_process.assign": "Responsável do processo definido",
+  "legal_process.phase_migration": "Fase e instância separadas (migração do modelo)",
+  "legal_process.phase_migration_rollback": "Migração de fase e instância revertida",
   // v2 — contingências
   "valuation.propose": "Valor proposto para conferência",
   "valuation.create": "Valor registrado como oficial",
   "valuation.approve": "Valor conferido e oficializado",
   "valuation.correct": "Valor proposto corrigido na conferência",
   "valuation.reject": "Valor proposto rejeitado",
-  "valuation.extinction": "Quitação registrada (RN-06)",
+  "valuation.extinction": "Quitação registrada",
   "guarantee.create": "Garantia vinculada",
   "guarantee.update": "Garantia alterada",
   "guarantee.status_change": "Situação de garantia alterada",
@@ -430,6 +455,15 @@ const ACTION_LABELS: Record<string, string> = {
   "risk_assessment.suggest": "Classificação sugerida por regra (não oficial)",
   "risk_assessment.approve": "Sugestão de classificação aprovada",
   "risk_assessment.reject": "Sugestão de classificação rejeitada",
+  "risk_assessment.derive": "Classificação de risco derivada dos pedidos",
+  "risk_assessment.override": "Classificação de risco definida manualmente (diferente da derivada dos pedidos)",
+  "claim.create": "Pedido incluído no processo",
+  "claim.update": "Pedido do processo alterado",
+  "claim.delete": "Pedido do processo excluído",
+  "claim.suggest": "Pedidos sugeridos pela análise preliminar",
+  "claim.confirm": "Pedido sugerido confirmado",
+  "claim.dismiss": "Pedido sugerido descartado",
+  "claim_assessment.create": "Avaliação de risco de pedido registrada",
   "settlement.create": "Acordo registrado",
   "settlement.update_terms": "Termos do acordo alterados",
   "settlement.status_change": "Situação do acordo alterada",
@@ -439,6 +473,7 @@ const ACTION_LABELS: Record<string, string> = {
   "snapshot.generate": "Prévia do fechamento mensal calculada",
   "snapshot.close": "Competência mensal fechada",
   "snapshot.export": "Fechamento mensal exportado (CSV)",
+  "provision_memo.export": "Memória de cálculo da provisão exportada",
   // v2 — audiências
   "hearing.create": "Audiência cadastrada",
   "hearing.update": "Audiência alterada",
@@ -449,8 +484,17 @@ const ACTION_LABELS: Record<string, string> = {
   "import_batch.rollback": "Importação de planilha desfeita",
   "import_batch.distribute": "Distribuição após importação de planilha",
   "import_batch.download": "Download da planilha original da importação",
+  "import_batch.export_issues": "Exportação das inconsistências da importação (CSV)",
   // v2 — entrada, distribuição, e-mails
   "intake.create": "Entrada de processo registrada",
+  // Coleta no DataJud e API de entrada
+  "legal_process.court_sync": "Atualização automática pelo DataJud (CNJ)",
+  "organization.court_sync_request": "Sincronização da carteira com o DataJud solicitada",
+  "organization.integration_settings_update": "Parâmetros do DataJud e da chegada simulada alterados",
+  "api_key.create": "Chave de API criada",
+  "api_key.revoke": "Chave de API revogada",
+  "inbound.receive": "Processo recebido por API",
+  "inbound.update_existing": "Novo envio por API de processo já cadastrado",
   "intake.process_start": "Processamento da entrada iniciado",
   "intake.reprocess": "Reprocessamento da entrada solicitado",
   "intake.brief_request": "Análise preliminar solicitada na entrada",
@@ -466,6 +510,23 @@ const ACTION_LABELS: Record<string, string> = {
   "contract.terminate": "Rescisão de contrato registrada",
   "contract_obligation.fulfill": "Obrigação contratual cumprida",
   "report.export": "Exportação de relatório",
+  // Painéis Power BI
+  "organization.bi_settings_update": "Configuração dos painéis Power BI alterada",
+  "bi.embed_view": "Painel Power BI exibido",
+  "bi.refresh_request": "Atualização dos painéis Power BI solicitada",
+  "bi.connection_test": "Teste de conexão com o Power BI",
+  // Relatórios jurídicos (PDF)
+  "legal_report.generate": "Relatório jurídico gerado (PDF pendente de revisão)",
+  "legal_report.regenerate": "Nova versão de relatório jurídico gerada (anterior substituída)",
+  "legal_report.approve": "Relatório jurídico aprovado",
+  "legal_report.download": "Download do PDF de relatório jurídico",
+  "organization.legal_reports_settings_update": "Parâmetros dos relatórios jurídicos alterados",
+  "process_scenario.create": "Cenário do processo registrado",
+  // Índices de correção (P1.7)
+  "valuation.correction_index_set": "Índice de atualização de valor informado",
+  "valuation.correction_index_replace": "Índice de atualização de valor oficial trocado (novo registro)",
+  "organization.correction_index_default_update": "Índice de atualização dos novos valores alterado",
+  "organization.index_series_refresh_request": "Coleta das séries de índices (Banco Central) solicitada",
 };
 
 const VERB_LABELS: Record<string, string> = {
@@ -549,6 +610,8 @@ const ACTION_PREFIX_ENTITY: Record<string, EntityType> = {
   snapshot: "snapshot",
   distribution_rule: "distribution_rule",
   distribution: "distribution_rule",
+  api_key: "api_key",
+  legal_report: "legal_report",
 };
 
 /** pt-BR label for a dotted action id such as `legal_process.update`. */

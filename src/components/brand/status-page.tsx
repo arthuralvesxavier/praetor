@@ -25,7 +25,7 @@ export function BrandStatusPage({
         <div className="mx-auto flex h-14 max-w-5xl items-center px-4 sm:px-6">
           <Link
             href="/"
-            aria-label="Praetor — página inicial"
+            aria-label="Praetor, página inicial"
             className="inline-flex rounded-md py-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold-400"
           >
             <LogoWordmark variant="light" title="" className="h-[22px]" />

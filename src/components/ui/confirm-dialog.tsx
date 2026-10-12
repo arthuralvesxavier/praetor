@@ -15,6 +15,7 @@ import {
 } from "./dialog";
 import { FormMessage } from "./form-message";
 import { SubmitButton } from "./submit-button";
+import { usePreservingSubmit } from "./use-preserving-submit";
 
 export type ConfirmDialogProps<S extends FormState> = {
   /** Server action with the useActionState signature `(prev, formData) => ActionResult`. */
@@ -39,8 +40,9 @@ export type ConfirmDialogProps<S extends FormState> = {
 
 /**
  * Confirmation dialog wrapping a server-action form. Closes itself when the
- * action returns `{ ok: true }`; shows the error banner otherwise. If the
- * action calls `redirect()`, navigation happens as usual.
+ * action returns `{ ok: true }`; shows the error banner otherwise, keeping
+ * what was typed in the extra fields (`usePreservingSubmit`, no React form
+ * reset). If the action calls `redirect()`, navigation happens as usual.
  *
  *   <ConfirmDialog action={deleteProcessAction} hiddenFields={{ id }} triggerLabel="Excluir"
  *     title="Excluir processo?" description="Esta ação não pode ser desfeita." confirmLabel="Excluir" />
@@ -91,9 +93,11 @@ function ConfirmForm<S extends FormState>({
     if (result.ok) onDone();
     return result;
   }, null);
+  // Fields in `children` (justification, date, checkbox…) keep what was typed when the action returns an error.
+  const onSubmit = usePreservingSubmit(formAction);
 
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form action={formAction} onSubmit={onSubmit} className="flex flex-col gap-4">
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
         {description ? <DialogDescription>{description}</DialogDescription> : null}

@@ -121,6 +121,8 @@ export const ENTITY_TYPES = [
   "import_batch",
   "snapshot",
   "distribution_rule",
+  "api_key",
+  "legal_report",
 ] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 export const ENTITY_TYPE_LABELS = labels(ENTITY_TYPES, {
@@ -148,6 +150,8 @@ export const ENTITY_TYPE_LABELS = labels(ENTITY_TYPES, {
   import_batch: "Importação de planilha",
   snapshot: "Fechamento mensal",
   distribution_rule: "Regra de distribuição",
+  api_key: "Chave de API",
+  legal_report: "Relatório jurídico",
 });
 
 // ---------------------------------------------------------------------------
@@ -180,34 +184,66 @@ export const LEGAL_AREA_LABELS = labels(LEGAL_AREAS, {
   other: "Outra",
 });
 
-export const PROCESS_PHASES = [
-  "pre_filing",
-  "knowledge",
-  "appeal",
-  "liquidation",
-  "enforcement",
-  "settlement",
-  "closed",
-] as const;
+/**
+ * Fase processual: eixo PRÓPRIO, distinto da instância (P0.5). Só três fases:
+ * conhecimento, liquidação e execução. Recurso não é fase (é a instância em que
+ * o processo tramita: 2º ou 3º grau); acordo e encerramento também não (acordo
+ * é registro próprio; encerramento é a situação `closed` com motivo).
+ */
+export const PROCESS_PHASES = ["knowledge", "liquidation", "enforcement"] as const;
 export type ProcessPhase = (typeof PROCESS_PHASES)[number];
 export const PROCESS_PHASE_LABELS = labels(PROCESS_PHASES, {
-  pre_filing: "Pré-ajuizamento",
   knowledge: "Conhecimento",
-  appeal: "Recursal",
   liquidation: "Liquidação",
-  enforcement: "Execução / cumprimento",
+  enforcement: "Execução",
+});
+
+/**
+ * Fases do modelo anterior (antes da separação entre fase e instância).
+ * SOMENTE para exibir registros históricos que não podem mudar: itens de
+ * competência fechada (RN-10), trilha de auditoria e a fase anterior guardada
+ * pela migração (`legacy_phase`). Nunca oferecidas em formulários, filtros ou
+ * gravações novas.
+ */
+export const LEGACY_PROCESS_PHASES = ["pre_filing", "appeal", "settlement", "closed"] as const;
+export type LegacyProcessPhase = (typeof LEGACY_PROCESS_PHASES)[number];
+export const LEGACY_PROCESS_PHASE_LABELS = labels(LEGACY_PROCESS_PHASES, {
+  pre_filing: "Pré-ajuizamento",
+  appeal: "Recursal",
   settlement: "Acordo em andamento",
   closed: "Encerrado",
 });
 
-/** Grau / instância em que o processo (ou um vínculo de instância) tramita. */
+/** Fase como pode estar gravada em registros históricos (atual ou do modelo anterior). */
+export type StoredProcessPhase = ProcessPhase | LegacyProcessPhase;
+
+/** Rótulos para EXIBIR uma fase gravada (atual ou histórica). Não use para montar opções. */
+export const PROCESS_PHASE_DISPLAY_LABELS: Readonly<Record<StoredProcessPhase, string>> = {
+  ...PROCESS_PHASE_LABELS,
+  ...LEGACY_PROCESS_PHASE_LABELS,
+};
+
+/** Rótulo pt-BR de uma fase gravada (atual ou histórica); código desconhecido é devolvido como está. */
+export function processPhaseLabel(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return (PROCESS_PHASE_DISPLAY_LABELS as Record<string, string>)[code] ?? code;
+}
+
+export function isProcessPhase(value: unknown): value is ProcessPhase {
+  return typeof value === "string" && (PROCESS_PHASES as readonly string[]).includes(value);
+}
+
+/** Grau / instância em que o processo (ou um vínculo de instância) tramita. Eixo distinto da fase. */
 export const PROCESS_INSTANCES = ["first", "second", "superior"] as const;
 export type ProcessInstance = (typeof PROCESS_INSTANCES)[number];
 export const PROCESS_INSTANCE_LABELS = labels(PROCESS_INSTANCES, {
   first: "1º grau",
   second: "2º grau",
-  superior: "Tribunal superior (3º grau)",
+  superior: "3º grau",
 });
+
+/** Ordem dos graus (1º < 2º < 3º), para comparar instâncias. */
+export const PROCESS_INSTANCE_RANK: Readonly<Record<ProcessInstance, number>> = { first: 1, second: 2, superior: 3 };
 
 /** Motivo de saída da carteira ativa (RF-06 / RN-12). */
 export const CLOSURE_REASONS = [
@@ -581,6 +617,11 @@ export const ALERT_TYPES = [
   "brief_pending_review",
   "intake_unassigned",
   "new_process_received",
+  "court_movement_relevant",
+  "court_hearing_designated",
+  "court_sync_failed",
+  "claims_risk_review",
+  "snapshot_close_blocked",
 ] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 export const ALERT_TYPE_LABELS = labels(ALERT_TYPES, {
@@ -597,10 +638,15 @@ export const ALERT_TYPE_LABELS = labels(ALERT_TYPES, {
   valuation_pending_review: "Valor aguardando conferência",
   enforcement_without_value: "Execução sem valor apurado",
   guarantee_idle: "Depósito / garantia parada",
-  process_needs_verification: "Processo marcado para verificação",
+  process_needs_verification: "Processo pendente de conferência",
   brief_pending_review: "Análise preliminar aguardando revisão",
   intake_unassigned: "Entrada sem responsável",
   new_process_received: "Novo processo recebido",
+  court_movement_relevant: "Movimentação relevante no tribunal (DataJud)",
+  court_hearing_designated: "Audiência designada no tribunal: cadastrar a data",
+  court_sync_failed: "Falha na coleta de dados do tribunal (DataJud)",
+  claims_risk_review: "Classificação de risco a rever (pedidos do processo)",
+  snapshot_close_blocked: "Processo sem classificação de risco impede o fechamento mensal",
 });
 
 export const ALERT_SEVERITIES = ["info", "warning", "critical"] as const;
@@ -620,6 +666,9 @@ export const JOB_TYPES = [
   "routine.run",
   "intake.process",
   "case_brief.generate",
+  "court_sync.run",
+  "bi.refresh",
+  "import.distribute",
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
@@ -631,6 +680,10 @@ export const ROUTINE_TYPES = [
   "hearing_alerts",
   "portfolio_alerts",
   "monthly_snapshot",
+  "court_sync",
+  "simulated_feed",
+  "bi_access_refresh",
+  "index_series_refresh",
 ] as const;
 export type RoutineType = (typeof ROUTINE_TYPES)[number];
 export const ROUTINE_TYPE_LABELS = labels(ROUTINE_TYPES, {
@@ -639,8 +692,12 @@ export const ROUTINE_TYPE_LABELS = labels(ROUTINE_TYPES, {
   stale_analysis_refresh: "Reanálise de análises desatualizadas",
   retention_review: "Revisão de retenção de dados",
   hearing_alerts: "Alertas de audiências",
-  portfolio_alerts: "Pendências da carteira (acordos, valores, garantias, verificações)",
+  portfolio_alerts: "Pendências da carteira (acordos, valores, garantias, conferência de cadastros)",
   monthly_snapshot: "Fechamento mensal da carteira (prévia)",
+  court_sync: "Acompanhamento da carteira no DataJud (CNJ)",
+  simulated_feed: "Chegada automática simulada de processos (demonstração)",
+  bi_access_refresh: "Acessos e atualização dos painéis Power BI",
+  index_series_refresh: "Atualização das séries de índices de correção (Banco Central)",
 });
 
 // ---------------------------------------------------------------------------
@@ -660,7 +717,7 @@ export const VALUATION_KIND_LABELS = labels(VALUATION_KINDS, {
   deposit: "Depósito",
   paid: "Valor pago",
   fees: "Honorários",
-  estimate: "Estimativa (não oficial)",
+  estimate: "Estimativa (não apurada)",
 });
 
 /**
@@ -671,7 +728,7 @@ export const VALUATION_KIND_LABELS = labels(VALUATION_KINDS, {
 export const VALUATION_STATUSES = ["proposed", "official", "rejected", "superseded"] as const;
 export type ValuationStatus = (typeof VALUATION_STATUSES)[number];
 export const VALUATION_STATUS_LABELS = labels(VALUATION_STATUSES, {
-  proposed: "Proposto — aguardando conferência",
+  proposed: "Proposto, aguardando conferência",
   official: "Oficial",
   rejected: "Rejeitado",
   superseded: "Substituído por valor mais recente",
@@ -786,12 +843,13 @@ export const HEARING_STATUS_LABELS = labels(HEARING_STATUSES, {
 // Entrada de processos, distribuição e análise preliminar
 // ---------------------------------------------------------------------------
 
-export const INTAKE_SOURCES = ["manual", "import", "simulated_feed"] as const;
+export const INTAKE_SOURCES = ["manual", "import", "simulated_feed", "api"] as const;
 export type IntakeSource = (typeof INTAKE_SOURCES)[number];
 export const INTAKE_SOURCE_LABELS = labels(INTAKE_SOURCES, {
   manual: "Cadastro manual",
   import: "Importação de planilha",
   simulated_feed: "Chegada simulada (demonstração)",
+  api: "Recebido por API (sistema externo)",
 });
 
 export const INTAKE_STATUSES = [
@@ -847,7 +905,7 @@ export const CASE_BRIEF_STATUS_LABELS = labels(CASE_BRIEF_STATUSES, {
 export const EMAIL_MODES = ["simulated", "live"] as const;
 export type EmailMode = (typeof EMAIL_MODES)[number];
 export const EMAIL_MODE_LABELS = labels(EMAIL_MODES, {
-  simulated: "Envio simulado — nenhuma mensagem real é enviada",
+  simulated: "Envio simulado: nenhuma mensagem real é enviada",
   live: "Envio real",
 });
 
@@ -884,7 +942,7 @@ export const EMAIL_STATUS_LABELS = labels(EMAIL_STATUSES, {
 export const IMPORT_BATCH_STATUSES = ["analyzed", "committed", "rolled_back", "failed"] as const;
 export type ImportBatchStatus = (typeof IMPORT_BATCH_STATUSES)[number];
 export const IMPORT_BATCH_STATUS_LABELS = labels(IMPORT_BATCH_STATUSES, {
-  analyzed: "Analisada — aguardando confirmação",
+  analyzed: "Analisada, aguardando confirmação",
   committed: "Importada",
   rolled_back: "Desfeita",
   failed: "Falhou",
@@ -898,7 +956,7 @@ export const IMPORT_ROW_ACTION_LABELS = labels(IMPORT_ROW_ACTIONS, {
   unchanged: "Sem alterações",
   merge_instance: "Vínculo de instância (mesmo CNJ)",
   skip: "Ignorada",
-  error: "Com erro — não importada",
+  error: "Com erro (não importada)",
 });
 
 export const ISSUE_LEVELS = ["error", "warning", "info"] as const;
@@ -908,3 +966,233 @@ export const ISSUE_LEVEL_LABELS = labels(ISSUE_LEVELS, {
   warning: "Alerta",
   info: "Informação",
 });
+
+// ---------------------------------------------------------------------------
+// Coleta automática nos tribunais (DataJud) e API de entrada
+// ---------------------------------------------------------------------------
+
+/** State of a process in the court data collection (DataJud). */
+export const COURT_SYNC_STATUSES = ["pending", "found", "not_found", "error", "unsupported"] as const;
+export type CourtSyncStatus = (typeof COURT_SYNC_STATUSES)[number];
+export const COURT_SYNC_STATUS_LABELS = labels(COURT_SYNC_STATUSES, {
+  pending: "Aguardando a primeira consulta",
+  found: "Encontrado no DataJud",
+  not_found: "Não encontrado no DataJud",
+  error: "Falha na consulta",
+  unsupported: "Sem consulta: número inválido (dígito verificador), fora do padrão CNJ ou tribunal sem endpoint",
+});
+
+export const COURT_SYNC_RUN_STATUSES = ["running", "succeeded", "partial", "failed"] as const;
+export type CourtSyncRunStatus = (typeof COURT_SYNC_RUN_STATUSES)[number];
+export const COURT_SYNC_RUN_STATUS_LABELS = labels(COURT_SYNC_RUN_STATUSES, {
+  running: "Em execução",
+  succeeded: "Concluída",
+  partial: "Concluída com falhas",
+  failed: "Falhou",
+});
+
+export const COURT_SYNC_TRIGGERS = ["routine", "manual", "intake", "api"] as const;
+export type CourtSyncTrigger = (typeof COURT_SYNC_TRIGGERS)[number];
+export const COURT_SYNC_TRIGGER_LABELS = labels(COURT_SYNC_TRIGGERS, {
+  routine: "Rotina agendada",
+  manual: "Solicitação manual",
+  intake: "Entrada de processo",
+  api: "Recebimento por API",
+});
+
+/** Scopes an API key can hold (inbound API, /api/v1). */
+export const API_KEY_SCOPES = ["intake:create", "process:read"] as const;
+export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
+export const API_KEY_SCOPE_LABELS = labels(API_KEY_SCOPES, {
+  "intake:create": "Enviar processos novos (entrada automática)",
+  "process:read": "Consultar a situação dos processos enviados",
+});
+
+export const INBOUND_REQUEST_STATUSES = [
+  "processing",
+  "accepted",
+  "updated_existing",
+  "duplicate",
+  "consulted",
+  "rejected",
+  "failed",
+] as const;
+export type InboundRequestStatus = (typeof INBOUND_REQUEST_STATUSES)[number];
+export const INBOUND_REQUEST_STATUS_LABELS = labels(INBOUND_REQUEST_STATUSES, {
+  processing: "Em processamento",
+  accepted: "Aceito: entrada criada",
+  updated_existing: "Processo já existia: documentos anexados",
+  duplicate: "Repetição respondida com o resultado anterior (mesma chave de idempotência)",
+  consulted: "Consulta de situação respondida",
+  rejected: "Rejeitado (dados inválidos ou sem permissão)",
+  failed: "Falha interna",
+});
+
+// ---------------------------------------------------------------------------
+// Painéis Power BI (camada governada "bi" e atualização automática)
+// ---------------------------------------------------------------------------
+
+/** O que disparou uma atualização do conjunto de dados no Power BI. */
+export const BI_REFRESH_TRIGGERS = ["schedule", "import_batch", "snapshot_closed", "court_sync", "access_change", "manual"] as const;
+export type BiRefreshTrigger = (typeof BI_REFRESH_TRIGGERS)[number];
+export const BI_REFRESH_TRIGGER_LABELS = labels(BI_REFRESH_TRIGGERS, {
+  schedule: "Agenda periódica",
+  import_batch: "Importação de planilha confirmada ou desfeita",
+  snapshot_closed: "Competência mensal fechada",
+  court_sync: "Coleta nos tribunais com novidades",
+  access_change: "Mudança nos acessos (processo, sigilo, unidade ou papel)",
+  manual: "Solicitação manual",
+});
+
+/** Situação de uma solicitação de atualização ao Power BI. */
+export const BI_REFRESH_STATUSES = ["requested", "succeeded", "failed", "skipped"] as const;
+export type BiRefreshStatus = (typeof BI_REFRESH_STATUSES)[number];
+export const BI_REFRESH_STATUS_LABELS = labels(BI_REFRESH_STATUSES, {
+  requested: "Solicitada ao Power BI",
+  succeeded: "Concluída no Power BI",
+  failed: "Falhou",
+  skipped: "Não executada",
+});
+
+// ---------------------------------------------------------------------------
+// Pedidos do processo (verbas pleiteadas) e risco por pedido
+// ---------------------------------------------------------------------------
+
+/** Categoria do pedido: lista local de apoio à leitura, sem nenhuma regra jurídica associada. */
+export const CLAIM_CATEGORIES = [
+  "overtime",
+  "severance_pay",
+  "fgts",
+  "moral_damages",
+  "material_damages",
+  "health_hazard_pay",
+  "salary_equalization",
+  "other",
+] as const;
+export type ClaimCategory = (typeof CLAIM_CATEGORIES)[number];
+export const CLAIM_CATEGORY_LABELS = labels(CLAIM_CATEGORIES, {
+  overtime: "Horas extras",
+  severance_pay: "Verbas rescisórias",
+  fgts: "FGTS",
+  moral_damages: "Dano moral",
+  material_damages: "Dano material",
+  health_hazard_pay: "Insalubridade / periculosidade",
+  salary_equalization: "Equiparação salarial",
+  other: "Outros",
+});
+
+/** De onde veio o pedido (subconjunto de DATA_ORIGINS). */
+export const CLAIM_ORIGINS = ["manual", "imported", "ai_suggested"] as const;
+export type ClaimOrigin = (typeof CLAIM_ORIGINS)[number];
+export const CLAIM_ORIGIN_LABELS = labels(CLAIM_ORIGINS, {
+  manual: "Cadastro manual",
+  imported: "Importado",
+  ai_suggested: "Sugerido pela análise preliminar",
+});
+
+/** Pedidos sugeridos pela análise preliminar só contam no risco depois de confirmados por uma pessoa. */
+export const CLAIM_STATUSES = ["pending_confirmation", "confirmed", "dismissed"] as const;
+export type ClaimStatus = (typeof CLAIM_STATUSES)[number];
+export const CLAIM_STATUS_LABELS = labels(CLAIM_STATUSES, {
+  pending_confirmation: "Aguardando confirmação",
+  confirmed: "Confirmado",
+  dismissed: "Descartado",
+});
+
+/** Registro de risco do processo ligado aos pedidos: derivado (automático) ou definido manualmente com justificativa. */
+export const CLAIM_RISK_LINK_KINDS = ["derived", "override"] as const;
+export type ClaimRiskLinkKind = (typeof CLAIM_RISK_LINK_KINDS)[number];
+export const CLAIM_RISK_LINK_KIND_LABELS = labels(CLAIM_RISK_LINK_KINDS, {
+  derived: "Derivada dos pedidos",
+  override: "Definida manualmente (diferente da derivada)",
+});
+
+// ---------------------------------------------------------------------------
+// Relatórios jurídicos (PDF com origem declarada por item)
+// ---------------------------------------------------------------------------
+
+export const LEGAL_REPORT_TYPES = ["process_report", "provision_report", "portfolio_report", "responsibility_report"] as const;
+export type LegalReportType = (typeof LEGAL_REPORT_TYPES)[number];
+export const LEGAL_REPORT_TYPE_LABELS = labels(LEGAL_REPORT_TYPES, {
+  process_report: "Relatório do processo (R1)",
+  provision_report: "Relatório de provisão (R2)",
+  portfolio_report: "Relatório da carteira (R3)",
+  responsibility_report: "Relatório por responsável (R4)",
+});
+/** Prefixo da referência sequencial por tipo e ano (ex.: R1-2026-0007). */
+export const LEGAL_REPORT_TYPE_CODES = labels(LEGAL_REPORT_TYPES, {
+  process_report: "R1",
+  provision_report: "R2",
+  portfolio_report: "R3",
+  responsibility_report: "R4",
+});
+
+export const LEGAL_REPORT_STATUSES = ["draft", "pending_review", "approved", "superseded"] as const;
+export type LegalReportStatus = (typeof LEGAL_REPORT_STATUSES)[number];
+export const LEGAL_REPORT_STATUS_LABELS = labels(LEGAL_REPORT_STATUSES, {
+  draft: "Rascunho",
+  pending_review: "Pendente de revisão",
+  approved: "Aprovado",
+  superseded: "Substituído por nova versão",
+});
+
+/** Origem obrigatória de cada item de relatório (selo no PDF). */
+export const REPORT_ITEM_ORIGINS = ["documented", "record", "inference", "analysis", "gap"] as const;
+export type ReportItemOrigin = (typeof REPORT_ITEM_ORIGINS)[number];
+export const REPORT_ITEM_ORIGIN_LABELS = labels(REPORT_ITEM_ORIGINS, {
+  documented: "Documentado",
+  record: "Cadastro",
+  inference: "Inferência",
+  analysis: "Análise",
+  gap: "Lacuna",
+});
+export const REPORT_ITEM_ORIGIN_DESCRIPTIONS = labels(REPORT_ITEM_ORIGINS, {
+  documented: "Trecho literal de documento, com página, conferido automaticamente.",
+  record: "Dado do cadastro do sistema, com tabela, campo e data do registro.",
+  inference: "Conclusão calculada a partir de outros itens do relatório.",
+  analysis: "Análise registrada (parecer, análise preliminar ou de IA).",
+  gap: "Dado não localizado na base: nunca é tratado como zero.",
+});
+
+/** Faixas de probabilidade dos cenários (percentuais editáveis nas configurações). */
+export const PROBABILITY_BANDS = ["very_high", "high", "moderate", "low", "very_low"] as const;
+export type ProbabilityBand = (typeof PROBABILITY_BANDS)[number];
+export const PROBABILITY_BAND_LABELS = labels(PROBABILITY_BANDS, {
+  very_high: "Muito alta",
+  high: "Alta",
+  moderate: "Moderada",
+  low: "Baixa",
+  very_low: "Muito baixa",
+});
+
+export const SCENARIO_ORIGINS = ["system", "manual"] as const;
+export type ScenarioOrigin = (typeof SCENARIO_ORIGINS)[number];
+export const SCENARIO_ORIGIN_LABELS = labels(SCENARIO_ORIGINS, {
+  system: "Gerado pelo sistema",
+  manual: "Registrado manualmente",
+});
+
+// ---------------------------------------------------------------------------
+// Índices de correção monetária (séries mensais do Banco Central, P1.7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Índice de atualização de uma valoração. `none` = escolha explícita de não
+ * atualizar. Valorações anteriores ao recurso ficam com `null` ("sem índice
+ * informado"). Qual índice vale para cada caso é escolha do advogado: o sistema
+ * não aplica nenhuma regra sobre isso.
+ */
+export const CORRECTION_INDEXES = ["ipca_e", "ipca", "inpc", "selic", "tr", "none"] as const;
+export type CorrectionIndex = (typeof CORRECTION_INDEXES)[number];
+export const CORRECTION_INDEX_LABELS = labels(CORRECTION_INDEXES, {
+  ipca_e: "IPCA-E",
+  ipca: "IPCA",
+  inpc: "INPC",
+  selic: "Selic (acumulada no mês)",
+  tr: "TR (primeiro dia do mês)",
+  none: "Sem atualização",
+});
+
+/** Índices com série mensal coletada no Banco Central (todos menos `none`). */
+export const INDEX_SERIES_CODES = ["ipca_e", "ipca", "inpc", "selic", "tr"] as const;
+export type IndexSeriesCode = (typeof INDEX_SERIES_CODES)[number];

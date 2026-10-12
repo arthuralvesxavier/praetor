@@ -7,6 +7,7 @@ import { centsToInputValue } from "@/lib/format";
 import type { Option } from "@/lib/options";
 import { listUnitOptions, listUserOptions } from "@/modules/admin/service";
 import { listCompanyOptions, listLawFirmOptions } from "@/modules/organization/service";
+import { isExternalCounsel } from "@/server/auth/access";
 import type { AuthContext } from "@/server/auth/context";
 import { EMPTY_PROCESS_FORM, type ProcessFormDefaults } from "./schemas";
 import { canChangeProcessLawFirm, type OccurrencePrefill, type ProcessDetail } from "./service";
@@ -31,23 +32,31 @@ type Keep = {
   lawFirmName?: string | null;
 };
 
-function keepCurrent(options: Option[], id: string | null | undefined, name: string | null | undefined, fallback: string) {
-  if (id && !options.some((o) => o.value === id)) options.push({ value: id, label: `${name ?? fallback} (inativo)` });
+function keepCurrent(
+  options: Option[],
+  id: string | null | undefined,
+  name: string | null | undefined,
+  fallback: string,
+  suffix = " (inativo)",
+) {
+  if (id && !options.some((o) => o.value === id)) options.push({ value: id, label: `${name ?? fallback}${suffix}` });
 }
 
 export async function loadProcessFormOptions(ctx: AuthContext, keep?: Keep): Promise<ProcessFormOptions> {
+  // External counsel is never shown the organization's units (internal structure): only the process's current one.
+  const external = isExternalCounsel(ctx);
   const [unitRows, userRows, companyRows, firmRows] = await Promise.all([
-    listUnitOptions(ctx),
+    external ? Promise.resolve([]) : listUnitOptions(ctx),
     listUserOptions(ctx),
     listCompanyOptions(ctx),
     listLawFirmOptions(ctx),
   ]);
   const units: Option[] = unitRows.map((u) => ({ value: u.id, label: u.name }));
-  const users: Option[] = userRows.map((u) => ({ value: u.id, label: `${u.name} — ${ROLE_LABELS[u.role]}` }));
+  const users: Option[] = userRows.map((u) => ({ value: u.id, label: `${u.name} (${ROLE_LABELS[u.role]})` }));
   const companies: Option[] = companyRows.map((c) => ({ value: c.id, label: c.name }));
   const lawFirms: Option[] = firmRows.map((f) => ({ value: f.id, label: f.name }));
   // Keep the current (possibly inactive) records selectable when editing.
-  keepCurrent(units, keep?.unitId, keep?.unitName, "Unidade atual");
+  keepCurrent(units, keep?.unitId, keep?.unitName, "Unidade atual", external ? "" : " (inativo)");
   keepCurrent(users, keep?.responsibleId, keep?.responsibleName, "Responsável atual");
   keepCurrent(companies, keep?.companyId, keep?.companyName, "Empresa atual");
   keepCurrent(lawFirms, keep?.lawFirmId, keep?.lawFirmName, "Escritório atual");

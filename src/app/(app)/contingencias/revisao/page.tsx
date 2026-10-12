@@ -10,6 +10,7 @@ import { FilterBar, FilterSelect } from "@/components/ui/filter-bar";
 import { PageHeader } from "@/components/ui/page-header";
 import { Pagination } from "@/components/ui/pagination";
 import {
+  CORRECTION_INDEX_LABELS,
   PROCESS_INSTANCE_LABELS,
   TEXT_EXTRACTION_STATUS_LABELS,
   VALUATION_KIND_LABELS,
@@ -23,6 +24,9 @@ import { Delta, EstimateBadge, ValuationStatusBadge } from "@/modules/contingenc
 import { ReviewActions, ReviewQueueTable, type QueueRow } from "@/modules/contingency/components/review-forms";
 import { CONFIDENCE_FILTERS } from "@/modules/contingency/schemas";
 import { getReviewItem, listReviewQueue, type ReviewItem } from "@/modules/contingency/service";
+import { ValuationUpdatedValue } from "@/modules/indices/components/valuation-values";
+import { computeValuationUpdates, type ValuationUpdate } from "@/modules/indices/service";
+import { processTabUrl } from "@/modules/processes/tabs";
 import { can } from "@/server/auth/permissions";
 import { requirePageContext } from "@/server/auth/session";
 import { NotFoundError } from "@/server/lib/errors";
@@ -52,6 +56,11 @@ export default async function ReviewQueuePage(props: { searchParams: Promise<Sea
   }
   const filtered = hasAnyParam(sp, FILTER_KEYS);
   const nextItem = queue.items.find((i) => i.id !== itemId);
+  // P1.7: the index becomes final with the approval, so the reviewer sees it with the updated value (computed on read).
+  const updates = await computeValuationUpdates(ctx, [
+    ...queue.items.map((i) => ({ ...i, status: "proposed" as const })),
+    ...(item ? [item.valuation] : []),
+  ]);
 
   const rows: QueueRow[] = queue.items.map((i) => ({
     id: i.id,
@@ -68,13 +77,15 @@ export default async function ReviewQueuePage(props: { searchParams: Promise<Sea
     confidence: i.confidence,
     bulkEligible: i.bulkEligible,
     documentLabel: i.documentTitle ? `${i.documentTitle}${i.page ? ` · p. ${i.page}` : ""}` : null,
+    correctionIndex: i.correctionIndex,
+    update: updates.byId[i.id],
   }));
 
   return (
     <>
       <PageHeader
         title="Conferência de valores"
-        description="Valores propostos (planilha, peça dos autos, extração simulada ou lançamento de advogado) só passam a oficiais depois da conferência de uma pessoa identificada (RN-11)."
+        description="Valores propostos (planilha, peça dos autos, extração simulada ou lançamento de advogado) só passam a oficiais depois da conferência de uma pessoa identificada."
         breadcrumbs={[{ label: "Contingências", href: "/contingencias" }, { label: "Conferência de valores" }]}
         meta={
           <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -115,7 +126,12 @@ export default async function ReviewQueuePage(props: { searchParams: Promise<Sea
 
         <section aria-label="Valor em conferência" className="min-w-0">
           {item ? (
-            <ReviewDetail item={item} canApprove={canApprove} nextHref={nextItem ? buildHref("/contingencias/revisao", sp, { item: nextItem.id }) : null} />
+            <ReviewDetail
+              item={item}
+              update={updates.byId[item.valuation.id]}
+              canApprove={canApprove}
+              nextHref={nextItem ? buildHref("/contingencias/revisao", sp, { item: nextItem.id }) : null}
+            />
           ) : (
             <EmptyState
               icon={<FileText />}
@@ -129,7 +145,17 @@ export default async function ReviewQueuePage(props: { searchParams: Promise<Sea
   );
 }
 
-function ReviewDetail({ item, canApprove, nextHref }: { item: ReviewItem; canApprove: boolean; nextHref: string | null }) {
+function ReviewDetail({
+  item,
+  update,
+  canApprove,
+  nextHref,
+}: {
+  item: ReviewItem;
+  update: ValuationUpdate | undefined;
+  canApprove: boolean;
+  nextHref: string | null;
+}) {
   const v = item.valuation;
   const doc = item.document;
   return (
@@ -151,7 +177,7 @@ function ReviewDetail({ item, canApprove, nextHref }: { item: ReviewItem; canApp
             {v.isEstimate ? <EstimateBadge /> : null}
           </CardTitle>
           <CardDescription>
-            <Link href={`/processos/${v.processId}?aba=valores`} className="font-medium text-primary-600 hover:underline">
+            <Link href={processTabUrl(v.processId, "valores-e-acordos")} className="font-medium text-primary-600 hover:underline">
               {v.processNumber}
             </Link>{" "}
             · {v.processTitle}
@@ -169,13 +195,20 @@ function ReviewDetail({ item, canApprove, nextHref }: { item: ReviewItem; canApp
             items={[
               { label: "Data-base", value: formatDate(v.baseDate) },
               { label: "Instância", value: v.instance ? PROCESS_INSTANCE_LABELS[v.instance] : "Não se aplica" },
+              {
+                label: "Índice de atualização",
+                value: v.correctionIndex ? CORRECTION_INDEX_LABELS[v.correctionIndex] : "Sem índice informado",
+              },
+              { label: "Valor atualizado", value: <ValuationUpdatedValue update={update} className="text-left" /> },
               { label: "Origem", value: VALUATION_SOURCE_LABELS[v.source] },
               {
                 label: "Confiança da extração",
                 value:
                   v.confidence === null
                     ? "Não informada (conferência individual)"
-                    : `${v.confidence}% — ${v.bulkEligible ? "permite conferência em lote" : `abaixo de ${item.threshold}%: conferência individual`}`,
+                    : v.source === "simulation"
+                      ? `${v.confidence}% (extração simulada: a confiança é demonstrativa; conferência individual, no documento)`
+                      : `${v.confidence}% (${v.bulkEligible ? "permite conferência em lote" : `abaixo de ${item.threshold}%, conferência individual`})`,
               },
               {
                 label: "Valor oficial atual do mesmo tipo",
@@ -198,12 +231,12 @@ function ReviewDetail({ item, canApprove, nextHref }: { item: ReviewItem; canApp
           />
           {v.status === "proposed" ? (
             canApprove ? (
-              <ReviewActions id={v.id} amountInput={centsToInputValue(v.amountCents)} />
+              <ReviewActions id={v.id} amountInput={centsToInputValue(v.amountCents)} correctionIndex={v.correctionIndex} />
             ) : (
               <p className="text-sm text-muted-foreground">Aguardando conferência por um perfil autorizado.</p>
             )
           ) : (
-            <Callout tone="success">Este valor já foi conferido. O histórico completo está na aba “Valores e risco” do processo.</Callout>
+            <Callout tone="success">Este valor já foi conferido. O histórico completo está na aba “Valores e acordos” do processo.</Callout>
           )}
         </CardContent>
       </Card>

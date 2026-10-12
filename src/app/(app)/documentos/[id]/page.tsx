@@ -52,7 +52,8 @@ export default async function DocumentPage(props: PageProps<"/documentos/[id]">)
 
   const canUpload = can(ctx, "document:upload");
   const canDelete = can(ctx, "document:delete");
-  const linkOptions = canUpload ? await loadLinkOptions(ctx) : null;
+  // The current process link is always among the options, so saving the form never drops it.
+  const linkOptions = canUpload ? await loadLinkOptions(ctx, { includeProcessId: doc.processId }) : null;
   const current = doc.versions.find((v) => v.isCurrent) ?? null;
 
   return (
@@ -60,7 +61,7 @@ export default async function DocumentPage(props: PageProps<"/documentos/[id]">)
       <PageHeader
         title={doc.title}
         breadcrumbs={[
-          { label: "Dashboard", href: "/dashboard" },
+          { label: "Painel executivo", href: "/dashboard" },
           { label: "Documentos", href: "/documentos" },
           { label: doc.title },
         ]}
@@ -115,7 +116,7 @@ export default async function DocumentPage(props: PageProps<"/documentos/[id]">)
                     label: "Confidencialidade",
                     value:
                       doc.category === "sensitive_health"
-                        ? `${CONFIDENTIALITY_LABELS[doc.confidentiality]} — dado sensível de saúde, sempre restrito`
+                        ? `${CONFIDENTIALITY_LABELS[doc.confidentiality]} (dado sensível de saúde, sempre restrito)`
                         : CONFIDENTIALITY_LABELS[doc.confidentiality],
                   },
                   { label: "Vínculos", value: <DocumentLinks links={doc.links} />, full: true },
@@ -134,7 +135,7 @@ export default async function DocumentPage(props: PageProps<"/documentos/[id]">)
                   { label: "Reter até", value: doc.retentionUntil ? formatDate(doc.retentionUntil) : "Sem data definida" },
                   {
                     label: "Preservação legal (legal hold)",
-                    value: doc.legalHold ? "Ativa — exclusão bloqueada" : "Inativa",
+                    value: doc.legalHold ? "Ativa: exclusão bloqueada" : "Inativa",
                   },
                   { label: "Descrição", value: doc.description, full: true },
                 ]}
@@ -181,7 +182,7 @@ export default async function DocumentPage(props: PageProps<"/documentos/[id]">)
                         </div>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">{formatFileSize(v.sizeBytes)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{v.pageCount ?? "—"}</TableCell>
+                      <TableCell className="text-right tabular-nums">{v.pageCount ?? <span className="text-muted-foreground">Não se aplica</span>}</TableCell>
                       <TableCell>
                         <code className="text-xs" title={`SHA-256 completo: ${v.sha256}`}>
                           {v.sha256.slice(0, 12)}…
@@ -189,7 +190,7 @@ export default async function DocumentPage(props: PageProps<"/documentos/[id]">)
                       </TableCell>
                       <TableCell className="min-w-36">
                         <div className="flex flex-col gap-0.5">
-                          <span>{v.uploadedByName ?? "—"}</span>
+                          <span>{v.uploadedByName ?? <span className="text-muted-foreground">Não informado</span>}</span>
                           <span className="text-xs text-muted-foreground">{formatDateTime(v.createdAt)}</span>
                         </div>
                       </TableCell>

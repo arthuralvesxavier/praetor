@@ -1,11 +1,11 @@
-import { CheckCircle2, Undo2 } from "lucide-react";
+import { CheckCircle2, RotateCw, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { formatDate, formatNumber, pluralize, todayISO } from "@/lib/format";
-import { commitImportAction, rollbackImportAction } from "../actions";
+import { commitImportAction, resumeImportDistributionAction, rollbackImportAction } from "../actions";
 import type { ImportBatchDetail } from "../service";
 
 /** "Confirmar importação" (analyzed batches): asks for the base date of the values. */
@@ -51,6 +51,27 @@ export function CommitImportButton({ batch }: { batch: ImportBatchDetail }) {
         description="Aplica as regras de distribuição aos processos criados sem responsável. Falhas são listadas no resumo."
       />
     </ConfirmDialog>
+  );
+}
+
+/** "Retomar distribuição" (committed batches whose post-commit distribution stopped before the end). */
+export function ResumeDistributionButton({ batch }: { batch: ImportBatchDetail }) {
+  return (
+    <ConfirmDialog
+      action={resumeImportDistributionAction}
+      tone="primary"
+      hiddenFields={{ id: batch.id }}
+      trigger={
+        <Button type="button" variant="outline" size="sm">
+          <RotateCw aria-hidden="true" />
+          Retomar distribuição
+        </Button>
+      }
+      title="Retomar a distribuição?"
+      description="As regras de distribuição são aplicadas aos processos criados por esta importação que ainda estão sem responsável. Quem já recebeu responsável não muda."
+      confirmLabel="Retomar distribuição"
+      pendingLabel="Distribuindo…"
+    />
   );
 }
 

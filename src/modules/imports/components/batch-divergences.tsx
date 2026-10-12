@@ -29,7 +29,7 @@ export async function BatchDivergences({ ctx, batch, sp }: { ctx: AuthContext; b
       <Callout tone="info" title="A aba consolidada é a base oficial" className="mb-4">
         Para o mesmo número e instância, os valores da aba consolidada são os oficiais. Valores monetários diferentes informados em
         outras abas {committed ? "foram registrados" : "serão registrados"} como <strong>valores propostos</strong>, aguardando conferência
-        humana — nunca sobrescrevem o valor oficial. Divergências de fase, tribunal e órgão ficam neste relatório para conferência.
+        humana, e nunca sobrescrevem o valor oficial. Divergências de fase, tribunal e órgão ficam neste relatório para conferência.
         {committed && canReview ? (
           <>
             {" "}

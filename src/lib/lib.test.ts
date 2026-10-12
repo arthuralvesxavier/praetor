@@ -21,8 +21,8 @@ describe("format", () => {
   it("formats calendar dates without timezone shift", () => {
     expect(formatDate("2026-01-01")).toBe("01/01/2026");
     expect(formatDate("2026-12-31")).toBe("31/12/2026");
-    expect(formatDate(null)).toBe("—");
-    expect(formatDate("lixo")).toBe("—");
+    expect(formatDate(null)).toBe("Não informado");
+    expect(formatDate("lixo")).toBe("Não informado");
   });
 
   it("formats timestamps in America/Sao_Paulo", () => {
@@ -48,7 +48,7 @@ describe("format", () => {
 
   it("formats and parses money", () => {
     expect(nbsp(formatMoneyCents(123456))).toBe("R$ 1.234,56");
-    expect(formatMoneyCents(null)).toBe("—");
+    expect(formatMoneyCents(null)).toBe("Não informado");
     expect(parseMoneyToCents("1.234,56")).toBe(123456);
     expect(parseMoneyToCents("R$ 1.234,56")).toBe(123456);
     expect(parseMoneyToCents("1234.56")).toBe(123456);
@@ -66,7 +66,7 @@ describe("format", () => {
   it("masks CPF and formats CNPJ", () => {
     expect(maskDocument("12345678909")).toBe("***.456.789-**");
     expect(maskDocument("12.345.678/0001-90")).toBe("12.345.678/0001-90");
-    expect(maskDocument(null)).toBe("—");
+    expect(maskDocument(null)).toBe("Não informado");
   });
 
   it("pluralizes", () => {

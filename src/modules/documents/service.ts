@@ -225,7 +225,7 @@ async function resolveLinks(ctx: AuthContext, rows: LinkIds[]): Promise<(row: Li
           .where(and(inArray(contracts.id, contractIds), contractWhere(ctx)))
       : Promise.resolve([]),
   ]);
-  const procMap = new Map(procs.map((p) => [p.id, `${p.number} — ${p.title}`]));
+  const procMap = new Map(procs.map((p) => [p.id, `${p.number} · ${p.title}`]));
   const occMap = new Map(occs.map((o) => [o.id, o.title]));
   const ctrMap = new Map(ctrs.map((c) => [c.id, c.title]));
 

@@ -7,23 +7,32 @@
  *   commitImport   → recalcula o plano contra a base ATUAL e grava processos,
  *                    partes, vínculos de instância e valorações numa transação.
  *                    Reimportar o mesmo arquivo não duplica nada (RNF-04).
+ *                    Com "distribuir após confirmar", enfileira na mesma
+ *                    transação o job `import.distribute` (dedupe
+ *                    `import.distribute:<lote>`), que distribui os processos
+ *                    novos em blocos, com progresso auditado por bloco.
  *   rollbackImport → desfaz um lote confirmado quando os processos não foram
- *                    alterados depois da importação.
+ *                    alterados depois da importação nem entraram numa
+ *                    competência fechada; recalcula os espelhos de valores.
+ *   resumeImportDistribution → enfileira de novo a distribuição que parou no
+ *                    meio (retoma do último bloco registrado).
  *
  * Organization-level and permission-gated (`import:run`). Never logs or audits
  * cell contents: the audit trail records counts only.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { cnjDigits, normalizeCnj } from "@/domain/cnj";
 import type { ImportBatchStatus, ImportRowAction, IssueLevel, ProcessInstance } from "@/domain/enums";
 import { normalizePage, type Page, type Paginated } from "@/domain/entities";
-import { todayISO } from "@/lib/format";
+import { formatNumber, todayISO } from "@/lib/format";
+import { loadOrganization } from "@/modules/analyses/org-settings";
 import { markAnalysesStaleForEntity } from "@/modules/analyses/service";
+import { loadSettings, syncProcessMirrors } from "@/modules/contingency/internal";
 import { assertCompanyInOrg } from "@/modules/organization/service";
-import type { AuthContext } from "@/server/auth/context";
+import { systemContext, type AuthContext } from "@/server/auth/context";
 import { assertCan } from "@/server/auth/permissions";
 import { getDb, type DbOrTx } from "@/server/db/client";
 import {
@@ -37,7 +46,10 @@ import {
   hearings,
   importBatches,
   importRows,
+  jobs,
   legalProcesses,
+  portfolioSnapshotItems,
+  portfolioSnapshots,
   processEvents,
   processGuarantees,
   processInstances,
@@ -54,6 +66,7 @@ import {
   type ImportStats,
 } from "@/server/db/schema";
 import { buildStorageKey, getStorage } from "@/server/integrations/storage";
+import { enqueueJob } from "@/server/jobs/queue";
 import { AppError, ConflictError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { logger } from "@/server/lib/logger";
 import { recordAudit } from "@/server/services/audit";
@@ -67,6 +80,7 @@ import {
 import {
   buildImportPlan,
   rowKey,
+  withoutLegacyPhase,
   type Divergence,
   type ExistingProcess,
   type ImportPlan,
@@ -85,6 +99,8 @@ import {
   type ListImportIssuesFilters,
   type ListImportRowsFilters,
 } from "./schemas";
+import { bulkUpdateById, type RowChanges } from "./bulk-update";
+import { MAX_IMPORT_ROWS, MAX_IMPORT_UNCOMPRESSED_MB } from "./limits";
 import { readWorkbook, UnreadableWorkbookError } from "./xlsx";
 
 // ---------------------------------------------------------------------------
@@ -128,13 +144,30 @@ export type BeforeState = {
   instances?: Record<string, Partial<InstanceValues>>;
 };
 
+/**
+ * Post-commit distribution of the processes created by a batch (stored as the
+ * metadata of the `import_batch.distribute` audit, one entry per chunk).
+ * `assigned` counts every process of the batch that has a responsible;
+ * `attempted` = assigned + processes left without one in this run.
+ */
 export type DistributionSummary = {
   attempted: number;
   assigned: number;
   failed: number;
   failures: { processId: string; number: string; message: string }[];
+  /** App clock of the last chunk written (rollback boundary). */
   completedAt: string;
+  /** false while chunks are still pending (an interrupted run stays false). Absent (older single entries) = done. */
+  done?: boolean;
+  /** Processes of this run not processed yet when the entry was written. */
+  remaining?: number;
 };
+
+/**
+ * "running" = the `import.distribute` job is queued or running; "interrupted" =
+ * stopped before the end with no job pending (resume with `resumeImportDistribution`).
+ */
+export type DistributionState = "none" | "running" | "interrupted" | "done";
 
 export type CommitImportResult = {
   created: number;
@@ -143,8 +176,17 @@ export type CommitImportResult = {
   instancesCreated: number;
   valuationsOfficial: number;
   valuationsProposed: number;
+  /**
+   * Always null: the post-commit distribution runs in the `import.distribute`
+   * job (see `distributionQueued`); read its progress with `getImportBatch`.
+   */
   distribution: DistributionSummary | null;
+  /** The `import.distribute` job was enqueued in the commit transaction. */
+  distributionQueued: boolean;
 };
+
+/** Result of `resumeImportDistribution`: the job that finishes the distribution. */
+export type ResumeDistributionResult = { jobId: string; deduplicated: boolean };
 
 export type ImportBatchListItem = {
   id: string;
@@ -185,6 +227,7 @@ export type ImportBatchDetail = ImportBatchListItem & {
   problemRows: number;
   sameFileBatches: { id: string; createdAt: Date; status: ImportBatchStatus }[];
   distribution: DistributionSummary | null;
+  distributionState: DistributionState;
   /** Data sheets in file order (filters). */
   dataSheets: string[];
 };
@@ -394,7 +437,7 @@ async function planFor(
   db: DbOrTx,
   organizationId: string,
   rows: readonly PlanRow[],
-  opts: { companyId: string | null; defaultUnitId: string | null; fileName: string },
+  opts: { companyId: string | null; defaultUnitId: string | null; fileName: string; baseDate: string | null },
 ): Promise<ImportPlan> {
   const cnjs = [...new Set(rows.map((r) => r.data?.cnj).filter((c): c is string => !!c))];
   const existing = await loadExistingProcesses(db, organizationId, cnjs);
@@ -451,7 +494,11 @@ export async function analyzeImport(ctx: AuthContext, input: AnalyzeImportInput)
     rawSheets = await readWorkbook(bytes);
   } catch (err) {
     if (err instanceof UnreadableWorkbookError) {
-      throw fileError("Não foi possível ler a planilha. Envie um arquivo .xlsx válido (Excel 2007 ou posterior).");
+      throw fileError(
+        (err as { reason?: string }).reason === "too_large"
+          ? `A planilha descompactada é grande demais (limite de ${MAX_IMPORT_UNCOMPRESSED_MB} MB). Divida o arquivo.`
+          : "Não foi possível ler a planilha. Envie um arquivo .xlsx válido (Excel 2007 ou posterior).",
+      );
     }
     throw err;
   }
@@ -462,11 +509,18 @@ export async function analyzeImport(ctx: AuthContext, input: AnalyzeImportInput)
       "Nenhuma linha de processo foi encontrada. Confira se a planilha tem uma aba com a coluna “Nº do Processo” no cabeçalho.",
     );
   }
+  if (workbook.rows.length > MAX_IMPORT_ROWS) {
+    throw fileError(
+      `A planilha tem ${formatNumber(workbook.rows.length)} linhas de dados; o limite por importação é de ${formatNumber(MAX_IMPORT_ROWS)} linhas. Divida o arquivo.`,
+    );
+  }
 
+  const baseDate = data.baseDate ?? workbook.baseDateHint?.date ?? null;
   const plan = await planFor(getDb(), ctx.organizationId, workbook.rows, {
     companyId: data.companyId,
     defaultUnitId: data.defaultUnitId,
     fileName: data.fileName,
+    baseDate,
   });
 
   const records = workbook.rows.map((row) => buildRowRecord(row, plan));
@@ -477,7 +531,7 @@ export async function analyzeImport(ctx: AuthContext, input: AnalyzeImportInput)
     defaultUnitId: data.defaultUnitId,
     unitByState: {},
     distributeAfterCommit: data.distributeAfterCommit,
-    baseDate: data.baseDate ?? workbook.baseDateHint?.date ?? null,
+    baseDate,
     baseDateSource: data.baseDate ? "user" : workbook.baseDateHint ? "file" : null,
     baseDateHint: workbook.baseDateHint,
     clientName: company?.name ?? null,
@@ -609,12 +663,11 @@ export async function commitImport(ctx: AuthContext, batchId: string, input: Com
     throw new ValidationError("A data-base não pode ser futura.", { baseDate: ["A data-base não pode ser futura."] });
   }
 
-  let created: { id: string; number: string }[] = [];
-  let result: Omit<CommitImportResult, "distribution">;
+  let result: Omit<CommitImportResult, "distribution" | "distributionQueued">;
   let distribute = false;
 
   try {
-    ({ created, result, distribute } = await getDb().transaction(async (tx) => {
+    ({ result, distribute } = await getDb().transaction(async (tx) => {
       const [batch] = await tx.select().from(importBatches).where(batchScope(ctx, id)).for("update");
       if (!batch) throw new NotFoundError("Importação não encontrada.");
       if (batch.status !== "analyzed") {
@@ -637,19 +690,15 @@ export async function commitImport(ctx: AuthContext, batchId: string, input: Com
         companyId: batch.companyId,
         defaultUnitId: batch.defaultUnitId,
         fileName: batch.fileName,
+        baseDate: data.baseDate,
       });
 
       const now = new Date();
       const processIdByCnj = new Map<string, string>();
-      const createdList: { id: string; number: string }[] = [];
 
       // 1. New processes, parties and instance links.
       const toCreate = plan.processes.filter((p) => p.action === "create");
-      for (const p of toCreate) {
-        const pid = randomUUID();
-        processIdByCnj.set(p.cnj, pid);
-        createdList.push({ id: pid, number: p.cnj });
-      }
+      for (const p of toCreate) processIdByCnj.set(p.cnj, randomUUID());
       for (const part of chunks(toCreate)) {
         await tx.insert(legalProcesses).values(
           part.map((p) => ({
@@ -696,35 +745,47 @@ export async function commitImport(ctx: AuthContext, batchId: string, input: Com
       );
       for (const part of chunks(parties)) await tx.insert(processParties).values(part);
 
-      // 2. Existing processes: field changes (before-state kept for rollback).
+      // 2. Existing processes: field changes (before-state kept for rollback), written set-based.
       const beforeByRow = new Map<string, BeforeState>();
       const updatedIds: string[] = [];
+      const mirrorIds: string[] = [];
+      const processUpdates: RowChanges[] = [];
+      const instanceUpdates: RowChanges[] = [];
       for (const p of plan.processes) {
         if (!p.existingId) continue;
         processIdByCnj.set(p.cnj, p.existingId);
         if (p.action !== "update") continue;
         updatedIds.push(p.existingId);
+        // Money mirrors (provision etc.) are recomputed when an official value or a money field changes.
+        if ("claimAmountCents" in p.changes || "liquidatedAmountCents" in p.changes || p.valuations.some((v) => v.status === "official")) {
+          mirrorIds.push(p.existingId);
+        }
         const before: BeforeState = {};
         if (Object.keys(p.changes).length > 0) {
-          await tx
-            .update(legalProcesses)
-            .set(p.changes)
-            .where(and(eq(legalProcesses.id, p.existingId), eq(legalProcesses.organizationId, ctx.organizationId)));
+          processUpdates.push({ id: p.existingId, changes: p.changes });
           before.process = p.before ?? {};
         }
         const instBefore: Record<string, Partial<InstanceValues>> = {};
         for (const inst of p.instances) {
           if (inst.action !== "update" || !inst.existingId) continue;
-          await tx.update(processInstances).set(inst.changes).where(eq(processInstances.id, inst.existingId));
+          instanceUpdates.push({ id: inst.existingId, changes: inst.changes });
           instBefore[inst.existingId] = inst.before ?? {};
         }
         for (const c of p.clearCurrent) {
-          await tx.update(processInstances).set({ isCurrent: false }).where(eq(processInstances.id, c.id));
+          instanceUpdates.push({ id: c.id, changes: { isCurrent: false } });
           instBefore[c.id] = c.before;
         }
         if (Object.keys(instBefore).length > 0) before.instances = instBefore;
         if (before.process || before.instances) beforeByRow.set(p.primaryRowKey, before);
       }
+      await bulkUpdateById(tx, legalProcesses, processUpdates, {
+        where: eq(legalProcesses.organizationId, ctx.organizationId),
+        updatedAt: now,
+      });
+      await bulkUpdateById(tx, processInstances, instanceUpdates, {
+        where: eq(processInstances.organizationId, ctx.organizationId),
+        updatedAt: now,
+      });
 
       // 3. New instance links (new and existing processes).
       const newInstances = plan.processes.flatMap((p) =>
@@ -763,6 +824,14 @@ export async function commitImport(ctx: AuthContext, batchId: string, input: Com
         })),
       );
       for (const part of chunks(valuations)) await tx.insert(processValuations).values(part);
+
+      // Denormalized mirrors (provisionAmountCents...) of existing processes whose official values changed.
+      // New processes need no resync: their claim/liquidated mirrors are the official values just written
+      // and they have no risk assessment or guarantee yet, so their provision stays unknown (null).
+      if (mirrorIds.length > 0) {
+        const settings = await loadSettings(ctx.organizationId, tx);
+        for (const pid of mirrorIds) await syncProcessMirrors(ctx.organizationId, pid, tx, settings);
+      }
 
       for (const pid of updatedIds) {
         await markAnalysesStaleForEntity(
@@ -846,58 +915,253 @@ export async function commitImport(ctx: AuthContext, batchId: string, input: Com
         },
         tx,
       );
-      return { created: createdList, result: counts, distribute: distributeAfterCommit };
+      // The distribution of the new processes runs in the background (chunked, resumable); the
+      // job is enqueued with the commit so it exists exactly when the commit does.
+      if (distributeAfterCommit) await enqueueDistributionJob(ctx.organizationId, batch.id, tx);
+      return { result: counts, distribute: distributeAfterCommit };
     }));
   } catch (err) {
     if (isUniqueViolation(err)) {
       throw new ConflictError(
-        "Um processo com o mesmo número foi cadastrado enquanto a importação era gravada. Nada foi importado — tente confirmar novamente.",
+        "Um processo com o mesmo número foi cadastrado enquanto a importação era gravada. Nada foi importado. Tente confirmar novamente.",
       );
     }
     throw err;
   }
 
-  const distribution = distribute ? await distributeCreated(ctx, id, created) : null;
-  return { ...result, distribution };
+  return { ...result, distribution: null, distributionQueued: distribute };
 }
 
-/** Runs the distribution rules for the processes created by the batch (errors are reported per process). */
-async function distributeCreated(
-  ctx: AuthContext,
-  batchId: string,
-  created: { id: string; number: string }[],
-): Promise<DistributionSummary> {
-  const summary: DistributionSummary = { attempted: 0, assigned: 0, failed: 0, failures: [], completedAt: "" };
-  if (created.length > 0) {
-    const { assignResponsible } = await import("@/modules/distribution/service");
-    for (const p of created) {
-      summary.attempted += 1;
-      try {
-        const decision = await assignResponsible(ctx, p.id, {});
-        if (decision.userId) summary.assigned += 1;
-        else {
-          summary.failed += 1;
-          if (summary.failures.length < 50) summary.failures.push({ processId: p.id, number: p.number, message: decision.reason || "Nenhum responsável elegível." });
-        }
-      } catch (err) {
-        summary.failed += 1;
-        const message = err instanceof AppError ? err.message : "Falha inesperada ao aplicar as regras de distribuição.";
-        if (!(err instanceof AppError)) {
-          logger.warn("import_distribution_failed", { batchId, processId: p.id, errorName: err instanceof Error ? err.name : "unknown" });
-        }
-        if (summary.failures.length < 50) summary.failures.push({ processId: p.id, number: p.number, message });
-      }
-    }
+/** Pending (queued/running) distribution job of a batch: at most one, by the dedupe key. */
+function distributionJobKey(batchId: string): string {
+  return `import.distribute:${batchId}`;
+}
+
+async function enqueueDistributionJob(organizationId: string, batchId: string, db: DbOrTx = getDb()) {
+  return enqueueJob(
+    { type: "import.distribute", organizationId, payload: { batchId }, dedupeKey: distributionJobKey(batchId), maxAttempts: 5 },
+    db,
+  );
+}
+
+async function hasPendingDistributionJob(organizationId: string, batchId: string): Promise<boolean> {
+  const [job] = await getDb()
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.dedupeKey, distributionJobKey(batchId)),
+        inArray(jobs.status, ["queued", "running"]),
+        eq(jobs.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+  return !!job;
+}
+
+/** Processes per distribution chunk; a progress entry (rollback boundary) is written after each one. */
+export const IMPORT_DISTRIBUTION_CHUNK = 100;
+const MAX_LISTED_FAILURES = 50;
+
+/**
+ * Body of the `import.distribute` job (src/server/jobs/handlers.ts): distributes
+ * the processes created by a committed batch that are still without a
+ * responsible, as the system ("Sistema" in the audit trail). Idempotent: a
+ * batch that was undone, confirmed without distribution or already fully
+ * distributed is left as is. When the run stops before the end (e.g. the
+ * database went away while a progress entry was written) it throws, so the
+ * queue retries it with backoff; the retry resumes from the last chunk
+ * recorded, because processes that already have a responsible are skipped.
+ */
+export async function runImportDistributionJob(organizationId: string, batchId: string): Promise<DistributionSummary | null> {
+  const [batch] = await getDb()
+    .select({ id: importBatches.id, status: importBatches.status, mapping: importBatches.mapping })
+    .from(importBatches)
+    .where(and(eq(importBatches.id, batchId), eq(importBatches.organizationId, organizationId)));
+  if (!batch) {
+    logger.warn("import_distribution_batch_missing", { batchId });
+    return null;
   }
-  summary.completedAt = new Date().toISOString();
-  await recordAudit(ctx, {
-    action: "import_batch.distribute",
-    entityType: "import_batch",
-    entityId: batchId,
-    summary: `Distribuição após importação: ${summary.assigned} atribuídos, ${summary.failed} sem atribuição`,
-    metadata: summary as unknown as Record<string, unknown>,
-  });
+  if (batch.status !== "committed" || !storedMapping(batch).distributeAfterCommit) return null;
+  const last = await latestDistribution(organizationId, batch.id);
+  if (last && last.summary.done !== false) return last.summary;
+  const org = await loadOrganization(organizationId);
+  const summary = await runImportDistribution(systemContext(organizationId, org.isDemo), batch.id);
+  if (summary.done === false && !summary.stopped) throw new ImportDistributionInterruptedError();
   return summary;
+}
+
+/** Retryable failure of the `import.distribute` job (the next attempt resumes the distribution). */
+class ImportDistributionInterruptedError extends Error {
+  readonly retryable = true;
+  constructor() {
+    super("import_distribution_interrupted");
+    this.name = "ImportDistributionInterruptedError";
+  }
+}
+
+/**
+ * Runs the distribution rules for the processes created by the batch that are
+ * still without a responsible (errors are reported per process, never thrown).
+ * Resumable: processes that already have a responsible are skipped, and after
+ * every chunk an `import_batch.distribute` entry records the progress, so the
+ * rollback boundary always covers the assignments already made. If the run is
+ * interrupted, the last entry stays `done: false` and the job retry (or
+ * `resumeImportDistribution`) finishes it. Before every chunk the batch must
+ * still be committed: a batch undone in the meantime stops the run
+ * (`stopped: true`, nothing else is written).
+ */
+async function runImportDistribution(ctx: AuthContext, batchId: string): Promise<DistributionSummary & { stopped?: boolean }> {
+  const scope = and(
+    eq(legalProcesses.organizationId, ctx.organizationId),
+    eq(legalProcesses.importBatchId, batchId),
+    isNull(legalProcesses.deletedAt),
+  );
+  const [pending, [{ alreadyAssigned }]] = await Promise.all([
+    getDb()
+      .select({ id: legalProcesses.id, number: legalProcesses.number })
+      .from(legalProcesses)
+      .where(and(scope, isNull(legalProcesses.responsibleId)))
+      .orderBy(asc(legalProcesses.number), asc(legalProcesses.id)),
+    getDb()
+      .select({ alreadyAssigned: count() })
+      .from(legalProcesses)
+      .where(and(scope, isNotNull(legalProcesses.responsibleId))),
+  ]);
+  const summary: DistributionSummary = {
+    attempted: alreadyAssigned,
+    assigned: alreadyAssigned,
+    failed: 0,
+    failures: [],
+    completedAt: "",
+    done: pending.length === 0,
+    remaining: pending.length,
+  };
+  const writeProgress = async () => {
+    summary.completedAt = new Date().toISOString();
+    const total = summary.attempted + (summary.remaining ?? 0);
+    await recordAudit(ctx, {
+      action: "import_batch.distribute",
+      entityType: "import_batch",
+      entityId: batchId,
+      summary: summary.done
+        ? `Distribuição após importação: ${summary.assigned} atribuídos, ${summary.failed} sem atribuição`
+        : `Distribuição após importação em andamento: ${summary.attempted} de ${total} processos (${summary.assigned} atribuídos, ${summary.failed} sem atribuição)`,
+      metadata: { ...summary, failures: [...summary.failures] } as unknown as Record<string, unknown>,
+    });
+  };
+
+  try {
+    if (pending.length === 0) {
+      await writeProgress();
+      return summary;
+    }
+    const { assignResponsible } = await import("@/modules/distribution/service");
+    for (const part of chunks(pending, IMPORT_DISTRIBUTION_CHUNK)) {
+      if (!(await isBatchCommitted(ctx.organizationId, batchId))) {
+        // Undone while the distribution ran: its processes are gone, nothing else to assign or record.
+        logger.info("import_distribution_stopped", { batchId });
+        return { ...summary, done: false, stopped: true };
+      }
+      for (const p of part) {
+        summary.attempted += 1;
+        try {
+          const decision = await assignResponsible(ctx, p.id, {});
+          if (decision.userId) summary.assigned += 1;
+          else {
+            summary.failed += 1;
+            if (summary.failures.length < MAX_LISTED_FAILURES) {
+              summary.failures.push({ processId: p.id, number: p.number, message: decision.reason || "Nenhum responsável elegível." });
+            }
+          }
+        } catch (err) {
+          summary.failed += 1;
+          const message = err instanceof AppError ? err.message : "Falha inesperada ao aplicar as regras de distribuição.";
+          if (!(err instanceof AppError)) {
+            logger.warn("import_distribution_failed", { batchId, processId: p.id, errorName: err instanceof Error ? err.name : "unknown" });
+          }
+          if (summary.failures.length < MAX_LISTED_FAILURES) summary.failures.push({ processId: p.id, number: p.number, message });
+        }
+      }
+      summary.remaining = (summary.remaining ?? 0) - part.length;
+      summary.done = summary.remaining === 0;
+      await writeProgress();
+    }
+  } catch (err) {
+    // The batch stays committed; the last progress entry (done: false) is the rollback boundary
+    // and the batch page offers to resume the distribution.
+    logger.warn("import_distribution_interrupted", { batchId, errorName: err instanceof Error ? err.name : "unknown" });
+    return { ...summary, done: false };
+  }
+  return summary;
+}
+
+async function isBatchCommitted(organizationId: string, batchId: string): Promise<boolean> {
+  const [row] = await getDb()
+    .select({ status: importBatches.status })
+    .from(importBatches)
+    .where(and(eq(importBatches.id, batchId), eq(importBatches.organizationId, organizationId)));
+  return row?.status === "committed";
+}
+
+/**
+ * Resumes the post-commit distribution of a batch whose run stopped before the
+ * end: enqueues the `import.distribute` job again (deduplicated while one is
+ * pending), which applies the rules to the processes still without a
+ * responsible (the ones already assigned are kept). Requires `import:run`.
+ */
+export async function resumeImportDistribution(ctx: AuthContext, batchId: string): Promise<ResumeDistributionResult> {
+  assertCan(ctx, "import:run");
+  const batch = await loadBatchRow(ctx, batchId);
+  if (batch.status !== "committed") {
+    throw new ConflictError("Somente importações confirmadas podem ter a distribuição retomada.");
+  }
+  if (!storedMapping(batch).distributeAfterCommit) {
+    throw new ConflictError("Esta importação foi confirmada sem a distribuição automática dos processos novos.");
+  }
+  const last = await latestDistribution(ctx.organizationId, batch.id);
+  if (last && last.summary.done !== false) throw new ConflictError("A distribuição desta importação já foi concluída.");
+  const { id, deduplicated } = await enqueueDistributionJob(ctx.organizationId, batch.id);
+  return { jobId: id, deduplicated };
+}
+
+async function latestDistribution(
+  organizationId: string,
+  batchId: string,
+  db: DbOrTx = getDb(),
+): Promise<{ summary: DistributionSummary; createdAt: Date } | null> {
+  const [row] = await db
+    .select({ metadata: auditLogs.metadata, createdAt: auditLogs.createdAt })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.organizationId, organizationId),
+        eq(auditLogs.entityType, "import_batch"),
+        eq(auditLogs.entityId, batchId),
+        eq(auditLogs.action, "import_batch.distribute"),
+      ),
+    )
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(1);
+  return row?.metadata ? { summary: row.metadata as unknown as DistributionSummary, createdAt: row.createdAt } : null;
+}
+
+/**
+ * Distribution state of the batch page. While the `import.distribute` job is
+ * queued or running (retries included) the distribution is "running"; once no
+ * job is pending, an unfinished distribution is "interrupted" and the page
+ * offers to resume it.
+ */
+function distributionState(
+  batch: { status: ImportBatchStatus; committedAt: Date | null },
+  distributeAfterCommit: boolean,
+  last: { summary: DistributionSummary; createdAt: Date } | null,
+  jobPending: boolean,
+): DistributionState {
+  if (last && last.summary.done !== false) return "done";
+  if (batch.status !== "committed") return last ? "interrupted" : "none";
+  if (!last && (!distributeAfterCommit || !batch.committedAt)) return "none";
+  return jobPending ? "running" : "interrupted";
 }
 
 // ---------------------------------------------------------------------------
@@ -918,7 +1182,24 @@ const BLOCKER_REASONS = {
   comments: "comentários publicados",
 } as const;
 
-type BatchProcesses = { created: string[]; updated: { processId: string; rowId: string; before: BeforeState }[] };
+/** "2026-09" -> "09/2026". */
+function periodLabel(period: string): string {
+  const [year, month] = period.split("-");
+  return month && year ? `${month}/${year}` : period;
+}
+
+type BatchProcesses = {
+  /** Processes created by the batch (soft-deleted by the rollback). */
+  created: string[];
+  /** Existing processes whose fields or instance links the batch changed (before-state restored). */
+  updated: { processId: string; rowId: string; before: BeforeState }[];
+  /**
+   * Every process the batch wrote to: the above plus existing processes that only
+   * received valuations (e.g. proposals for a divergent value) or instance links.
+   * All of them are checked for later changes before a rollback.
+   */
+  all: string[];
+};
 
 async function batchProcesses(db: DbOrTx, organizationId: string, batchId: string): Promise<BatchProcesses> {
   const rows = await db
@@ -929,34 +1210,79 @@ async function batchProcesses(db: DbOrTx, organizationId: string, batchId: strin
         eq(importRows.batchId, batchId),
         eq(importRows.organizationId, organizationId),
         isNotNull(importRows.processId),
-        or(eq(importRows.action, "create"), isNotNull(importRows.before)),
+        or(inArray(importRows.action, ["create", "update", "merge_instance"]), isNotNull(importRows.before)),
       ),
     );
   const created = [...new Set(rows.filter((r) => r.action === "create").map((r) => r.processId!))];
   const updated = rows
     .filter((r) => r.action !== "create" && r.before)
     .map((r) => ({ processId: r.processId!, rowId: r.id, before: r.before as BeforeState }));
-  return { created, updated };
+  const valuationProcesses = await db
+    .selectDistinct({ processId: processValuations.processId })
+    .from(processValuations)
+    .where(and(eq(processValuations.organizationId, organizationId), eq(processValuations.importBatchId, batchId)));
+  const instanceProcesses = await db
+    .selectDistinct({ processId: processInstances.processId })
+    .from(processInstances)
+    .where(and(eq(processInstances.organizationId, organizationId), eq(processInstances.importBatchId, batchId)));
+  const all = [
+    ...new Set([
+      ...rows.map((r) => r.processId!),
+      ...valuationProcesses.map((v) => v.processId),
+      ...instanceProcesses.map((i) => i.processId),
+    ]),
+  ];
+  return { created, updated, all };
 }
 
-/** Moment after which any change to a process blocks the rollback (end of commit + distribution). */
-async function rollbackBoundary(db: DbOrTx, organizationId: string, batch: { id: string; committedAt: Date | null }) {
-  const [last] = await db
-    .select({ createdAt: auditLogs.createdAt, action: auditLogs.action, metadata: auditLogs.metadata })
+/**
+ * Boundaries of the rollback check. Any change to a process of the batch after
+ * the COMMIT blocks the rollback, except the assignments of the post-commit
+ * distribution: `legal_process.assign` entries (and the `updated_at` they bump)
+ * up to the last distribution progress entry are part of the import. Progress
+ * is written after every chunk, so an interrupted distribution still covers the
+ * assignments of its finished chunks; resuming it covers the rest (and never
+ * hides other changes, which are always compared with the commit).
+ */
+type RollbackBoundary = {
+  /** Commit audit time (database clock: `created_at` columns). */
+  dbClock: Date;
+  /** Commit time (application clock: `updated_at`, `reviewed_at`). */
+  appClock: Date;
+  /** Last distribution progress entry (database clock); equals `dbClock` without distribution. */
+  distributionDbClock: Date;
+  /** Last distribution progress entry (application clock); equals `appClock` without distribution. */
+  distributionAppClock: Date;
+};
+
+async function rollbackBoundary(
+  db: DbOrTx,
+  organizationId: string,
+  batch: { id: string; committedAt: Date | null },
+): Promise<RollbackBoundary> {
+  const [commit] = await db
+    .select({ createdAt: auditLogs.createdAt })
     .from(auditLogs)
     .where(
       and(
         eq(auditLogs.organizationId, organizationId),
         eq(auditLogs.entityType, "import_batch"),
         eq(auditLogs.entityId, batch.id),
-        inArray(auditLogs.action, ["import_batch.commit", "import_batch.distribute"]),
+        eq(auditLogs.action, "import_batch.commit"),
       ),
     )
     .orderBy(desc(auditLogs.createdAt))
     .limit(1);
-  const fromMeta = last?.action === "import_batch.distribute" ? (last.metadata as { completedAt?: string } | null)?.completedAt : null;
-  const appClock = fromMeta ? new Date(fromMeta) : batch.committedAt;
-  return { dbClock: last?.createdAt ?? batch.committedAt ?? new Date(0), appClock: appClock ?? new Date(0) };
+  const dist = await latestDistribution(organizationId, batch.id, db);
+  const dbClock = commit?.createdAt ?? batch.committedAt ?? new Date(0);
+  const appClock = batch.committedAt ?? new Date(0);
+  const completedAt = dist?.summary.completedAt ? new Date(dist.summary.completedAt) : null;
+  return {
+    dbClock,
+    appClock,
+    distributionDbClock: dist && dist.createdAt > dbClock ? dist.createdAt : dbClock,
+    distributionAppClock: completedAt && !Number.isNaN(completedAt.getTime()) && completedAt > appClock ? completedAt : appClock,
+  };
 }
 
 async function findBlockers(
@@ -966,8 +1292,9 @@ async function findBlockers(
   processIds: readonly string[],
 ): Promise<RollbackBlocker[]> {
   if (processIds.length === 0) return [];
-  const { dbClock, appClock } = await rollbackBoundary(db, organizationId, batch);
+  const { dbClock, appClock, distributionDbClock, distributionAppClock } = await rollbackBoundary(db, organizationId, batch);
   const reasons = new Map<string, Set<string>>();
+  const closedPeriods = new Map<string, Set<string>>();
   const add = (ids: { processId: string | null }[], reason: string) => {
     for (const { processId } of ids) {
       if (!processId) continue;
@@ -987,6 +1314,8 @@ async function findBlockers(
             eq(auditLogs.entityType, "legal_process"),
             inArray(auditLogs.entityId, part),
             gt(auditLogs.createdAt, dbClock),
+            // Assignments made by the post-commit distribution are part of the import.
+            or(ne(auditLogs.action, "legal_process.assign"), gt(auditLogs.createdAt, distributionDbClock)),
           ),
         ),
       BLOCKER_REASONS.edited,
@@ -995,7 +1324,7 @@ async function findBlockers(
       await db
         .select({ processId: legalProcesses.id })
         .from(legalProcesses)
-        .where(and(inArray(legalProcesses.id, part), gt(legalProcesses.updatedAt, appClock))),
+        .where(and(inArray(legalProcesses.id, part), gt(legalProcesses.updatedAt, distributionAppClock))),
       BLOCKER_REASONS.edited,
     );
     add(
@@ -1086,6 +1415,27 @@ async function findBlockers(
       },
     ];
     for (const check of checks) add(await check.query, check.reason);
+
+    // RN-10: a closed competência generated after the commit includes the imported data and is immutable.
+    const closed = await db
+      .selectDistinct({ processId: portfolioSnapshotItems.processId, period: portfolioSnapshots.period })
+      .from(portfolioSnapshotItems)
+      .innerJoin(portfolioSnapshots, eq(portfolioSnapshots.id, portfolioSnapshotItems.snapshotId))
+      .where(
+        and(
+          eq(portfolioSnapshots.organizationId, organizationId),
+          eq(portfolioSnapshots.status, "closed"),
+          gt(portfolioSnapshots.generatedAt, batch.committedAt ?? new Date(0)),
+          inArray(portfolioSnapshotItems.processId, part),
+        ),
+      );
+    for (const { processId, period } of closed) {
+      if (!closedPeriods.has(processId)) closedPeriods.set(processId, new Set());
+      closedPeriods.get(processId)!.add(period);
+    }
+  }
+  for (const [processId, periods] of closedPeriods) {
+    add([{ processId }], `incluído em competência fechada (${[...periods].sort().map(periodLabel).join(", ")})`);
   }
 
   if (reasons.size === 0) return [];
@@ -1103,7 +1453,7 @@ async function findBlockers(
 function blockersMessage(blockers: readonly RollbackBlocker[]): string {
   const shown = blockers.slice(0, 10).map((b) => `${b.number} (${b.reasons.join("; ")})`);
   const more = blockers.length > 10 ? ` e mais ${blockers.length - 10}` : "";
-  return `Não é possível desfazer esta importação: ${blockers.length === 1 ? "1 processo foi alterado" : `${blockers.length} processos foram alterados`} depois dela — ${shown.join(", ")}${more}. Ajuste esses processos manualmente ou mantenha a importação.`;
+  return `Não é possível desfazer esta importação: ${blockers.length === 1 ? "1 processo foi alterado" : `${blockers.length} processos foram alterados`} depois dela ou já consta${blockers.length === 1 ? "" : "m"} de competência fechada: ${shown.join(", ")}${more}. Ajuste esses processos manualmente ou mantenha a importação.`;
 }
 
 /** Processes that prevent the rollback of a committed batch (empty when it can be undone). */
@@ -1111,8 +1461,8 @@ export async function getRollbackBlockers(ctx: AuthContext, batchId: string): Pr
   assertCan(ctx, "import:run");
   const batch = await loadBatchRow(ctx, batchId);
   if (batch.status !== "committed") return [];
-  const { created, updated } = await batchProcesses(getDb(), ctx.organizationId, batch.id);
-  return findBlockers(getDb(), ctx.organizationId, batch, [...created, ...updated.map((u) => u.processId)]);
+  const { all } = await batchProcesses(getDb(), ctx.organizationId, batch.id);
+  return findBlockers(getDb(), ctx.organizationId, batch, all);
 }
 
 /**
@@ -1131,18 +1481,18 @@ export async function rollbackImport(ctx: AuthContext, batchId: string): Promise
         batch.status === "rolled_back" ? "Esta importação já foi desfeita." : "Somente importações confirmadas podem ser desfeitas.",
       );
     }
-    const { created, updated } = await batchProcesses(tx, ctx.organizationId, batch.id);
-    const blockers = await findBlockers(tx, ctx.organizationId, batch, [...created, ...updated.map((u) => u.processId)]);
+    const { created, updated, all } = await batchProcesses(tx, ctx.organizationId, batch.id);
+    const blockers = await findBlockers(tx, ctx.organizationId, batch, all);
     if (blockers.length > 0) throw new ConflictError(blockersMessage(blockers));
 
     const removedValuations = await tx
       .delete(processValuations)
       .where(and(eq(processValuations.organizationId, ctx.organizationId), eq(processValuations.importBatchId, batch.id)))
-      .returning({ id: processValuations.id });
+      .returning({ id: processValuations.id, processId: processValuations.processId });
     const removedInstances = await tx
       .delete(processInstances)
       .where(and(eq(processInstances.organizationId, ctx.organizationId), eq(processInstances.importBatchId, batch.id)))
-      .returning({ id: processInstances.id });
+      .returning({ id: processInstances.id, processId: processInstances.processId });
 
     const now = new Date();
     for (const part of chunks(created, 500)) {
@@ -1159,27 +1509,41 @@ export async function rollbackImport(ctx: AuthContext, batchId: string): Promise
         );
     }
 
-    const restoredIds = new Set<string>();
     for (const u of updated) {
-      if (u.before.process && Object.keys(u.before.process).length > 0) {
+      const processBefore = withoutLegacyPhase(u.before.process);
+      if (processBefore && Object.keys(processBefore).length > 0) {
         await tx
           .update(legalProcesses)
-          .set(u.before.process)
+          .set(processBefore)
           .where(and(eq(legalProcesses.id, u.processId), eq(legalProcesses.organizationId, ctx.organizationId)));
       }
-      for (const [instanceId, values] of Object.entries(u.before.instances ?? {})) {
+      for (const [instanceId, raw] of Object.entries(u.before.instances ?? {})) {
+        const values = withoutLegacyPhase(raw);
+        if (!values || Object.keys(values).length === 0) continue;
         await tx
           .update(processInstances)
           .set(values)
           .where(and(eq(processInstances.id, instanceId), eq(processInstances.processId, u.processId)));
       }
-      restoredIds.add(u.processId);
     }
-    for (const pid of restoredIds) {
-      await markAnalysesStaleForEntity(
-        { organizationId: ctx.organizationId, entityId: pid, reason: "Importação de planilha desfeita." },
-        tx,
-      );
+
+    // Existing processes the batch wrote to (fields, instance links or valuations) go back to their
+    // previous state: mirrors (claim, liquidated, provision...) recomputed from what is left.
+    const createdSet = new Set(created);
+    const restoredIds = new Set(
+      [...all, ...updated.map((u) => u.processId), ...removedValuations.map((v) => v.processId), ...removedInstances.map((i) => i.processId)].filter(
+        (pid) => !createdSet.has(pid),
+      ),
+    );
+    if (restoredIds.size > 0) {
+      const settings = await loadSettings(ctx.organizationId, tx);
+      for (const pid of restoredIds) {
+        await syncProcessMirrors(ctx.organizationId, pid, tx, settings);
+        await markAnalysesStaleForEntity(
+          { organizationId: ctx.organizationId, entityId: pid, reason: "Importação de planilha desfeita." },
+          tx,
+        );
+      }
     }
 
     await tx
@@ -1267,7 +1631,7 @@ export async function getImportBatch(ctx: AuthContext, batchId: string): Promise
   const b = row.batch;
   const mapping = storedMapping(b);
 
-  const [summaryResult, sameFile, distributionAudit] = await Promise.all([
+  const [summaryResult, sameFile, distributionAudit, distributionJobPending] = await Promise.all([
     getDb().execute(sql`
       select i.value->>'level' as level, i.value->>'code' as code, count(distinct r.id)::int as rows
       from import_rows r cross join lateral jsonb_array_elements(r.issues) as i(value)
@@ -1285,19 +1649,8 @@ export async function getImportBatch(ctx: AuthContext, batchId: string): Promise
       )
       .orderBy(desc(importBatches.createdAt))
       .limit(5),
-    getDb()
-      .select({ metadata: auditLogs.metadata })
-      .from(auditLogs)
-      .where(
-        and(
-          eq(auditLogs.organizationId, ctx.organizationId),
-          eq(auditLogs.entityType, "import_batch"),
-          eq(auditLogs.entityId, b.id),
-          eq(auditLogs.action, "import_batch.distribute"),
-        ),
-      )
-      .orderBy(desc(auditLogs.createdAt))
-      .limit(1),
+    latestDistribution(ctx.organizationId, b.id),
+    b.status === "committed" ? hasPendingDistributionJob(ctx.organizationId, b.id) : false,
   ]);
 
   const levelOrder: Record<IssueLevel, number> = { error: 0, warning: 1, info: 2 };
@@ -1357,7 +1710,8 @@ export async function getImportBatch(ctx: AuthContext, batchId: string): Promise
     storedRows,
     problemRows,
     sameFileBatches: sameFile,
-    distribution: (distributionAudit[0]?.metadata as DistributionSummary | undefined) ?? null,
+    distribution: distributionAudit?.summary ?? null,
+    distributionState: distributionState(b, mapping.distributeAfterCommit ?? false, distributionAudit, distributionJobPending),
     dataSheets: b.sheets.filter((s) => s.role !== "ignored").map((s) => s.name),
   };
 }
@@ -1491,7 +1845,7 @@ export async function listImportIssues(
   return { items: resultRows<IssueRow>(rows).map(toIssueItem), total, page, pageSize };
 }
 
-/** All issues matching the filters (CSV export). */
+/** All issues matching the filters (CSV export). Audited as `import_batch.export_issues` (filters and count only). */
 export async function listAllImportIssues(
   ctx: AuthContext,
   batchId: string,
@@ -1508,7 +1862,16 @@ export async function listAllImportIssues(
     from import_rows r cross join lateral jsonb_array_elements(r.issues) with ordinality as i(value, idx)
     where ${issueConditions(ctx, id, f)}
     order by ${sheetOrder(sheets, sql`r.sheet`)}, r.row_number, i.idx`);
-  return { fileName: batch.fileName, items: resultRows<IssueRow>(rows).map(toIssueItem) };
+  const items = resultRows<IssueRow>(rows).map(toIssueItem);
+  // Traceability of the export: filters and row count only, never cell values.
+  await recordAudit(ctx, {
+    action: "import_batch.export_issues",
+    entityType: "import_batch",
+    entityId: batch.id,
+    summary: `Inconsistências da importação exportadas em CSV (${items.length} ${items.length === 1 ? "linha" : "linhas"})`,
+    metadata: { filters: { sheet: f.sheet ?? null, level: f.level ?? null, code: f.code ?? null }, rows: items.length },
+  });
+  return { fileName: batch.fileName, items };
 }
 
 /** Divergences between sheets (one line per field), taken from the official line of each CNJ + instance. */

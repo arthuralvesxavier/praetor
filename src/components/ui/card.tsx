@@ -23,7 +23,7 @@ export function CardHeader({ className, actions, children, ...props }: CardHeade
   return (
     <div className={cn("flex flex-wrap items-start justify-between gap-3 px-5", className)} {...props}>
       <div className="flex min-w-0 flex-1 flex-col gap-1">{children}</div>
-      {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+      {actions ? <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
   );
 }

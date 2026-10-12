@@ -12,10 +12,23 @@
  * source.
  *
  * Values: `claimAmountCents` (valor da causa) is edited here and every change
- * appends an official `claim` valuation (RF-09, allowed exception in
- * MODULE_CONTRACTS). `liquidatedAmountCents`, `provisionAmountCents`,
- * `lossProbability` and `riskPercentageBp` are mirrors maintained by the
- * contingency module and are never written by this service.
+ * appends a `claim` valuation (RF-09, allowed exception in MODULE_CONTRACTS
+ * "Denormalized mirrors"). Only an identified person whose role has
+ * `contingency:approve` makes it OFFICIAL (RN-11): the change supersedes the
+ * previous official claims and `syncProcessMirrors` runs in the same
+ * transaction (provision and the other mirrors follow). Anyone else (lawyers,
+ * external counsel, analysts registering an intake through the delegated
+ * context) records a PROPOSED claim for the review queue and the record does
+ * not take the value: on create it stays "não informado", on an update it keeps
+ * the current one, until the review queue approves the proposal (the approval
+ * syncs the mirror; a rejection leaves the record untouched). Proposed values
+ * therefore never reach totals, positions or exposure. A context without a
+ * person (imports, inbound API) creates with the informed value and records no
+ * valuation, and may not change it afterwards. A
+ * removal by an approver stamps `cleared_on` on the superseded rows (positions
+ * of later dates read "não informado"). `liquidatedAmountCents`,
+ * `provisionAmountCents`, `lossProbability` and `riskPercentageBp` are mirrors
+ * maintained by the contingency module and are never written by this service.
  */
 import {
   and,
@@ -45,7 +58,9 @@ import {
   PROCESS_INSTANCE_LABELS,
   PROCESS_INSTANCES,
   type ClosureReason,
+  type ConfidentialityLevel,
   type DataOrigin,
+  type DocumentCategory,
   type LegalArea,
   type LiabilityNature,
   type PartyRole,
@@ -55,11 +70,19 @@ import {
   type ProcessStatus,
   type RiskLevel,
 } from "@/domain/enums";
-import { formatNumber, todayISO } from "@/lib/format";
+import { formatMoneyCents, formatNumber, todayISO } from "@/lib/format";
 import { markAnalysesStaleForEntity } from "@/modules/analyses/service";
+import { syncProcessMirrors, type MirrorChanges } from "@/modules/contingency/internal";
 import { linkOccurrenceToProcess } from "@/modules/occurrences/service";
 import { assertCompanyInOrg, assertLawFirmInOrg } from "@/modules/organization/service";
-import { deadlineWhere, isExternalCounsel, occurrenceWhere, processWhere, seesConfidential } from "@/server/auth/access";
+import {
+  deadlineWhere,
+  documentWhere,
+  isExternalCounsel,
+  occurrenceWhere,
+  processWhere,
+  seesConfidential,
+} from "@/server/auth/access";
 import type { AuthContext } from "@/server/auth/context";
 import { assertCan, can } from "@/server/auth/permissions";
 import { getDb, type DbOrTx } from "@/server/db/client";
@@ -67,6 +90,7 @@ import {
   auditLogs,
   companies,
   deadlines,
+  documents,
   lawFirms,
   legalProcesses,
   occurrences,
@@ -104,6 +128,7 @@ import {
   type ProcessEventInput,
   type ProcessFilters,
   type ProcessInstanceInput,
+  type ProcessMissingField,
   type ProcessSort,
   type ReactivateProcessInput,
   type ResolveVerificationInput,
@@ -220,7 +245,14 @@ export type ProcessInstanceItem = {
   processClass: string | null;
   phase: ProcessPhase | null;
   phaseDetail: string | null;
+  /** Value stored on the link row (what the instance dialog edits). */
   claimAmountCents: number | null;
+  /**
+   * Computed on read: for the CURRENT instance without its own valor da causa, the valor da causa of the
+   * process record (official value or import), e.g. right after the review queue approved a proposal
+   * (the approval fills only the record). Null otherwise. Shown as "Valor do cadastro do processo".
+   */
+  claimFromRecordCents: number | null;
   liquidatedAmountCents: number | null;
   isCurrent: boolean;
   origin: DataOrigin;
@@ -490,6 +522,29 @@ function searchCondition(q: string): SQL {
 
 type ParsedFilters = z.output<typeof processFiltersSchema>;
 
+/**
+ * `pendencia=<field>`: the field is empty on the process — null, or blank text
+ * for court and city. Same rule as the dashboard's "Pendências de cadastro"
+ * (`@/modules/dashboard/portfolio-service`), which keeps these processes out of its charts.
+ */
+function missingFieldCondition(field: ProcessMissingField): SQL {
+  const p = legalProcesses;
+  switch (field) {
+    case "court":
+      return sql`coalesce(${p.court}, '') ~ '^[[:space:]]*$'`;
+    case "city":
+      return sql`coalesce(${p.city}, '') ~ '^[[:space:]]*$'`;
+    case "instance":
+      return isNull(p.instance);
+    case "phase":
+      return isNull(p.phase);
+    case "company":
+      return isNull(p.companyId);
+    case "unit":
+      return isNull(p.unitId);
+  }
+}
+
 /** WHERE of the portfolio list, its summary and its export (always includes the row scope). */
 function listWhere(ctx: AuthContext, f: ParsedFilters): SQL {
   const p = legalProcesses;
@@ -514,6 +569,7 @@ function listWhere(ctx: AuthContext, f: ParsedFilters): SQL {
       f.claimMaxCents !== undefined ? lte(p.claimAmountCents, f.claimMaxCents) : undefined,
       f.liquidated === "with" ? isNotNull(p.liquidatedAmountCents) : undefined,
       f.liquidated === "without" ? isNull(p.liquidatedAmountCents) : undefined,
+      f.missingField ? missingFieldCondition(f.missingField) : undefined,
       f.needsVerification ? eq(p.needsVerification, true) : undefined,
       f.portfolio === "active" ? inArray(p.status, [...ACTIVE_PORTFOLIO_STATUSES]) : undefined,
       f.portfolio === "closed" ? inArray(p.status, INACTIVE_STATUSES) : undefined,
@@ -695,19 +751,21 @@ export async function getProcessFilterOptions(ctx: AuthContext): Promise<Process
   assertCan(ctx, "process:read");
   const db = getDb();
   const p = legalProcesses;
+  // Every distinct value (no silent cap: a filter option missing from the list cannot be chosen).
   const distinct = async (col: AnyPgColumn): Promise<string[]> => {
     const rows = await db
       .selectDistinct({ value: col })
       .from(p)
       .where(and(processWhere(ctx), isNotNull(col), ne(col, "")))
-      .orderBy(asc(col))
-      .limit(500);
+      .orderBy(asc(col));
     return rows.map((r) => String(r.value));
   };
-  const courts = await distinct(p.court);
-  const classes = await distinct(p.processClass);
-  const cities = await distinct(p.city);
-  const states = await distinct(p.state);
+  const [courts, classes, cities, states] = await Promise.all([
+    distinct(p.court),
+    distinct(p.processClass),
+    distinct(p.city),
+    distinct(p.state),
+  ]);
   return { courts, classes, cities, states };
 }
 
@@ -728,7 +786,19 @@ export async function getProcessSummary(ctx: AuthContext): Promise<ProcessSummar
   return { total: Number(row?.total ?? 0), active: row?.active ?? 0, highRisk: row?.highRisk ?? 0 };
 }
 
-function toInstanceItem(r: InstanceRow, canEdit: boolean): ProcessInstanceItem {
+/**
+ * Valor da causa of the current instance computed on read: the link row's own value, or the record's
+ * when the row has none (the record follows the official valuation; the link row is a snapshot taken
+ * when it was created). Used by the detail page and the per-instance export sheet.
+ */
+export function currentInstanceClaimFallback(
+  instance: { isCurrent: boolean; claimAmountCents: number | null },
+  recordClaimCents: number | null,
+): number | null {
+  return instance.isCurrent && instance.claimAmountCents === null ? recordClaimCents : null;
+}
+
+function toInstanceItem(r: InstanceRow, canEdit: boolean, recordClaimCents: number | null): ProcessInstanceItem {
   return {
     id: r.id,
     instance: r.instance,
@@ -740,6 +810,7 @@ function toInstanceItem(r: InstanceRow, canEdit: boolean): ProcessInstanceItem {
     phase: r.phase,
     phaseDetail: r.phaseDetail,
     claimAmountCents: r.claimAmountCents,
+    claimFromRecordCents: currentInstanceClaimFallback(r, recordClaimCents),
     liquidatedAmountCents: r.liquidatedAmountCents,
     isCurrent: r.isCurrent,
     origin: r.origin,
@@ -755,44 +826,43 @@ export async function getProcess(ctx: AuthContext, id: string): Promise<ProcessD
   const db = getDb();
   const org = ctx.organizationId;
 
-  const parties = await db
-    .select()
-    .from(processParties)
-    .where(and(eq(processParties.processId, row.id), eq(processParties.organizationId, org)))
-    .orderBy(asc(processParties.role), asc(processParties.name));
-  const events = await db
-    .select()
-    .from(processEvents)
-    .where(and(eq(processEvents.processId, row.id), eq(processEvents.organizationId, org)))
-    .orderBy(desc(processEvents.occurredAt), desc(processEvents.createdAt));
-  const instances = await db
-    .select()
-    .from(processInstances)
-    .where(and(eq(processInstances.processId, row.id), eq(processInstances.organizationId, org)));
-  const unitName = row.unitId
-    ? ((
-        await db
-          .select({ name: units.name })
-          .from(units)
-          .where(and(eq(units.id, row.unitId), eq(units.organizationId, org)))
-      )[0]?.name ?? null)
-    : null;
-  const companyName = row.companyId
-    ? ((
-        await db
-          .select({ name: companies.name })
-          .from(companies)
-          .where(and(eq(companies.id, row.companyId), eq(companies.organizationId, org)))
-      )[0]?.name ?? null)
-    : null;
-  const lawFirmName = row.lawFirmId
-    ? ((
-        await db
-          .select({ name: lawFirms.name })
-          .from(lawFirms)
-          .where(and(eq(lawFirms.id, row.lawFirmId), eq(lawFirms.organizationId, org)))
-      )[0]?.name ?? null)
-    : null;
+  const nameOf = async (rows: Promise<{ name: string }[]>) => (await rows)[0]?.name ?? null;
+  const [parties, events, instances, unitName, companyName, lawFirmName] = await Promise.all([
+    db
+      .select()
+      .from(processParties)
+      .where(and(eq(processParties.processId, row.id), eq(processParties.organizationId, org)))
+      .orderBy(asc(processParties.role), asc(processParties.name)),
+    // One timeline for every instance of the CNJ (RN-01): most recent first; same day, latest recorded first.
+    db
+      .select()
+      .from(processEvents)
+      .where(and(eq(processEvents.processId, row.id), eq(processEvents.organizationId, org)))
+      .orderBy(desc(processEvents.occurredAt), desc(processEvents.createdAt), desc(processEvents.id)),
+    db
+      .select()
+      .from(processInstances)
+      .where(and(eq(processInstances.processId, row.id), eq(processInstances.organizationId, org))),
+    row.unitId
+      ? nameOf(db.select({ name: units.name }).from(units).where(and(eq(units.id, row.unitId), eq(units.organizationId, org))))
+      : null,
+    row.companyId
+      ? nameOf(
+          db
+            .select({ name: companies.name })
+            .from(companies)
+            .where(and(eq(companies.id, row.companyId), eq(companies.organizationId, org))),
+        )
+      : null,
+    row.lawFirmId
+      ? nameOf(
+          db
+            .select({ name: lawFirms.name })
+            .from(lawFirms)
+            .where(and(eq(lawFirms.id, row.lawFirmId), eq(lawFirms.organizationId, org))),
+        )
+      : null,
+  ]);
 
   const names = await userNameMap(org, [row.responsibleId, row.createdById, ...events.map((e) => e.createdById)]);
   const canEdit = can(ctx, "process:write");
@@ -831,7 +901,7 @@ export async function getProcess(ctx: AuthContext, id: string): Promise<ProcessD
       removable: canEdit && e.origin === "manual",
     })),
     instances: instances
-      .map((r) => toInstanceItem(r, canEdit))
+      .map((r) => toInstanceItem(r, canEdit, row.claimAmountCents))
       .sort((a, b) => instanceOrder(a.instance) - instanceOrder(b.instance)),
     permissions: {
       canEdit,
@@ -841,15 +911,80 @@ export async function getProcess(ctx: AuthContext, id: string): Promise<ProcessD
   };
 }
 
-/** Contract: options for selects in other modules (documents, deadlines, tasks, contracts). */
-export async function listProcessOptions(ctx: AuthContext): Promise<{ id: string; number: string; title: string }[]> {
+export type ProcessOption = { id: string; number: string; title: string };
+
+/**
+ * Contract: options for selects in other modules (documents, deadlines, tasks, contracts).
+ * Every visible process, ordered by number: no silent cap (a process missing from a select
+ * cannot be linked). For large portfolios prefer `searchProcessOptions` (search + "N de M").
+ */
+export async function listProcessOptions(ctx: AuthContext): Promise<ProcessOption[]> {
   assertCan(ctx, "process:read");
   return getDb()
     .select({ id: legalProcesses.id, number: legalProcesses.number, title: legalProcesses.title })
     .from(legalProcesses)
     .where(processWhere(ctx))
-    .orderBy(asc(legalProcesses.number))
-    .limit(1000);
+    .orderBy(asc(legalProcesses.number), asc(legalProcesses.id));
+}
+
+/** Default page of `searchProcessOptions`. */
+export const PROCESS_OPTIONS_LIMIT = 50;
+
+export type ProcessOptionsPage = {
+  /** Matching options (at most `limit`), plus the `includeIds` that are visible, in number order. */
+  items: ProcessOption[];
+  /** Visible processes matching `q` (the UI says "mostrando N de M" when `total > shown`). */
+  total: number;
+  /** Matching options returned (without the extra `includeIds`). */
+  shown: number;
+};
+
+/**
+ * Search-as-you-type options: number (with or without punctuation) or title, scoped by
+ * `processWhere`. `includeIds` keeps the currently selected processes in the list even when
+ * they do not match the search (only the visible ones).
+ */
+export async function searchProcessOptions(
+  ctx: AuthContext,
+  opts: { q?: string | null; includeIds?: readonly string[]; limit?: number } = {},
+): Promise<ProcessOptionsPage> {
+  assertCan(ctx, "process:read");
+  const p = legalProcesses;
+  const q = opts.q?.trim() ?? "";
+  const limit = Math.min(Math.max(1, Math.trunc(opts.limit ?? PROCESS_OPTIONS_LIMIT)), 500);
+  let match: SQL | undefined;
+  if (q) {
+    const pattern = `%${escapeLike(q)}%`;
+    const digits = q.replace(/\D/g, "");
+    match = or(
+      ilike(p.number, pattern),
+      ilike(p.title, pattern),
+      digits.length >= 4 && /^[\d.\-\s/]+$/.test(q) ? sql`regexp_replace(${p.number}, '[^0-9]', '', 'g') like ${`%${digits}%`}` : undefined,
+    );
+  }
+  const where = and(processWhere(ctx), match);
+  const db = getDb();
+  const include = [...new Set(opts.includeIds ?? [])].filter(isUuid);
+  const [rows, [totalRow], extra] = await Promise.all([
+    db
+      .select({ id: p.id, number: p.number, title: p.title })
+      .from(p)
+      .where(where)
+      .orderBy(asc(p.number), asc(p.id))
+      .limit(limit),
+    db.select({ n: count() }).from(p).where(where),
+    include.length > 0
+      ? db
+          .select({ id: p.id, number: p.number, title: p.title })
+          .from(p)
+          .where(and(processWhere(ctx), inArray(p.id, include)))
+      : Promise.resolve([] as ProcessOption[]),
+  ]);
+  const seen = new Set(rows.map((r) => r.id));
+  const items = [...rows, ...extra.filter((r) => !seen.has(r.id))].sort(
+    (a, b) => a.number.localeCompare(b.number) || a.id.localeCompare(b.id),
+  );
+  return { items, total: Number(totalRow?.n ?? 0), shown: rows.length };
 }
 
 /**
@@ -910,23 +1045,29 @@ export async function recordConfidentialProcessView(ctx: AuthContext, processId:
   const process = await loadProcess(ctx, processId);
   if (!process.isConfidential) return false;
 
-  return getDb().transaction(async (tx) => {
-    // Serializes concurrent views of the same process by the same user.
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`process-view:${userId}:${process.id}`}))`);
-    const since = new Date(Date.now() - CONFIDENTIAL_VIEW_WINDOW_MS);
-    const [recent] = await tx
+  // entity_type + entity_id lets the lookup use audit_entity_idx.
+  const recentView = (db: DbOrTx) =>
+    db
       .select({ id: auditLogs.id })
       .from(auditLogs)
       .where(
         and(
           eq(auditLogs.organizationId, ctx.organizationId),
+          eq(auditLogs.entityType, "legal_process"),
+          eq(auditLogs.entityId, process.id),
           eq(auditLogs.actorId, userId),
           eq(auditLogs.action, CONFIDENTIAL_VIEW_ACTION),
-          eq(auditLogs.entityId, process.id),
-          gte(auditLogs.createdAt, since),
+          gte(auditLogs.createdAt, new Date(Date.now() - CONFIDENTIAL_VIEW_WINDOW_MS)),
         ),
       )
       .limit(1);
+  // Most renders find a recent entry: answer without opening a transaction or taking the lock.
+  if ((await recentView(getDb())).length > 0) return false;
+
+  return getDb().transaction(async (tx) => {
+    // Serializes concurrent views of the same process by the same user.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`process-view:${userId}:${process.id}`}))`);
+    const [recent] = await recentView(tx);
     if (recent) return false;
     await recordAudit(
       ctx,
@@ -944,14 +1085,167 @@ export async function recordConfidentialProcessView(ctx: AuthContext, processId:
 }
 
 // ---------------------------------------------------------------------------
+// Downloads of sensitive documents (P2.12)
+// ---------------------------------------------------------------------------
+
+/** Rows shown on the process page; the total is always reported. */
+export const SENSITIVE_DOWNLOAD_LOG_LIMIT = 20;
+
+export type SensitiveDownloadItem = {
+  id: string;
+  documentId: string;
+  documentTitle: string;
+  category: DocumentCategory;
+  confidentiality: ConfidentialityLevel;
+  versionNumber: number | null;
+  /** Who downloaded (null = the user no longer exists). */
+  actorName: string | null;
+  at: Date;
+};
+
+export type SensitiveDownloadLog = {
+  /** Sensitive documents of the process the viewer can see (0 = nothing to show). */
+  sensitiveDocuments: number;
+  total: number;
+  items: SensitiveDownloadItem[];
+};
+
+/**
+ * Who downloaded the SENSITIVE documents of a process and when: health documents
+ * (`sensitive_health`) and documents classified `confidential` or `restricted`.
+ * Reads the `document.download` audit entries, restricted to the documents the viewer
+ * can see (`documentWhere`) of a process the viewer can see (`processWhere`); the audit
+ * summary (which carries the title as typed at download time) is never returned.
+ */
+export async function listSensitiveDocumentDownloads(
+  ctx: AuthContext,
+  processId: string,
+  opts: { limit?: number } = {},
+): Promise<SensitiveDownloadLog> {
+  assertCan(ctx, "process:read");
+  assertCan(ctx, "document:read");
+  const process = await loadProcess(ctx, processId);
+  const d = documents;
+  const docScope = and(
+    eq(d.processId, process.id),
+    documentWhere(ctx),
+    or(eq(d.category, "sensitive_health"), inArray(d.confidentiality, ["confidential", "restricted"])),
+  );
+  const db = getDb();
+  const [docs] = await db.select({ n: count() }).from(d).where(docScope);
+  const sensitiveDocuments = Number(docs?.n ?? 0);
+  if (sensitiveDocuments === 0) return { sensitiveDocuments, total: 0, items: [] };
+
+  const where = and(
+    eq(auditLogs.organizationId, ctx.organizationId),
+    eq(auditLogs.entityType, "document"),
+    eq(auditLogs.action, "document.download"),
+    docScope,
+  );
+  const limit = Math.min(Math.max(1, Math.trunc(opts.limit ?? SENSITIVE_DOWNLOAD_LOG_LIMIT)), 200);
+  const [rows, [totalRow]] = await Promise.all([
+    db
+      .select({
+        id: auditLogs.id,
+        documentId: d.id,
+        documentTitle: d.title,
+        category: d.category,
+        confidentiality: d.confidentiality,
+        versionNumber: sql<number | null>`(${auditLogs.metadata} ->> 'versionNumber')::int`,
+        actorName: users.name,
+        at: auditLogs.createdAt,
+      })
+      .from(auditLogs)
+      .innerJoin(d, eq(d.id, auditLogs.entityId))
+      .leftJoin(users, and(eq(users.id, auditLogs.actorId), eq(users.organizationId, ctx.organizationId)))
+      .where(where)
+      .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
+      .limit(limit),
+    db.select({ n: count() }).from(auditLogs).innerJoin(d, eq(d.id, auditLogs.entityId)).where(where),
+  ]);
+  return {
+    sensitiveDocuments,
+    total: Number(totalRow?.n ?? 0),
+    items: rows.map((r) => ({ ...r, actorName: r.actorName ?? null })),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Value history: valor da causa (RF-09)
 // ---------------------------------------------------------------------------
 
 /**
- * Appends an official `claim` valuation (source manual, reviewed by the
- * editing user) and marks the previous official claim valuations as
- * superseded. With `amountCents = null` (valor da causa removed) only the
- * supersession happens. System contexts skip it (imports record their own).
+ * True when `ctx` is an identified person whose ROLE may make values official
+ * (`contingency:approve`, RN-11). The delegated intake context (`kind: "system"`
+ * with the analyst's user id, see intake/service `processContext`) is judged by
+ * the person's role, never by the system bypass of `can`.
+ */
+export function canMakeClaimOfficial(ctx: AuthContext): boolean {
+  return ctx.userId !== null && can({ kind: "user", role: ctx.role }, "contingency:approve");
+}
+
+/** Message of a removal attempted by someone who cannot make values official. */
+export const CLAIM_REMOVAL_NEEDS_APPROVER =
+  "A remoção do valor da causa precisa ser feita por quem confere valores (gestão jurídica, contabilidade ou administração).";
+
+/** Message of a change of the valor da causa by a context without an identified person. */
+export const CLAIM_CHANGE_NEEDS_PERSON =
+  "O valor da causa só pode ser alterado por uma pessoa identificada, pela tela do processo ou pela conferência de valores.";
+
+/**
+ * True when the valor da causa informed by `ctx` goes to the review queue instead of the
+ * record: an identified person whose role cannot make values official.
+ */
+function claimGoesToReview(ctx: AuthContext): boolean {
+  return ctx.userId !== null && !canMakeClaimOfficial(ctx);
+}
+
+export type ClaimValuationResult = {
+  valuationId: string | null;
+  /** `official` (approver), `proposed` (review queue) or null (nothing recorded). */
+  status: "official" | "proposed" | null;
+  /** True when an identical pending proposal already existed (nothing new was inserted). */
+  reusedProposal: boolean;
+  supersededIds: string[];
+  /** Mirror fields changed by `syncProcessMirrors` (approvers only). */
+  mirrors: MirrorChanges;
+};
+
+/** Source of a valor da causa recorded from the process form or the intake. */
+export type ClaimValuationSource = "manual" | "simulation";
+
+/** Reason of the claim valuation recorded when a process is created. */
+const CREATE_CLAIM_REASON: Record<ClaimValuationSource, string> = {
+  manual: "Valor da causa informado no cadastro do processo.",
+  simulation: "Valor da causa simulado (demonstração) na entrada do processo. Não é um valor real.",
+};
+
+const NO_CLAIM_VALUATION: ClaimValuationResult = {
+  valuationId: null,
+  status: null,
+  reusedProposal: false,
+  supersededIds: [],
+  mirrors: null,
+};
+
+/**
+ * Value history of the valor da causa (RF-09), inside the caller's transaction.
+ *
+ * - Approver (`canMakeClaimOfficial`): appends an OFFICIAL `claim` valuation (source
+ *   manual, reviewed by the person), supersedes the previous official claims and runs
+ *   `syncProcessMirrors` (provision, risk and liquidated mirrors follow the new value).
+ *   With `amountCents = null` (valor da causa removed) only the supersession happens and
+ *   the superseded rows get `cleared_on = today` (the value stops counting from today on).
+ * - Anyone else: appends a PROPOSED claim valuation for the review queue (no reviewer, no
+ *   supersession, mirrors untouched). An identical pending proposal (same source) is reused. A
+ *   removal cannot be proposed (callers refuse it before, see `CLAIM_REMOVAL_NEEDS_APPROVER`).
+ *   Callers keep the proposed amount OFF the record (`claimAmountCents`), so it never
+ *   counts before the approval nor after a rejection.
+ * - Contexts without a person (imports, inbound API) record nothing here (`createProcess`
+ *   keeps the informed value on the record; `updateProcess` refuses a change).
+ * - `source` is `manual` for a value typed by the person and `simulation` for a value the
+ *   intake demonstration generated (`createProcess` option `claimSource`): the queue, the band
+ *   and BI then label it "Extração simulada (demonstração)" and bulk approval refuses it.
  */
 async function recordClaimValuation(
   ctx: AuthContext,
@@ -959,59 +1253,117 @@ async function recordClaimValuation(
   process: { id: string; instance: ProcessInstance | null },
   amountCents: number | null,
   reason: string,
-): Promise<{ valuationId: string | null; supersededIds: string[] }> {
-  if (ctx.kind !== "user" || !ctx.userId) return { valuationId: null, supersededIds: [] };
+  source: ClaimValuationSource = "manual",
+): Promise<ClaimValuationResult> {
+  if (!ctx.userId) return NO_CLAIM_VALUATION;
+  const userId = ctx.userId;
   const v = processValuations;
+  const claimsOfProcess = and(eq(v.organizationId, ctx.organizationId), eq(v.processId, process.id), eq(v.kind, "claim"));
+
+  if (!canMakeClaimOfficial(ctx)) {
+    if (amountCents === null) return NO_CLAIM_VALUATION;
+    const [pending] = await tx
+      .select({ id: v.id })
+      .from(v)
+      .where(and(claimsOfProcess, eq(v.status, "proposed"), eq(v.source, source), eq(v.amountCents, amountCents)))
+      .limit(1);
+    if (pending) return { ...NO_CLAIM_VALUATION, valuationId: pending.id, status: "proposed", reusedProposal: true };
+    const [row] = await tx
+      .insert(v)
+      .values({
+        organizationId: ctx.organizationId,
+        processId: process.id,
+        kind: "claim",
+        amountCents,
+        baseDate: todayISO(),
+        instance: process.instance,
+        source,
+        status: "proposed",
+        isEstimate: false,
+        reason,
+        createdById: userId,
+      })
+      .returning({ id: v.id });
+    return { ...NO_CLAIM_VALUATION, valuationId: row.id, status: "proposed" };
+  }
+
   const previous = await tx
     .select({ id: v.id })
     .from(v)
-    .where(
-      and(
-        eq(v.organizationId, ctx.organizationId),
-        eq(v.processId, process.id),
-        eq(v.kind, "claim"),
-        eq(v.status, "official"),
-      ),
-    )
+    .where(and(claimsOfProcess, eq(v.status, "official")))
     .orderBy(desc(v.createdAt));
   const supersededIds = previous.map((r) => r.id);
   if (supersededIds.length > 0) {
     await tx
       .update(v)
-      .set({ status: "superseded" })
+      // A removal has no successor: the date tells positions from when the value no longer counts.
+      .set(amountCents === null ? { status: "superseded", clearedOn: todayISO() } : { status: "superseded" })
       .where(and(eq(v.organizationId, ctx.organizationId), inArray(v.id, supersededIds)));
   }
-  if (amountCents === null) return { valuationId: null, supersededIds };
-  const [row] = await tx
-    .insert(v)
-    .values({
-      organizationId: ctx.organizationId,
-      processId: process.id,
-      kind: "claim",
-      amountCents,
-      baseDate: todayISO(),
-      instance: process.instance,
-      source: "manual",
-      status: "official",
-      isEstimate: false,
-      reason,
-      supersedesId: supersededIds[0] ?? null,
-      createdById: ctx.userId,
-      reviewedById: ctx.userId,
-      reviewedAt: new Date(),
-    })
-    .returning({ id: v.id });
-  return { valuationId: row.id, supersededIds };
+  let valuationId: string | null = null;
+  if (amountCents !== null) {
+    const [row] = await tx
+      .insert(v)
+      .values({
+        organizationId: ctx.organizationId,
+        processId: process.id,
+        kind: "claim",
+        amountCents,
+        baseDate: todayISO(),
+        instance: process.instance,
+        source,
+        status: "official",
+        isEstimate: false,
+        reason,
+        supersedesId: supersededIds[0] ?? null,
+        createdById: userId,
+        reviewedById: userId,
+        reviewedAt: new Date(),
+      })
+      .returning({ id: v.id });
+    valuationId = row.id;
+  }
+  const mirrors = await syncProcessMirrors(ctx.organizationId, process.id, tx);
+  return {
+    valuationId,
+    status: valuationId ? "official" : null,
+    reusedProposal: false,
+    supersededIds,
+    mirrors,
+  };
+}
+
+/** Audit diff + the mirror fields `syncProcessMirrors` changed in the same transaction. */
+function withMirrorChanges(
+  changes: Record<string, { from: unknown; to: unknown }> | null,
+  mirrors: MirrorChanges,
+): Record<string, { from: unknown; to: unknown }> | null {
+  if (!mirrors) return changes;
+  const out = { ...(changes ?? {}) };
+  for (const [key, change] of Object.entries(mirrors)) {
+    out[key] = out[key] ? { from: out[key].from, to: change.to } : change;
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 // ---------------------------------------------------------------------------
 // Process mutations
 // ---------------------------------------------------------------------------
 
+/** Server-only options of `createProcess` (never read from a form). */
+export type CreateProcessOptions = {
+  /**
+   * Origin of the informed valor da causa: `simulation` when the intake demonstration generated it
+   * (the valuation is labeled as simulated); `manual` (default) when a person typed it.
+   */
+  claimSource?: ClaimValuationSource;
+};
+
 export async function createProcess(
   ctx: AuthContext,
   input: CreateProcessInput,
-): Promise<{ id: string; occurrenceLinkError: string | null }> {
+  options: CreateProcessOptions = {},
+): Promise<{ id: string; occurrenceLinkError: string | null; claimValuationStatus: ClaimValuationResult["status"] }> {
   assertCan(ctx, "process:write");
   const v = parse(createProcessSchema, input);
   const number = normalizeProcessNumber(v.number);
@@ -1031,6 +1383,12 @@ export async function createProcess(
     : (origin?.isConfidential ?? false);
 
   const status = v.status ?? "active";
+  const informedClaimCents = v.claimAmountCents ?? null;
+  const claimSource: ClaimValuationSource = options.claimSource ?? "manual";
+  const claimLabel = claimSource === "simulation" ? "Valor da causa simulado (demonstração)" : "Valor da causa";
+  // A non-approver's valor da causa is only a proposal: the record (and the instance row)
+  // stays "não informado" until the review queue approves it, so it never enters a total.
+  const proposedClaimCents = informedClaimCents !== null && claimGoesToReview(ctx) ? informedClaimCents : null;
   const values = {
     organizationId: ctx.organizationId,
     number,
@@ -1045,7 +1403,7 @@ export async function createProcess(
     closedAt: v.closedAt ?? null,
     unitId: v.unitId ?? null,
     responsibleId: v.responsibleId ?? null,
-    claimAmountCents: v.claimAmountCents ?? null,
+    claimAmountCents: proposedClaimCents !== null ? null : informedClaimCents,
     riskLevel: v.riskLevel ?? "medium",
     riskRationale: v.riskRationale ?? null,
     description: v.description ?? null,
@@ -1066,6 +1424,7 @@ export async function createProcess(
   } satisfies typeof legalProcesses.$inferInsert;
 
   let created: ProcessRow;
+  let claimStatus: ClaimValuationResult["status"] = null;
   try {
     created = await getDb().transaction(async (tx) => {
       const [row] = await tx.insert(legalProcesses).values(values).returning();
@@ -1087,25 +1446,45 @@ export async function createProcess(
           origin: "manual",
         });
       }
+      // An approver's valor da causa becomes an OFFICIAL valuation (mirrors synced); anyone
+      // else's becomes a proposal in the review queue and the record stays without it.
       const claim =
-        row.claimAmountCents !== null
-          ? await recordClaimValuation(ctx, tx, row, row.claimAmountCents, "Valor da causa informado no cadastro do processo.")
+        informedClaimCents !== null
+          ? await recordClaimValuation(ctx, tx, row, informedClaimCents, CREATE_CLAIM_REASON[claimSource], claimSource)
           : null;
+      const proposed = claim?.status === "proposed" && claim.valuationId ? claim.valuationId : null;
       await recordAudit(
         ctx,
         {
           action: "legal_process.create",
           entityType: "legal_process",
           entityId: row.id,
-          summary: `Processo ${row.number} cadastrado.`,
-          changes: diffChanges(null, row, AUDIT_FIELDS),
+          summary: proposed
+            ? `Processo ${row.number} cadastrado. ${claimLabel} de ${formatMoneyCents(informedClaimCents)} enviado para conferência.`
+            : `Processo ${row.number} cadastrado.`,
+          changes: withMirrorChanges(diffChanges(null, row, AUDIT_FIELDS), claim?.mirrors ?? null),
           metadata: {
             ...(v.fromOccurrenceId ? { fromOccurrenceId: v.fromOccurrenceId } : {}),
-            ...(claim?.valuationId ? { claimValuationId: claim.valuationId } : {}),
+            ...(claim?.valuationId ? { claimValuationId: claim.valuationId, claimValuationStatus: claim.status } : {}),
           },
         },
         tx,
       );
+      if (proposed) {
+        // Same audit shape as contingency `proposeValuation` and the update below.
+        await recordAudit(
+          ctx,
+          {
+            action: "valuation.propose",
+            entityType: "legal_process",
+            entityId: row.id,
+            summary: `${claimLabel} de ${formatMoneyCents(informedClaimCents)} proposto para conferência no processo ${row.number}.`,
+            metadata: { valuationId: proposed, source: claimSource, fromProcessForm: true },
+          },
+          tx,
+        );
+      }
+      claimStatus = claim?.status ?? null;
       return row;
     });
   } catch (err) {
@@ -1128,18 +1507,29 @@ export async function createProcess(
     }
   }
 
-  return { id: created.id, occurrenceLinkError };
+  return { id: created.id, occurrenceLinkError, claimValuationStatus: claimStatus };
 }
 
 /** Fields a regular update may assign (mirrors maintained by the contingency module are excluded). */
 const ASSIGNABLE_FIELDS = AUDIT_FIELDS.filter((k) => k !== "isConfidential");
 
+export type UpdateProcessResult = {
+  /** Valuation recorded for a changed valor da causa (official for approvers, proposed otherwise). */
+  claimValuation: { id: string; status: "official" | "proposed" } | null;
+};
+
 /**
  * Partial update. Imported processes stay `dataOrigin: "imported"`; the audit
  * entry records that the change was made manually. Leaving the active
  * portfolio requires a closure reason (RN-12); returning to it clears the reason.
+ *
+ * Valor da causa: an approver's change is official at once (mirrors synced in the
+ * same transaction); anyone else's change becomes a PROPOSED claim valuation and the
+ * record keeps the current value until the review queue approves it (a removal needs
+ * an approver: `CLAIM_REMOVAL_NEEDS_APPROVER`). A context without a person cannot change
+ * it (`CLAIM_CHANGE_NEEDS_PERSON`), so the mirrors are always synced with the record.
  */
-export async function updateProcess(ctx: AuthContext, id: string, input: UpdateProcessInput): Promise<void> {
+export async function updateProcess(ctx: AuthContext, id: string, input: UpdateProcessInput): Promise<UpdateProcessResult> {
   assertCan(ctx, "process:write");
   const v = parse(updateProcessSchema, input);
   const before = await loadProcess(ctx, id);
@@ -1196,14 +1586,54 @@ export async function updateProcess(ctx: AuthContext, id: string, input: UpdateP
   if (patch.companyId && patch.companyId !== before.companyId) await assertCompanyInOrg(ctx, patch.companyId);
   if (patch.lawFirmId && patch.lawFirmId !== before.lawFirmId) await assertLawFirmInOrg(ctx, patch.lawFirmId);
 
+  // Valor da causa: only an approver changes the record (official valuation + mirrors in the
+  // transaction below). Another person's change becomes a proposal and the record keeps the
+  // current value until it is approved; a context without a person cannot change it at all.
+  let proposedClaimCents: number | null = null;
+  if (patch.claimAmountCents !== undefined && patch.claimAmountCents !== before.claimAmountCents) {
+    if (!ctx.userId) throw fieldError("claimAmountCents", CLAIM_CHANGE_NEEDS_PERSON);
+    if (claimGoesToReview(ctx)) {
+      if (patch.claimAmountCents === null) throw fieldError("claimAmountCents", CLAIM_REMOVAL_NEEDS_APPROVER);
+      proposedClaimCents = patch.claimAmountCents;
+      delete patch.claimAmountCents;
+    }
+  }
+
   const after = { ...before, ...patch } as ProcessRow;
   const changes = diffChanges(before, after, AUDIT_FIELDS);
-  if (!changes) return;
-  const changed = Object.keys(changes);
+  if (!changes && proposedClaimCents === null) return { claimValuation: null };
+  const changed = changes ? Object.keys(changes) : [];
   const imported = before.dataOrigin === "imported";
+  let claimValuation: UpdateProcessResult["claimValuation"] = null;
 
   try {
     await getDb().transaction(async (tx) => {
+      if (proposedClaimCents !== null) {
+        const proposal = await recordClaimValuation(
+          ctx,
+          tx,
+          after,
+          proposedClaimCents,
+          "Valor da causa alterado no cadastro do processo.",
+        );
+        if (proposal.valuationId) claimValuation = { id: proposal.valuationId, status: "proposed" };
+        if (proposal.valuationId && !proposal.reusedProposal) {
+          // Same audit shape as contingency `proposeValuation` (shows in the process "Histórico").
+          await recordAudit(
+            ctx,
+            {
+              action: "valuation.propose",
+              entityType: "legal_process",
+              entityId: before.id,
+              summary: `Valor da causa de ${formatMoneyCents(proposedClaimCents)} proposto para conferência no processo ${before.number}.`,
+              metadata: { valuationId: proposal.valuationId, source: "manual", fromProcessForm: true },
+            },
+            tx,
+          );
+        }
+      }
+      if (!changes) return;
+
       const updated = await tx
         .update(legalProcesses)
         .set(patch)
@@ -1248,6 +1678,7 @@ export async function updateProcess(ctx: AuthContext, id: string, input: UpdateP
           .where(and(eq(processInstances.processId, before.id), eq(processInstances.organizationId, ctx.organizationId)));
       }
 
+      // A claim change reaches here only for an approver: official valuation + mirrors synced.
       const claim = changes.claimAmountCents
         ? await recordClaimValuation(
             ctx,
@@ -1259,6 +1690,7 @@ export async function updateProcess(ctx: AuthContext, id: string, input: UpdateP
               : "Valor da causa alterado no cadastro do processo.",
           )
         : null;
+      if (claim?.valuationId && claim.status) claimValuation = { id: claim.valuationId, status: claim.status };
 
       await recordAudit(
         ctx,
@@ -1269,12 +1701,13 @@ export async function updateProcess(ctx: AuthContext, id: string, input: UpdateP
           summary: imported
             ? `Processo ${before.number} (importado) alterado manualmente: ${fieldList(changed)}.`
             : `Processo ${before.number} alterado: ${fieldList(changed)}.`,
-          changes,
+          changes: withMirrorChanges(changes, claim?.mirrors ?? null),
           metadata: {
             dataOrigin: before.dataOrigin,
             manualChange: true,
             ...(claim?.valuationId ? { claimValuationId: claim.valuationId } : {}),
             ...(claim && claim.supersededIds.length > 0 ? { supersededValuationIds: claim.supersededIds } : {}),
+            ...(claimValuation?.status === "proposed" ? { proposedClaimValuationId: claimValuation.id } : {}),
             ...(createdInstanceId ? { createdInstanceId } : {}),
           },
         },
@@ -1297,6 +1730,7 @@ export async function updateProcess(ctx: AuthContext, id: string, input: UpdateP
     if (isUniqueViolation(err)) throw new ConflictError(DUPLICATE_NUMBER_MESSAGE);
     throw err;
   }
+  return { claimValuation };
 }
 
 /** Soft delete. Blocked while the process is under legal hold. */
@@ -1391,7 +1825,7 @@ export async function closeProcess(ctx: AuthContext, id: string, input: ClosePro
     { status: "closed", closureReason: v.closureReason, closedAt },
     {
       action: "legal_process.close",
-      summary: `Processo ${before.number} retirado da carteira ativa — motivo: ${reasonLabel}.${
+      summary: `Processo ${before.number} retirado da carteira ativa. Motivo: ${reasonLabel}.${
         v.note ? ` Observação: ${v.note}` : ""
       }`,
       metadata: { closureReason: v.closureReason, previousStatus: before.status },
@@ -1422,7 +1856,7 @@ export async function reactivateProcess(ctx: AuthContext, id: string, input: Rea
   );
 }
 
-/** "Marcar para verificação": flags the process with a note of what must be checked. */
+/** "Marcar para conferência": flags the process with a note of what must be checked. */
 export async function flagProcessForVerification(
   ctx: AuthContext,
   id: string,
@@ -1438,13 +1872,13 @@ export async function flagProcessForVerification(
     { needsVerification: true, verificationNote: v.note },
     {
       action: "legal_process.verification_flag",
-      summary: `Processo ${before.number} marcado para verificação.`,
+      summary: `Processo ${before.number} marcado para conferência.`,
     },
     null,
   );
 }
 
-/** "Concluir verificação": clears the flag; the conclusion note goes to the history. */
+/** "Concluir conferência": clears the flag; the conclusion note goes to the history. */
 export async function resolveProcessVerification(
   ctx: AuthContext,
   id: string,
@@ -1453,14 +1887,14 @@ export async function resolveProcessVerification(
   assertCan(ctx, "process:write");
   const v = parse(resolveVerificationSchema, input);
   const before = await loadProcess(ctx, id);
-  if (!before.needsVerification) throw new ConflictError("O processo não está marcado para verificação.");
+  if (!before.needsVerification) throw new ConflictError("O processo não está marcado para conferência.");
   await applyLifecyclePatch(
     ctx,
     before,
     { needsVerification: false, verificationNote: null },
     {
       action: "legal_process.verification_resolve",
-      summary: `Verificação do processo ${before.number} concluída.${v.note ? ` Conclusão: ${v.note}` : ""}`,
+      summary: `Conferência do processo ${before.number} concluída.${v.note ? ` Conclusão: ${v.note}` : ""}`,
     },
     null,
   );
@@ -2038,13 +2472,18 @@ export async function exportProcesses(
     metadata: { format, count: processes.length, filters: auditFilters(f) },
   });
 
+  // The current instance without its own valor da causa shows the record's (same rule as the detail page).
+  const recordClaim = new Map(processes.map((r) => [r.id, r.claimAmountCents]));
   return {
     processes: processes.map((r) => ({
       ...r,
       plaintiffCount: Number(r.plaintiffCount ?? 0),
       defendantCount: Number(r.defendantCount ?? 0),
     })),
-    instances,
+    instances: instances.map((i) => ({
+      ...i,
+      claimAmountCents: i.claimAmountCents ?? currentInstanceClaimFallback(i, recordClaim.get(i.processId) ?? null),
+    })),
   };
 }
 

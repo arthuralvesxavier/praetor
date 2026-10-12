@@ -40,7 +40,7 @@ describe("page offsets", () => {
     const text = result.text!;
     const offsets = result.pageOffsets!;
     // Every page starts with the banner and the claims are on the last page.
-    for (const start of offsets) expect(text.slice(start)).toMatch(/^DOCUMENTO FICTÍCIO — GERADO PARA DEMONSTRAÇÃO/);
+    for (const start of offsets) expect(text.slice(start)).toMatch(/^DOCUMENTO FICTÍCIO, GERADO PARA DEMONSTRAÇÃO/);
     expect(pageForOffset(offsets, text.indexOf("DOS PEDIDOS"))).toBe(result.pageCount);
     expect(pageForOffset(offsets, text.indexOf("DOS FATOS"))).toBe(2);
     expect(pageForOffset(offsets, text.indexOf("Data de admissão"))).toBe(1);
@@ -56,7 +56,7 @@ describe("demo documents", () => {
       "Petição inicial",
       "Procuração do reclamante",
       "Documentos do reclamante (CTPS e holerites)",
-      "Notificação — audiência inicial",
+      "Notificação de audiência inicial",
       "Planilha de cálculos do reclamante",
     ]);
     a.forEach((d, i) => expect(Buffer.from(d.bytes).equals(Buffer.from(b[i].bytes))).toBe(true));

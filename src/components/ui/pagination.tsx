@@ -42,7 +42,7 @@ export function Pagination({ page, pageSize, total, basePath, searchParams, clas
   return (
     <div className={cn("flex flex-col items-center justify-between gap-3 py-3 sm:flex-row", className)}>
       <p className="text-xs text-muted-foreground" aria-live="polite">
-        Exibindo <span className="font-medium text-slate-700">{formatNumber(from)}</span>–
+        Exibindo <span className="font-medium text-slate-700">{formatNumber(from)}</span> a{" "}
         <span className="font-medium text-slate-700">{formatNumber(to)}</span> de{" "}
         <span className="font-medium text-slate-700">{formatNumber(total)}</span>
       </p>

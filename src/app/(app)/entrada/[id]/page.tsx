@@ -36,6 +36,8 @@ import { IntakeStepper } from "@/modules/intake/components/intake-stepper";
 import { getIntake, type IntakeDetail } from "@/modules/intake/service";
 import { SIMULATION_LABEL } from "@/modules/intake/simulation";
 import type { StageKey } from "@/modules/intake/status";
+import { PROCESS_SECTION_IDS, processTabUrl } from "@/modules/processes/tabs";
+import { can } from "@/server/auth/permissions";
 import { requirePageContext } from "@/server/auth/session";
 import { NotFoundError } from "@/server/lib/errors";
 
@@ -54,20 +56,25 @@ export default async function IntakeDetailPage(props: PageProps<"/entrada/[id]">
   const p = intake.process;
   const perms = intake.permissions;
   const users = perms.canAssign ? await listAssignableUsers(ctx) : [];
+  // External counsel (their law firm gains access to the process) only through redistribution.
+  const canRedistribute = can(ctx, "distribution:manage");
   const userOptions = users
-    .filter((u) => u.id !== intake.assignedToId)
-    .map((u) => ({ value: u.id, label: `${u.name} — ${u.roleLabel}${u.unitName ? ` · ${u.unitName}` : ""}` }));
+    .filter((u) => u.id !== intake.assignedToId && (canRedistribute || u.role !== "external_counsel"))
+    .map((u) => ({ value: u.id, label: `${u.name} (${u.roleLabel}${u.unitName ? `, ${u.unitName}` : ""})` }));
 
-  const briefHref = `/processos/${p.id}?aba=analise-preliminar`;
+  // Links only to screens this profile can open (the page itself needs only process:read).
+  const briefHref = processTabUrl(p.id, "documentos-e-analises", PROCESS_SECTION_IDS.brief);
   const links: Partial<Record<StageKey, { href: string; label: string }>> = {
     received: { href: `/processos/${p.id}`, label: "Abrir o processo" },
   };
   if (intake.brief) {
     links.analysis = { href: briefHref, label: `Ver a análise preliminar (versão ${intake.brief.version})` };
-    links.review = { href: `/analises-preliminares/${intake.brief.id}`, label: "Abrir a revisão da análise" };
-    links.approval = { href: `/analises-preliminares/${intake.brief.id}`, label: "Abrir a análise" };
+    if (can(ctx, "brief:read")) {
+      links.review = { href: `/analises-preliminares/${intake.brief.id}`, label: "Abrir a revisão da análise" };
+      links.approval = { href: `/analises-preliminares/${intake.brief.id}`, label: "Abrir a análise" };
+    }
   }
-  if (intake.email) links.email = { href: `/emails/${intake.email.id}`, label: "Ver o e-mail simulado" };
+  if (intake.email && can(ctx, "email:read")) links.email = { href: `/emails/${intake.email.id}`, label: "Ver o e-mail simulado" };
 
   const finished = intake.effectiveStatus === "approved" || intake.status === "cancelled";
   const pendingWork = !intake.assignedToId || !intake.hasBrief || !intake.emailSent;
@@ -90,8 +97,8 @@ export default async function IntakeDetailPage(props: PageProps<"/entrada/[id]">
         }
         description={p.title}
         breadcrumbs={[
-          { label: "Dashboard", href: "/dashboard" },
-          { label: "Entrada de processos", href: "/entrada" },
+          { label: "Painel executivo", href: "/dashboard" },
+          can(ctx, "intake:manage") ? { label: "Entrada de processos", href: "/entrada" } : { label: "Entrada de processos" },
           { label: p.number },
         ]}
         meta={
@@ -264,7 +271,7 @@ export default async function IntakeDetailPage(props: PageProps<"/entrada/[id]">
             </CardHeader>
             <CardContent className="grid gap-3">
               {p.needsVerification ? (
-                <Callout tone="warning" title="Marcado para verificação">
+                <Callout tone="warning" title="Pendente de conferência">
                   {p.verificationNote ?? "Confira os dados do processo."}
                 </Callout>
               ) : null}
@@ -294,10 +301,10 @@ export default async function IntakeDetailPage(props: PageProps<"/entrada/[id]">
               {intake.documents.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   Nenhum documento visível para você. Envie pela aba{" "}
-                  <Link href={`/processos/${p.id}?aba=documentos`} className="font-medium text-primary-700 underline">
-                    Documentos do processo
-                  </Link>
-                  .
+                  <Link href={processTabUrl(p.id, "documentos-e-analises")} className="font-medium text-primary-700 underline">
+                    Documentos e análises
+                  </Link>{" "}
+                  do processo.
                 </p>
               ) : (
                 <ul className="grid gap-2">

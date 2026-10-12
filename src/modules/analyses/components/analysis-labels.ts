@@ -82,7 +82,7 @@ export const COST_VISIBLE_ROLES = ["admin", "legal_manager"] as const;
 
 /** Formats an amount in micro-dollars as "US$ 0,0123". */
 export function formatMicroUsd(micro: number | null | undefined): string {
-  if (micro === null || micro === undefined) return "—";
+  if (micro === null || micro === undefined) return "Não informado";
   const usd = micro / 1_000_000;
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",

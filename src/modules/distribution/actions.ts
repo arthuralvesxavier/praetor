@@ -111,7 +111,7 @@ export async function applyDistributionAction(_prev: ActionResult | null, formDa
   try {
     const ctx = await requireActionContext("distribution:manage");
     const processId = str(formData, "processId") ?? "";
-    const decision = await assignResponsible(ctx, processId, { force: true });
+    const decision = await assignResponsible(ctx, processId, { force: true, notify: true });
     revalidateDistribution();
     revalidatePath(`/processos/${processId}`);
     if (!decision.userId) return { ok: false, error: decision.reason };

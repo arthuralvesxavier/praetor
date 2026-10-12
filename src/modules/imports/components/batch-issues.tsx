@@ -50,7 +50,8 @@ export async function BatchIssues({ ctx, batch, sp }: { ctx: AuthContext; batch:
         <p className="text-sm text-muted-foreground">
           Uma linha por ocorrência. Erros impedem a importação da linha; alertas pedem conferência; informações registram decisões automáticas.
         </p>
-        <ButtonLink href={csvHref} variant="outline" size="sm" prefetch={false}>
+        {/* `download`: a plain browser download (next/link would fetch the route twice and audit the export twice). */}
+        <ButtonLink href={csvHref} variant="outline" size="sm" prefetch={false} download>
           <Download aria-hidden="true" />
           Exportar CSV
         </ButtonLink>
@@ -91,14 +92,14 @@ export async function BatchIssues({ ctx, batch, sp }: { ctx: AuthContext; batch:
                         i.cnj
                       )
                     ) : (
-                      "—"
+                      <span className="text-muted-foreground">Sem número</span>
                     )}
                   </TableCell>
                   <TableCell>
                     <IssueLevelBadge level={i.level} />
                   </TableCell>
                   <TableCell className="whitespace-nowrap">{issueCodeLabel(i.code)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{i.field ?? "—"}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{i.field ?? "Não se aplica"}</TableCell>
                   <TableCell className="min-w-72 text-sm">{i.message}</TableCell>
                 </TableRow>
               ))

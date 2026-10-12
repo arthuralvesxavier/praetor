@@ -28,6 +28,11 @@ export type FilterBarProps = {
   /** FilterSelect / FilterInput controls. */
   children?: ReactNode;
   className?: string;
+  /**
+   * Form id, so a control rendered elsewhere on the page can submit with the filters
+   * through the `form` attribute (e.g. the dashboard's chart dimension, `dimensao`).
+   */
+  id?: string;
 };
 
 /**
@@ -49,6 +54,7 @@ export function FilterBar({
   showClear = true,
   children,
   className,
+  id,
 }: FilterBarProps) {
   const hidden = Object.entries(hiddenFields ?? {}).filter(
     (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1] !== "",
@@ -57,6 +63,7 @@ export function FilterBar({
 
   return (
     <form
+      id={id}
       method="get"
       action={basePath}
       role="search"

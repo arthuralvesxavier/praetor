@@ -9,11 +9,13 @@ import { updateProcessAction } from "@/modules/processes/actions";
 import { ProcessForm } from "@/modules/processes/components/process-form";
 import { loadProcessFormOptions, processToFormDefaults } from "@/modules/processes/form-data";
 import {
+  canMakeClaimOfficial,
   getProcess,
   isInActivePortfolio,
   recordConfidentialProcessView,
   type ProcessDetail,
 } from "@/modules/processes/service";
+import { processTabUrl } from "@/modules/processes/tabs";
 import { NotFoundError } from "@/server/lib/errors";
 import { requirePageContext } from "@/server/auth/session";
 
@@ -30,7 +32,7 @@ export default async function EditProcessPage(props: PageProps<"/processos/[id]/
     if (err instanceof NotFoundError) notFound();
     throw err;
   }
-  // TE-10: the edit form shows the whole record, so it counts as a view.
+  // The edit form shows the whole record, so it counts as a view of a confidential process.
   if (process.isConfidential) await recordConfidentialProcessView(ctx, process.id);
 
   const options = await loadProcessFormOptions(ctx, {
@@ -49,7 +51,7 @@ export default async function EditProcessPage(props: PageProps<"/processos/[id]/
     <>
       <PageHeader
         title="Editar processo"
-        description={`${process.number} — ${process.title}`}
+        description={`${process.number} · ${process.title}`}
         breadcrumbs={[
           { label: "Processos", href: "/processos" },
           { label: process.number, href: detailHref },
@@ -80,13 +82,14 @@ export default async function EditProcessPage(props: PageProps<"/processos/[id]/
             lawFirmLabel={process.lawFirmName ?? "Sem escritório externo"}
             canEditConfidential={process.permissions.canEditConfidential}
             statusEditable={isInActivePortfolio(process.status)}
+            claimNeedsReview={!canMakeClaimOfficial(ctx)}
             mirrorValues={{
               liquidated: formatMoneyCents(process.liquidatedAmountCents, "Não apurado"),
               provision: formatMoneyCents(process.provisionAmountCents, "Não calculada"),
               lossProbability: process.lossProbability
                 ? LOSS_PROBABILITY_LABELS[process.lossProbability]
                 : "Não classificada",
-              href: `${detailHref}?aba=valores`,
+              href: processTabUrl(process.id, "valores-e-acordos"),
             }}
             cancelHref={detailHref}
           />

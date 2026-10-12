@@ -75,7 +75,7 @@ export async function AiSignalsCard({
           <Sparkles aria-hidden="true" className="size-4 text-ai-600" />
           Sinais e lacunas apontados pela IA
         </CardTitle>
-        <CardDescription className="text-ai-800">Gerado por IA — requer validação humana</CardDescription>
+        <CardDescription className="text-ai-800">Gerado por IA, requer validação humana</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
         {!canRead ? (

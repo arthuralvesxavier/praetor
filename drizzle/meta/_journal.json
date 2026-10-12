@@ -15,6 +15,90 @@
       "when": 1791757619264,
       "tag": "0001_v2_portfolio",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791769243223,
+      "tag": "0002_court_sync_inbound_api",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791769672721,
+      "tag": "0003_bi_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791769709413,
+      "tag": "0004_bi_reporting_views",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791774421331,
+      "tag": "0005_bi_access_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791774486095,
+      "tag": "0006_bi_reporting_views_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791776640114,
+      "tag": "0007_correction_index_series",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791778309920,
+      "tag": "0008_legal_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791778424297,
+      "tag": "0009_process_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791778636970,
+      "tag": "0010_snapshot_close_overrides",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791778881194,
+      "tag": "0011_bi_views_security_barrier",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791783246230,
+      "tag": "0012_phase_instance_split",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791792289060,
+      "tag": "0013_process_detail_indexes",
+      "breakpoints": true
     }
   ]
 }

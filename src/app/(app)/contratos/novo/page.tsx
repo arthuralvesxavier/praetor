@@ -17,7 +17,7 @@ export default async function NewContractPage() {
         title="Novo contrato"
         description="Cadastre os dados principais. Arquivos e versões do contrato são enviados depois, na aba “Documentos e versões”."
         breadcrumbs={[
-          { label: "Dashboard", href: "/dashboard" },
+          { label: "Painel executivo", href: "/dashboard" },
           { label: "Contratos", href: "/contratos" },
           { label: "Novo contrato" },
         ]}

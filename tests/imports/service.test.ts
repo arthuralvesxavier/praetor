@@ -36,6 +36,7 @@ import {
 } from "@/server/db/schema";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { readStreamToBytes } from "@/server/integrations/storage";
+import { processPendingJobs } from "@/server/jobs/worker";
 import { setupFixture, type Fixture } from "../helpers/fixtures";
 import { DEMO_CLIENT, DEMO_FILE_NAME, demoBytes } from "./helpers";
 
@@ -261,11 +262,18 @@ describe("commit", () => {
         .where(and(eq(importRows.batchId, batch1), isNotNull(importRows.processId)));
       expect(rows[0].n).toBe(2330);
 
-      // Distribution after commit: errors are reported per process, never thrown.
+      // Distribution after commit: enqueued with the commit ("import.distribute" job), never run in the request.
+      expect(result).toMatchObject({ distribution: null, distributionQueued: true });
+      expect(vi.mocked(assignResponsible)).not.toHaveBeenCalled();
+      expect(b.distributionState).toBe("running");
+      await processPendingJobs({ organizationId: fx.orgA });
+      // Errors are reported per process, never thrown.
       expect(vi.mocked(assignResponsible)).toHaveBeenCalledTimes(928);
-      expect(b.distribution).toMatchObject({ attempted: 928 });
-      expect(b.distribution!.assigned + b.distribution!.failed).toBe(928);
-      expect(b.distribution!.failures[0]?.message).toContain("simulado no teste");
+      const distributed = await getImportBatch(fx.ctx.admin, batch1);
+      expect(distributed.distributionState).toBe("done");
+      expect(distributed.distribution).toMatchObject({ attempted: 928, done: true });
+      expect(distributed.distribution!.assigned + distributed.distribution!.failed).toBe(928);
+      expect(distributed.distribution!.failures[0]?.message).toContain("simulado no teste");
 
       const [audit] = await fx.db.select().from(auditLogs).where(and(eq(auditLogs.entityId, batch1), eq(auditLogs.action, "import_batch.commit")));
       expect(audit.metadata).toMatchObject({ created: 928, updated: 0, instancesCreated: 1165, baseDate: BASE_DATE });
@@ -291,7 +299,7 @@ describe("commit", () => {
       expect(divergences.items.filter((d) => d.field === "claimAmount").every((d) => d.valuation === "existing")).toBe(true);
 
       const result = await commitImport(fx.ctx.manager, batch2, { baseDate: BASE_DATE });
-      expect(result).toMatchObject({ created: 0, updated: 0, unchanged: 928, instancesCreated: 0, valuationsOfficial: 0, valuationsProposed: 0, distribution: null });
+      expect(result).toMatchObject({ created: 0, updated: 0, unchanged: 928, instancesCreated: 0, valuationsOfficial: 0, valuationsProposed: 0, distribution: null, distributionQueued: false });
       expect(await countWhere(legalProcesses, eq(legalProcesses.organizationId, fx.orgA))).toBe(before.processes);
       expect(await countWhere(processInstances, eq(processInstances.organizationId, fx.orgA))).toBe(before.instances);
       expect(await countWhere(processValuations, eq(processValuations.organizationId, fx.orgA))).toBe(before.valuations);

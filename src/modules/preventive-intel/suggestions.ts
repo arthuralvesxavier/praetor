@@ -8,7 +8,7 @@ import { formatDate, formatPercent, pluralize } from "@/lib/format";
 import { preventiveOriginMarker } from "@/modules/occurrences/preventive-origin";
 import type { PreventiveIntelligence, PreventiveSuggestion } from "./types";
 
-export const SUGGESTION_LABEL = "Sugestão ilustrativa — avaliar com a área responsável";
+export const SUGGESTION_LABEL = "Sugestão ilustrativa, a avaliar com a área responsável";
 
 /** Reference thresholds of this version (fixed; shown next to each trigger). */
 export const THRESHOLDS = {
@@ -42,7 +42,7 @@ export function buildSuggestions(ind: Indicators, knowledgeTop: KnowledgeByCourt
   const claims = ind.recurringClaims;
   const claimProcesses = (keys: string[]) =>
     claims.rows.filter((r) => keys.includes(r.key)).reduce((max, r) => Math.max(max, r.processCount), 0);
-  const claimsBasis = `Pedidos recorrentes — ${pluralize(claims.briefsConsidered, "análise preliminar considerada", "análises preliminares consideradas")} (documentos fictícios de demonstração); limiar de referência: ${THRESHOLDS.recurringClaimMinProcesses} processos.`;
+  const claimsBasis = `Pedidos recorrentes: ${pluralize(claims.briefsConsidered, "análise preliminar considerada", "análises preliminares consideradas")} (documentos fictícios de demonstração); limiar de referência: ${THRESHOLDS.recurringClaimMinProcesses} processos.`;
 
   const jornada = claimProcesses(["horas_extras", "intervalos"]);
   if (jornada >= THRESHOLDS.recurringClaimMinProcesses) {
@@ -81,7 +81,7 @@ export function buildSuggestions(ind: Indicators, knowledgeTop: KnowledgeByCourt
   if (knowledgeTop && knowledgeTop.count >= THRESHOLDS.conciliationMinProcesses) {
     out.push({
       key: `conciliacao:${keySlug(knowledgeTop.court)}`,
-      title: `Programa de conciliação — ${knowledgeTop.court}`,
+      title: `Programa de conciliação no ${knowledgeTop.court}`,
       trigger: `${pluralize(knowledgeTop.count, "processo ativo", "processos ativos")} em fase de conhecimento no ${knowledgeTop.court} (${formatPercent(knowledgeTop.count / Math.max(1, knowledgeTop.totalKnowledge))} dos processos em conhecimento).`,
       basis: `Concentração por tribunal na carteira ativa, fase de conhecimento; limiar de referência: ${THRESHOLDS.conciliationMinProcesses} processos.`,
       measure: `Avaliar um programa de conciliação para os processos em fase de conhecimento no ${knowledgeTop.court}, com critérios e alçadas definidos pela área jurídica e pela área financeira.`,
@@ -116,7 +116,7 @@ export function buildSuggestions(ind: Indicators, knowledgeTop: KnowledgeByCourt
       key: "reclamantes-recorrentes",
       title: "Mapeamento de reclamantes com mais de um processo",
       trigger: `${pluralize(rp.plaintiffCount, "parte autora figura", "partes autoras figuram")} em mais de um processo (${pluralize(rp.processCount, "processo envolvido", "processos envolvidos")}).`,
-      basis: "Reclamantes recorrentes — partes do polo ativo com o mesmo nome em mais de um processo visível.",
+      basis: "Reclamantes recorrentes: partes do polo ativo com o mesmo nome em mais de um processo visível.",
       measure:
         "Mapear se há origem comum (mesma unidade, gestão ou período) nos processos de reclamantes recorrentes e tratar a causa raiz com as áreas envolvidas.",
       planItems: [
@@ -148,14 +148,14 @@ export function buildSuggestions(ind: Indicators, knowledgeTop: KnowledgeByCourt
   if (v.count > 0 && v.share >= THRESHOLDS.verificationMinShare) {
     out.push({
       key: "saneamento-cadastral",
-      title: "Saneamento dos cadastros marcados para verificação",
-      trigger: `${pluralize(v.count, "processo marcado", "processos marcados")} para verificação (${formatPercent(v.share)} da carteira ativa).`,
-      basis: `Cadastros a verificar na carteira ativa; limiar de referência: ${formatPercent(THRESHOLDS.verificationMinShare)}.`,
-      measure: "Organizar um mutirão de conferência dos processos marcados para verificação, priorizando os de maior valor.",
+      title: "Saneamento dos cadastros pendentes de conferência",
+      trigger: `${pluralize(v.count, "processo pendente", "processos pendentes")} de conferência (${formatPercent(v.share)} da carteira ativa).`,
+      basis: `Cadastros pendentes de conferência na carteira ativa; limiar de referência: ${formatPercent(THRESHOLDS.verificationMinShare)}.`,
+      measure: "Organizar um mutirão de conferência dos processos pendentes, priorizando os de maior valor.",
       planItems: [
-        "Distribuir os processos marcados para verificação entre os responsáveis",
+        "Distribuir os processos pendentes de conferência entre os responsáveis",
         "Conferir os dados na fonte e corrigir os cadastros",
-        "Registrar as correções e remover a marcação de verificação",
+        "Registrar as correções e concluir a conferência",
       ],
     });
   }

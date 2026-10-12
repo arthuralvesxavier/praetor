@@ -45,7 +45,7 @@ export default async function EmailDetailPage(props: PageProps<"/emails/[id]">) 
         title={email.subject}
         description={EMAIL_TEMPLATE_LABELS[email.template]}
         breadcrumbs={[
-          { label: "Dashboard", href: "/dashboard" },
+          { label: "Painel executivo", href: "/dashboard" },
           { label: "Central de e-mails", href: "/emails" },
           { label: "Mensagem" },
         ]}

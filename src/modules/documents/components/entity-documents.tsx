@@ -87,7 +87,7 @@ export async function EntityDocuments({ ctx, entity, title = "Documentos" }: Ent
                     </div>
                   </TableCell>
                   <TableCell>{DOCUMENT_CATEGORY_LABELS[d.category]}</TableCell>
-                  <TableCell>{d.currentVersionNumber > 0 ? `v${d.currentVersionNumber}` : "—"}</TableCell>
+                  <TableCell>{d.currentVersionNumber > 0 ? `v${d.currentVersionNumber}` : <span className="text-muted-foreground">Sem versão</span>}</TableCell>
                   <TableCell>
                     <ExtractionStatusBadge status={d.extractionStatus} />
                   </TableCell>

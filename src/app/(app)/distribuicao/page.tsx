@@ -39,7 +39,7 @@ export default async function DistributionPage(props: PageProps<"/distribuicao">
       <PageHeader
         title="Distribuição de demandas"
         description="Regras que definem quem recebe cada processo novo e a carga de trabalho atual da equipe e dos escritórios externos."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Distribuição" }]}
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Distribuição" }]}
         actions={
           tab === "regras" ? (
             <ButtonLink href="/distribuicao/regras/nova">
@@ -84,7 +84,7 @@ async function RulesTab({
     <div className="grid gap-6">
       <Callout tone="info" title="Como a distribuição funciona">
         As regras ativas são avaliadas em ordem (prioridade menor primeiro). A primeira cujos critérios são todos
-        atendidos pelo processo — e que tenha alguém ativo para receber — decide o responsável. Se nenhuma se aplicar, o
+        atendidos pelo processo (e que tenha alguém ativo para receber) decide o responsável. Se nenhuma se aplicar, o
         processo vai para o advogado com menor carga da unidade do processo (ou de toda a organização). Processos que já
         chegam com responsável o mantêm.
       </Callout>
@@ -101,7 +101,7 @@ async function RulesTab({
         query={query}
         results={results.map((r) => ({ id: r.id, number: r.number, title: r.title, court: r.court }))}
         preview={preview}
-        users={users.map((u) => ({ value: u.id, label: `${u.name} — ${u.roleLabel}${u.unitName ? ` · ${u.unitName}` : ""}` }))}
+        users={users.map((u) => ({ value: u.id, label: `${u.name} (${u.roleLabel}${u.unitName ? `, ${u.unitName}` : ""})` }))}
       />
     </div>
   );

@@ -3,6 +3,8 @@ import {
   BellRing,
   CalendarClock,
   ChartColumn,
+  ChartPie,
+  FileCheck,
   FileSearch,
   FileSignature,
   FileSpreadsheet,
@@ -16,6 +18,7 @@ import {
   Mail,
   Route,
   Scale,
+  ScanSearch,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -58,6 +61,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: "/analises-preliminares", label: "Análises preliminares", icon: FileSearch, permissions: ["brief:read"] },
       { href: "/audiencias", label: "Audiências", icon: Gavel, permissions: ["process:read"] },
       { href: "/prazos", label: "Prazos e tarefas", icon: CalendarClock, permissions: ["deadline:read", "task:read"] },
+      { href: "/consulta-datajud", label: "Consulta ao DataJud", icon: ScanSearch, permissions: ["court_sync:run"] },
     ],
   },
   {
@@ -66,6 +70,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: "/contingencias", label: "Valores e provisão", icon: Landmark, permissions: ["contingency:read"] },
       { href: "/acordos", label: "Acordos", icon: Handshake, permissions: ["contingency:read"] },
       { href: "/relatorios", label: "Relatórios", icon: ChartColumn, permissions: ["report:read"] },
+      { href: "/relatorios-juridicos", label: "Relatórios jurídicos (PDF)", icon: FileCheck, permissions: ["report:read"] },
+      { href: "/paineis-bi", label: "Painéis Power BI", icon: ChartPie, permissions: ["report:read"] },
     ],
   },
   {

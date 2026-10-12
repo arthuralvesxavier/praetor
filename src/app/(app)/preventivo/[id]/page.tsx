@@ -188,7 +188,7 @@ function OverviewTab({ ctx, occurrence: o }: TabProps) {
         <Card>
           <CardHeader actions={<OriginBadge origin="manual" />}>
             <CardTitle>Classificação</CardTitle>
-            <CardDescription>Risco classificado pela equipe jurídica — não é gerado pela IA nem é previsão de resultado.</CardDescription>
+            <CardDescription>Risco classificado pela equipe jurídica. Não é gerado pela IA nem é previsão de resultado.</CardDescription>
           </CardHeader>
           <CardContent>
             <DescriptionList
@@ -200,7 +200,15 @@ function OverviewTab({ ctx, occurrence: o }: TabProps) {
                   value: o.riskRationale ? <span className="whitespace-pre-wrap">{o.riskRationale}</span> : null,
                 },
                 { label: "Categoria", value: OCCURRENCE_CATEGORY_LABELS[o.category] },
-                { label: "Exposição estimada", value: formatMoneyCents(o.estimatedExposureCents) },
+                {
+                  label: "Exposição estimada",
+                  value:
+                    o.estimatedExposureCents === null ? (
+                      <span className="text-muted-foreground">Não informada</span>
+                    ) : (
+                      formatMoneyCents(o.estimatedExposureCents)
+                    ),
+                },
               ]}
             />
           </CardContent>
@@ -357,7 +365,7 @@ async function ProcessLinkTab({ ctx, occurrence: o }: TabProps) {
           processes.length > 0 ? (
             <ProcessLinkForm
               occurrenceId={o.id}
-              processes={processes.map((p) => ({ value: p.id, label: `${p.number} — ${p.title}` }))}
+              processes={processes.map((p) => ({ value: p.id, label: `${p.number} · ${p.title}` }))}
             />
           ) : (
             <p className="text-sm text-muted-foreground">Não há processos disponíveis para vínculo.</p>

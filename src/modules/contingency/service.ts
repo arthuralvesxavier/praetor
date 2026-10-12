@@ -15,19 +15,24 @@
  * with the latest base date. Older official values are `superseded` and remain
  * the history used for "posição em data".
  */
-import { and, asc, count, desc, eq, gte, inArray, isNull, lt, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import {
+  addProvisionBasis,
   addToBucket,
+  emptyBasisCounts,
   emptyBucket,
   netExposure,
   provisionFor,
+  type AmountBasisCounts,
+  type ExposureInput,
   type ExposureResult,
   type MoneyBucket,
   type ProvisionResult,
 } from "@/domain/contingency";
 import {
   VALUATION_KIND_LABELS,
+  type CorrectionIndex,
   type LossProbability,
   type ProcessInstance,
   type ProcessPhase,
@@ -40,7 +45,7 @@ import {
 import { normalizePage, type Paginated } from "@/domain/entities";
 import { formatDate, formatMoneyCents, todayISO } from "@/lib/format";
 import type { AuthContext } from "@/server/auth/context";
-import { documentWhere, processWhere, valuationWhere } from "@/server/auth/access";
+import { documentWhere, processWhere, valuationWhere, visibleProcessIds } from "@/server/auth/access";
 import { assertCan, can } from "@/server/auth/permissions";
 import { getDb, type DbOrTx } from "@/server/db/client";
 import {
@@ -58,6 +63,7 @@ import {
   assertProcessDocument,
   loadSettings,
   loadVisibleProcess,
+  OFFICIAL_VALUATION_ORDER,
   parseId,
   parseOrThrow,
   requireHuman,
@@ -227,7 +233,7 @@ export async function getProcessContingencySummary(ctx: AuthContext, processId: 
           eq(processValuations.status, "official"),
         ),
       )
-      .orderBy(desc(processValuations.baseDate), desc(processValuations.createdAt))
+      .orderBy(...OFFICIAL_VALUATION_ORDER)
       .limit(1),
     db
       .select({ n: count() })
@@ -353,53 +359,61 @@ export async function getPortfolioExposure(
   return { rows: out, totals };
 }
 
+/**
+ * A group of `/contingencias`. `provisionBasis` counts how many processes have a provision
+ * on the valor apurado, on the valor da causa (estimate) or none at all, so a group whose
+ * sum is zero only because nothing was calculated never reads "R$ 0,00" (RN-03).
+ */
+export type ContingencyGroup<K extends string = string> = { key: K; bucket: MoneyBucket; provisionBasis: AmountBasisCounts };
+
 export type ContingencyOverview = {
   totals: MoneyBucket;
-  byCourt: { key: string; bucket: MoneyBucket }[];
-  byInstance: { key: string; bucket: MoneyBucket }[];
-  byPhase: { key: string; bucket: MoneyBucket }[];
-  byCompany: { key: string; bucket: MoneyBucket }[];
-  byClassification: { key: LossProbability | "unclassified"; bucket: MoneyBucket }[];
+  totalsProvisionBasis: AmountBasisCounts;
+  byCourt: ContingencyGroup[];
+  byInstance: ContingencyGroup[];
+  byPhase: ContingencyGroup[];
+  byCompany: ContingencyGroup[];
+  byClassification: ContingencyGroup<LossProbability | "unclassified">[];
   unclassifiedCount: number;
   pendingReviewCount: number;
 };
 
-function group(rows: PortfolioExposureRow[], keyOf: (r: PortfolioExposureRow) => string) {
-  const map = new Map<string, MoneyBucket>();
+function exposureInput(r: PortfolioExposureRow): ExposureInput {
+  return {
+    liquidatedCents: r.liquidatedCents,
+    linkedGuaranteesCents: r.guaranteesCents,
+    claimCents: r.claimCents,
+    riskPercentageBp: r.percentageBp,
+  };
+}
+
+function group(rows: PortfolioExposureRow[], keyOf: (r: PortfolioExposureRow) => string): ContingencyGroup[] {
+  const map = new Map<string, ContingencyGroup>();
   for (const r of rows) {
     const key = keyOf(r);
-    const bucket = map.get(key) ?? emptyBucket();
-    addToBucket(bucket, {
-      liquidatedCents: r.liquidatedCents,
-      linkedGuaranteesCents: r.guaranteesCents,
-      claimCents: r.claimCents,
-      riskPercentageBp: r.percentageBp,
-    });
-    map.set(key, bucket);
+    const g = map.get(key) ?? { key, bucket: emptyBucket(), provisionBasis: emptyBasisCounts() };
+    addToBucket(g.bucket, exposureInput(r));
+    addProvisionBasis(g.provisionBasis, exposureInput(r));
+    map.set(key, g);
   }
-  return [...map.entries()]
-    .map(([key, bucket]) => ({ key, bucket }))
-    .sort((a, b) => b.bucket.count - a.bucket.count || a.key.localeCompare(b.key, "pt-BR"));
+  return [...map.values()].sort((a, b) => b.bucket.count - a.bucket.count || a.key.localeCompare(b.key, "pt-BR"));
 }
 
 /** Data of `/contingencias`: totals and breakdowns of the visible active portfolio. */
 export async function getContingencyOverview(ctx: AuthContext, filters: PortfolioExposureFilters = {}): Promise<ContingencyOverview> {
   const { rows, totals } = await getPortfolioExposure(ctx, filters);
   const byClassification = (["probable", "possible", "remote", "unclassified"] as const).map((key) => {
-    const bucket = emptyBucket();
+    const g: ContingencyGroup<typeof key> = { key, bucket: emptyBucket(), provisionBasis: emptyBasisCounts() };
     for (const r of rows) {
       if ((r.classification ?? "unclassified") !== key) continue;
-      addToBucket(bucket, {
-        liquidatedCents: r.liquidatedCents,
-        linkedGuaranteesCents: r.guaranteesCents,
-        claimCents: r.claimCents,
-        riskPercentageBp: r.percentageBp,
-      });
+      addToBucket(g.bucket, exposureInput(r));
+      addProvisionBasis(g.provisionBasis, exposureInput(r));
     }
-    return { key, bucket };
+    return g;
   });
   return {
     totals,
+    totalsProvisionBasis: rows.reduce((acc, r) => addProvisionBasis(acc, exposureInput(r)), emptyBasisCounts()),
     byCourt: group(rows, (r) => r.court),
     byInstance: group(rows, (r) => r.instance ?? "none"),
     byPhase: group(rows, (r) => r.phase),
@@ -513,6 +527,97 @@ async function promoteToOfficial(
   await tx
     .update(processValuations)
     .set({ status: "official", ...reviewed, supersedesId: replaced?.id ?? v.supersedesId })
+    .where(and(eq(processValuations.id, v.id), eq(processValuations.organizationId, organizationId)));
+  return "official";
+}
+
+/** A quitação (RN-06): liquidated value 0 whose reason starts with "Quitação" (see `registerExtinction`). */
+function isExtinction(v: Pick<ValuationRow, "kind" | "amountCents" | "reason">): boolean {
+  return v.kind === "liquidated" && v.amountCents === 0 && (v.reason ?? "").startsWith("Quitação");
+}
+
+/**
+ * Refuses a quitação dated before an official liquidated value of ANY instance:
+ * the payment would not change the value in force (the mirror takes the latest
+ * base date), so recording it as "zerado" would be false.
+ */
+async function assertNoLaterOfficialLiquidated(
+  tx: DbOrTx,
+  organizationId: string,
+  processId: string,
+  baseDate: string,
+  excludeId?: string,
+): Promise<void> {
+  const [later] = await tx
+    .select({ baseDate: processValuations.baseDate })
+    .from(processValuations)
+    .where(
+      and(
+        eq(processValuations.organizationId, organizationId),
+        eq(processValuations.processId, processId),
+        eq(processValuations.kind, "liquidated"),
+        eq(processValuations.status, "official"),
+        gt(processValuations.baseDate, baseDate),
+        excludeId ? ne(processValuations.id, excludeId) : undefined,
+      ),
+    )
+    .orderBy(desc(processValuations.baseDate))
+    .limit(1);
+  if (later) {
+    throw new ValidationError(
+      `Já existe valor liquidado oficial com data-base ${formatDate(later.baseDate)}, posterior à quitação ` +
+        `(${formatDate(baseDate)}): a quitação não mudaria o valor em vigor. Confira a data do pagamento ou ` +
+        "revise o valor liquidado oficial antes de registrar a quitação.",
+      { baseDate: ["A data da quitação é anterior ao valor liquidado oficial em vigor."] },
+    );
+  }
+}
+
+/**
+ * Makes a quitação official (RN-06). Unlike other values, it ends EVERY
+ * official liquidated value of the process whatever the instance (imported
+ * values carry one): rows with base date on/before the payment become
+ * `superseded` — append-only, amounts never change. Refused when an official
+ * liquidated value has a later base date (`assertNoLaterOfficialLiquidated`).
+ */
+async function promoteExtinction(
+  tx: DbOrTx,
+  organizationId: string,
+  v: Pick<ValuationRow, "id" | "processId" | "baseDate" | "supersedesId">,
+  reviewerId: string,
+  reviewNote: string | null,
+): Promise<"official"> {
+  await assertNoLaterOfficialLiquidated(tx, organizationId, v.processId, v.baseDate, v.id);
+  const [replaced] = await tx
+    .select({ id: processValuations.id })
+    .from(processValuations)
+    .where(
+      and(
+        eq(processValuations.organizationId, organizationId),
+        eq(processValuations.processId, v.processId),
+        eq(processValuations.kind, "liquidated"),
+        eq(processValuations.status, "official"),
+        ne(processValuations.id, v.id),
+      ),
+    )
+    .orderBy(...OFFICIAL_VALUATION_ORDER)
+    .limit(1);
+  await tx
+    .update(processValuations)
+    .set({ status: "superseded" })
+    .where(
+      and(
+        eq(processValuations.organizationId, organizationId),
+        eq(processValuations.processId, v.processId),
+        eq(processValuations.kind, "liquidated"),
+        eq(processValuations.status, "official"),
+        lte(processValuations.baseDate, v.baseDate),
+        ne(processValuations.id, v.id),
+      ),
+    );
+  await tx
+    .update(processValuations)
+    .set({ status: "official", reviewedById: reviewerId, reviewedAt: new Date(), reviewNote, supersedesId: replaced?.id ?? v.supersedesId })
     .where(and(eq(processValuations.id, v.id), eq(processValuations.organizationId, organizationId)));
   return "official";
 }
@@ -664,20 +769,52 @@ export type ReviewResult = {
 };
 
 /**
+ * What the reviewer saw (P1.7). `expectedCorrectionIndex`: the correction index
+ * shown on the review screen (null = "sem índice informado"); when given, an
+ * approval or correction is refused if the index changed since (it becomes final
+ * with the official value). Undefined = not checked.
+ */
+export type ReviewGuard = { expectedCorrectionIndex?: string | null };
+
+/** Refusal when the index of a proposal changed after the review screen was loaded (P1.7). */
+export const CORRECTION_INDEX_CHANGED_MESSAGE =
+  "O índice de atualização deste valor mudou depois que a página foi carregada. Recarregue a página e confira o valor de novo antes de decidir.";
+
+function correctionIndexChanged(current: CorrectionIndex | null, expected: string | null | undefined): boolean {
+  return expected !== undefined && (current ?? null) !== expected;
+}
+
+/**
  * Human review of a PROPOSED valuation (RN-11). Requires `contingency:approve`
  * and an identified user, who is recorded as `reviewedById`.
  *   approve → official (or superseded history when a later official value exists)
  *   correct → original rejected + new official valuation with the corrected amount
  *   reject  → rejected (note required)
+ * `guard.expectedCorrectionIndex` pins the index shown to the reviewer (see `ReviewGuard`).
  */
-export async function reviewValuation(ctx: AuthContext, id: string, input: ReviewValuationInput): Promise<ReviewResult> {
+export async function reviewValuation(
+  ctx: AuthContext,
+  id: string,
+  input: ReviewValuationInput,
+  guard: ReviewGuard = {},
+): Promise<ReviewResult> {
   assertCan(ctx, "contingency:approve");
   const reviewerId = requireHuman(ctx);
   const data = parseOrThrow(reviewValuationSchema, input);
 
   return getDb().transaction(async (tx) => {
     const v = await loadValuation(ctx, id, tx);
-    if (v.status !== "proposed") throw new ConflictError("Este valor já foi conferido.");
+    // Lock the proposal: while it is in review its correction index may be changed concurrently (P1.7).
+    const [locked] = await tx
+      .select({ status: processValuations.status, correctionIndex: processValuations.correctionIndex })
+      .from(processValuations)
+      .where(and(eq(processValuations.id, v.id), eq(processValuations.organizationId, ctx.organizationId)))
+      .for("update");
+    if (!locked || locked.status !== "proposed") throw new ConflictError("Este valor já foi conferido.");
+    v.correctionIndex = locked.correctionIndex;
+    if (data.decision !== "reject" && correctionIndexChanged(v.correctionIndex, guard.expectedCorrectionIndex)) {
+      throw new ConflictError(CORRECTION_INDEX_CHANGED_MESSAGE);
+    }
     const label = valuationSummary(v.kind, v.amountCents, v.baseDate);
 
     if (data.decision === "reject") {
@@ -700,15 +837,19 @@ export async function reviewValuation(ctx: AuthContext, id: string, input: Revie
     }
 
     if (data.decision === "approve") {
-      const status = await promoteToOfficial(tx, ctx.organizationId, v, reviewerId, data.note);
+      const extinction = isExtinction(v);
+      const status = extinction
+        ? await promoteExtinction(tx, ctx.organizationId, v, reviewerId, data.note)
+        : await promoteToOfficial(tx, ctx.organizationId, v, reviewerId, data.note);
       const mirrors = await syncProcessMirrors(ctx.organizationId, v.processId, tx);
+      const zeroed = extinction && mirrors?.liquidatedAmountCents?.to === 0;
       await recordAudit(
         ctx,
         {
           action: "valuation.approve",
           entityType: "legal_process",
           entityId: v.processId,
-          summary: `${label} conferido e oficializado (processo ${v.processNumber}).`,
+          summary: `${label} conferido e oficializado (processo ${v.processNumber})${zeroed ? ": quitação, valor liquidado oficial zerado" : ""}.`,
           changes: mirrors,
           metadata: { valuationId: v.id, status },
         },
@@ -729,7 +870,7 @@ export async function reviewValuation(ctx: AuthContext, id: string, input: Revie
       .update(processValuations)
       .set({ status: "rejected", reviewedById: reviewerId, reviewedAt: new Date(), reviewNote: originalNote.slice(0, 1000) })
       .where(and(eq(processValuations.id, v.id), eq(processValuations.organizationId, ctx.organizationId)));
-    const reason = `Correção do valor proposto de ${formatMoneyCents(v.amountCents)}${v.reason ? ` — ${v.reason}` : ""}`;
+    const reason = `Correção do valor proposto de ${formatMoneyCents(v.amountCents)}${v.reason ? ` (${v.reason})` : ""}`;
     const [created] = await tx
       .insert(processValuations)
       .values({
@@ -749,6 +890,8 @@ export async function reviewValuation(ctx: AuthContext, id: string, input: Revie
         excerpt: v.excerpt,
         importBatchId: v.importBatchId,
         briefId: v.briefId,
+        // P1.7: keep the index informed during review (null lets the trigger apply the org default).
+        correctionIndex: v.correctionIndex,
         createdById: reviewerId,
       })
       .returning();
@@ -772,13 +915,35 @@ export async function reviewValuation(ctx: AuthContext, id: string, input: Revie
 
 export type BulkApproveResult = { approved: number; refused: { id: string; reason: string }[] };
 
+/** Refusal reason of bulk approval for simulated extractions (their confidence is not a real measure). */
+export const SIMULATED_BULK_REFUSAL = "Extração simulada: confira individualmente no documento antes de aprovar.";
+
+/**
+ * Bulk eligibility (RN-11): confidence at or above the threshold AND not a
+ * simulated extraction — simulated proposals carry a fixed, demonstrative
+ * confidence and must be checked one by one; quitações too.
+ */
+export function isBulkEligible(
+  v: Pick<ValuationRow, "confidence" | "source" | "kind" | "amountCents" | "reason">,
+  threshold: number,
+): boolean {
+  return v.source !== "simulation" && !isExtinction(v) && v.confidence !== null && v.confidence >= threshold;
+}
+
 /**
  * Approves several proposed valuations at once. Allowed only for items whose
  * extraction confidence is at least `settings.contingency.confidenceThreshold`
- * (RN-11); the others are refused with a pt-BR explanation and must be
- * reviewed individually. Requires `contingency:approve` and an identified user.
+ * (RN-11) and that are not simulated extractions; the others are refused with
+ * a pt-BR explanation and must be reviewed individually. Requires
+ * `contingency:approve` and an identified user. `expectedCorrectionIndexes`
+ * (P1.7): the correction index shown for each id (null = "sem índice
+ * informado"); an item whose index changed since is refused.
  */
-export async function bulkApproveValuations(ctx: AuthContext, ids: string[]): Promise<BulkApproveResult> {
+export async function bulkApproveValuations(
+  ctx: AuthContext,
+  ids: string[],
+  expectedCorrectionIndexes: Record<string, string | null> = {},
+): Promise<BulkApproveResult> {
   assertCan(ctx, "contingency:approve");
   const reviewerId = requireHuman(ctx);
   const data = parseOrThrow(bulkApproveSchema, { ids: [...new Set(ids)] });
@@ -790,7 +955,8 @@ export async function bulkApproveValuations(ctx: AuthContext, ids: string[]): Pr
       .select({ v: processValuations, processNumber: legalProcesses.number })
       .from(processValuations)
       .innerJoin(legalProcesses, eq(legalProcesses.id, processValuations.processId))
-      .where(and(inArray(processValuations.id, data.ids), valuationWhere(ctx)));
+      .where(and(inArray(processValuations.id, data.ids), valuationWhere(ctx)))
+      .for("update", { of: processValuations });
     const byId = new Map(rows.map((r) => [r.v.id, r]));
     const refused: BulkApproveResult["refused"] = [];
     const eligible: typeof rows = [];
@@ -798,13 +964,24 @@ export async function bulkApproveValuations(ctx: AuthContext, ids: string[]): Pr
       const r = byId.get(id);
       if (!r || r.v.status !== "proposed") {
         refused.push({ id, reason: "Valor não encontrado, sem acesso ou já conferido." });
+      } else if (r.v.source === "simulation") {
+        refused.push({ id, reason: SIMULATED_BULK_REFUSAL });
+      } else if (isExtinction(r.v)) {
+        refused.push({ id, reason: "Quitação: confira individualmente." });
       } else if (r.v.confidence === null || r.v.confidence < threshold) {
         refused.push({
           id,
           reason:
             `Confiança ${r.v.confidence === null ? "não informada" : `de ${r.v.confidence}%`} abaixo do mínimo de ` +
-            `${threshold}% para conferência em lote (RN-11): confira este valor individualmente.`,
+            `${threshold}% para conferência em lote: confira este valor individualmente.`,
         });
+      } else if (
+        correctionIndexChanged(
+          r.v.correctionIndex,
+          Object.hasOwn(expectedCorrectionIndexes, id) ? expectedCorrectionIndexes[id] : undefined,
+        )
+      ) {
+        refused.push({ id, reason: CORRECTION_INDEX_CHANGED_MESSAGE });
       } else {
         eligible.push(r);
       }
@@ -833,15 +1010,27 @@ export async function bulkApproveValuations(ctx: AuthContext, ids: string[]): Pr
 }
 
 /**
+ * What a quitação actually did (messages and audit are built from it, never assumed):
+ *   zeroed       → official, and the official liquidated value in force went to R$ 0,00
+ *   already_zero → official; the value in force was already R$ 0,00
+ *   history_only → official in the history, value in force unchanged (defensive: not expected)
+ *   proposed     → waiting for review; nothing changed yet
+ */
+export type ExtinctionOutcome = "zeroed" | "already_zero" | "history_only" | "proposed";
+
+/**
  * Extinção pela satisfação (RN-06): a new `liquidated` valuation of amount 0
  * whose reason starts with "Quitação". The history stays. Official when the
- * user has `contingency:approve`; proposed for review otherwise.
+ * user has `contingency:approve`; proposed for review otherwise. Once official
+ * it supersedes the official liquidated values of EVERY instance with base
+ * date on/before the payment (`promoteExtinction`); a quitação dated before an
+ * official liquidated value is refused (it would not change the value in force).
  */
 export async function registerExtinction(
   ctx: AuthContext,
   processId: string,
   input: ExtinctionInput,
-): Promise<{ id: string; status: ValuationStatus }> {
+): Promise<{ id: string; status: ValuationStatus; outcome: ExtinctionOutcome }> {
   assertCan(ctx, "contingency:write");
   const data = parseOrThrow(extinctionSchema, input);
   assertNotFuture(data.baseDate, "baseDate", "A data da quitação não pode ser futura.");
@@ -849,6 +1038,7 @@ export async function registerExtinction(
 
   return getDb().transaction(async (tx) => {
     const p = await loadVisibleProcess(ctx, processId, tx);
+    await assertNoLaterOfficialLiquidated(tx, ctx.organizationId, p.id, data.baseDate);
     let versionId: string | null = null;
     if (data.documentId) ({ versionId } = await assertProcessDocument(ctx, p.id, { documentId: data.documentId }, tx));
     const [created] = await tx
@@ -862,7 +1052,7 @@ export async function registerExtinction(
         instance: null,
         source: data.documentId ? "document" : "manual",
         status: "proposed",
-        reason: data.note ? `Quitação — ${data.note}` : "Quitação",
+        reason: data.note ? `Quitação: ${data.note}` : "Quitação",
         documentId: data.documentId,
         documentVersionId: versionId,
         createdById: ctx.userId,
@@ -870,25 +1060,38 @@ export async function registerExtinction(
       .returning();
     let status: ValuationStatus = "proposed";
     let mirrors: MirrorChanges = null;
+    let outcome: ExtinctionOutcome = "proposed";
     if (official) {
-      status = await promoteToOfficial(tx, ctx.organizationId, created, ctx.userId!, null);
+      status = await promoteExtinction(tx, ctx.organizationId, created, ctx.userId!, null);
       mirrors = await syncProcessMirrors(ctx.organizationId, p.id, tx);
+      const inForce = mirrors?.liquidatedAmountCents ? mirrors.liquidatedAmountCents.to : p.liquidatedAmountCents;
+      outcome =
+        status === "official" && mirrors?.liquidatedAmountCents?.to === 0
+          ? "zeroed"
+          : status === "official" && inForce === 0
+            ? "already_zero"
+            : "history_only";
     }
+    const date = formatDate(data.baseDate);
+    const summary = {
+      zeroed: `Quitação registrada no processo ${p.number}: valor liquidado oficial zerado em ${date}.`,
+      already_zero: `Quitação registrada no processo ${p.number} (data ${date}); o valor liquidado oficial já era R$ 0,00.`,
+      history_only: `Quitação de ${date} registrada no histórico do processo ${p.number}, sem alterar o valor liquidado em vigor.`,
+      proposed: `Quitação proposta para conferência no processo ${p.number} (data ${date}).`,
+    }[outcome];
     await recordAudit(
       ctx,
       {
         action: "valuation.extinction",
         entityType: "legal_process",
         entityId: p.id,
-        summary: official
-          ? `Quitação registrada no processo ${p.number}: valor liquidado zerado em ${formatDate(data.baseDate)} (RN-06).`
-          : `Quitação proposta para conferência no processo ${p.number} (data ${formatDate(data.baseDate)}).`,
+        summary,
         changes: mirrors,
-        metadata: { valuationId: created.id, status },
+        metadata: { valuationId: created.id, status, outcome },
       },
       tx,
     );
-    return { id: created.id, status };
+    return { id: created.id, status, outcome };
   });
 }
 
@@ -996,21 +1199,25 @@ export async function getPositionAt(ctx: AuthContext, processId: string, date: s
   const [valuations, risks, guarantees] = await Promise.all([
     db
       .select({
+        id: processValuations.id,
         kind: processValuations.kind,
         amountCents: processValuations.amountCents,
         baseDate: processValuations.baseDate,
         status: processValuations.status,
         createdAt: processValuations.createdAt,
+        reviewedAt: processValuations.reviewedAt,
       })
       .from(processValuations)
       .where(and(eq(processValuations.organizationId, ctx.organizationId), eq(processValuations.processId, p.id))),
     db
       .select({
+        id: processRiskAssessments.id,
         classification: processRiskAssessments.classification,
         percentageBp: processRiskAssessments.percentageBp,
         effectiveFrom: processRiskAssessments.effectiveFrom,
         status: processRiskAssessments.status,
         createdAt: processRiskAssessments.createdAt,
+        reviewedAt: processRiskAssessments.reviewedAt,
       })
       .from(processRiskAssessments)
       .where(and(eq(processRiskAssessments.organizationId, ctx.organizationId), eq(processRiskAssessments.processId, p.id))),
@@ -1055,6 +1262,35 @@ export async function listProcessDocumentOptions(ctx: AuthContext, processId: st
     .limit(200);
 }
 
+const PROCESS_DOCUMENT_OPTIONS_LIMIT = 200;
+
+/**
+ * Batched `listProcessDocumentOptions` for several processes (e.g. the
+ * "Registrar quitação" dialogs of `/acordos`): only visible processes and
+ * visible documents; ids that are invalid or not visible are ignored.
+ * Returns process id → documents (newest first, at most 200 per process).
+ */
+export async function listDocumentOptionsForProcesses(
+  ctx: AuthContext,
+  processIds: string[],
+): Promise<Record<string, { id: string; title: string }[]>> {
+  assertCan(ctx, "contingency:read");
+  const ids = [...new Set(processIds)].filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+  if (ids.length === 0) return {};
+  const rows = await getDb()
+    .select({ id: documents.id, title: documents.title, processId: documents.processId })
+    .from(documents)
+    .where(and(inArray(documents.processId, ids), inArray(documents.processId, visibleProcessIds(ctx)), documentWhere(ctx)))
+    .orderBy(desc(documents.createdAt), asc(documents.id));
+  const out: Record<string, { id: string; title: string }[]> = {};
+  for (const r of rows) {
+    if (!r.processId) continue;
+    const list = (out[r.processId] ??= []);
+    if (list.length < PROCESS_DOCUMENT_OPTIONS_LIMIT) list.push({ id: r.id, title: r.title });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Review queue (TE-04)
 // ---------------------------------------------------------------------------
@@ -1080,6 +1316,8 @@ export type ReviewQueueItem = {
   createdAt: Date;
   /** Current official value of the same kind (for comparison), null = none. */
   currentOfficialCents: number | null;
+  /** P1.7: index of the proposal (null = "sem índice informado"); final once approved, so it is shown in the review. */
+  correctionIndex: CorrectionIndex | null;
 };
 
 export async function countPendingValuations(ctx: AuthContext): Promise<number> {
@@ -1115,7 +1353,7 @@ export async function listReviewQueue(
     where cv.process_id = ${processValuations.processId}
       and cv.kind = ${processValuations.kind}
       and cv.status = 'official'
-    order by cv.base_date desc, cv.created_at desc
+    order by cv.base_date desc, coalesce(cv.reviewed_at, cv.created_at) desc, cv.created_at desc, cv.id desc
     limit 1
   )`.mapWith((v) => (v === null ? null : Number(v)));
 
@@ -1158,7 +1396,7 @@ export async function listReviewQueue(
       instance: v.instance,
       source: v.source,
       confidence: v.confidence,
-      bulkEligible: v.confidence !== null && v.confidence >= threshold,
+      bulkEligible: isBulkEligible(v, threshold),
       isEstimate: v.isEstimate,
       reason: v.reason,
       documentTitle: v.documentId ? (titles.get(v.documentId) ?? null) : null,
@@ -1166,6 +1404,7 @@ export async function listReviewQueue(
       createdByName,
       createdAt: v.createdAt,
       currentOfficialCents,
+      correctionIndex: v.correctionIndex,
     })),
   };
 }
@@ -1224,7 +1463,7 @@ export async function getReviewItem(ctx: AuthContext, id: string): Promise<Revie
         eq(processValuations.status, "official"),
       ),
     )
-    .orderBy(desc(processValuations.baseDate), desc(processValuations.createdAt))
+    .orderBy(...OFFICIAL_VALUATION_ORDER)
     .limit(1);
 
   let document: ReviewItemDocument | null = null;
@@ -1319,7 +1558,7 @@ export async function getReviewItem(ctx: AuthContext, id: string): Promise<Revie
       instance: v.instance,
       source: v.source,
       confidence: v.confidence,
-      bulkEligible: v.confidence !== null && v.confidence >= threshold,
+      bulkEligible: isBulkEligible(v, threshold),
       isEstimate: v.isEstimate,
       reason: v.reason,
       documentTitle: document?.visible ? document.title : null,
@@ -1327,6 +1566,7 @@ export async function getReviewItem(ctx: AuthContext, id: string): Promise<Revie
       createdByName: row.createdByName,
       createdAt: v.createdAt,
       currentOfficialCents: official?.amountCents ?? null,
+      correctionIndex: v.correctionIndex,
       excerpt: document && !document.visible ? null : v.excerpt,
       status: v.status,
       reviewNote: v.reviewNote,

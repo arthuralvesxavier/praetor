@@ -34,13 +34,13 @@ export function EmailIntakeSettingsForm<S extends FormState>({
           <CardDescription>Remetente exibido nas mensagens e quais notificações o sistema gera.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <Callout tone="warning" title="Envio simulado — nenhuma mensagem é enviada">
+          <Callout tone="warning" title="Envio simulado: nenhuma mensagem é enviada">
             Nesta versão os e-mails são apenas gerados e guardados na Central de e-mails para consulta. Nenhum servidor de
             e-mail é contatado e nenhuma mensagem sai do sistema.
           </Callout>
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField label="Modo de envio" htmlFor="email-mode" hint="Não pode ser alterado nesta versão.">
-              <Input value="Simulado — fixo nesta versão" readOnly disabled />
+              <Input value="Simulado (fixo nesta versão)" readOnly disabled />
             </FormField>
             <div className="hidden sm:block" aria-hidden="true" />
             <FormField label="Nome do remetente" htmlFor="senderName" required error={err("senderName")}>
@@ -67,7 +67,7 @@ export function EmailIntakeSettingsForm<S extends FormState>({
             <Checkbox
               name="notifyOnAssignment"
               label="Avisar o advogado quando um processo for atribuído a ele"
-              description="Gera o e-mail simulado “Novo processo atribuído”."
+              description="Gera o e-mail simulado “Novo processo atribuído” quando a entrada define o responsável e quando o responsável é trocado em Distribuição. A distribuição em lote após uma importação não gera esse e-mail, e ninguém recebe aviso da atribuição que ele mesmo fez."
               defaultChecked={defaults.notifyOnAssignment}
             />
           </fieldset>

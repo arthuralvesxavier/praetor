@@ -66,7 +66,7 @@ export function CitationChip({ briefId, citation, sourceLabel, canOpen }: Citati
         >
           <FileText aria-hidden="true" className="size-3.5" />
           {label}
-          <span className="sr-only"> — ver o trecho em {full}</span>
+          <span className="sr-only">, ver o trecho em {full}</span>
         </button>
       </DialogTrigger>
       <DialogContent size="lg">

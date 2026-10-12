@@ -117,7 +117,7 @@ export async function runPortfolioAlertsRoutine(rc: RoutineContext): Promise<str
       title: `Valor aguardando conferência: ${p.processNumber}`,
       message:
         `${n} valor(es) proposto(s) no processo ${p.processNumber} aguardam conferência humana na fila de revisão. ` +
-        "Valores propostos não entram nos totais oficiais até serem aprovados (RN-11).",
+        "Valores propostos não entram nos totais até serem aprovados.",
       entityType: "legal_process",
       entityId: p.processId,
       dedupeKey: key,
@@ -207,7 +207,7 @@ export async function runPortfolioAlertsRoutine(rc: RoutineContext): Promise<str
       organizationId: org,
       type: "process_needs_verification",
       severity: "warning",
-      title: `Processo marcado para verificação: ${p.number}`,
+      title: `Processo pendente de conferência: ${p.number}`,
       message: p.note
         ? `Motivo registrado: ${clip(p.note, 300)}`
         : `O processo ${p.number} foi marcado para conferência (divergência ou indicação da fonte).`,
@@ -221,7 +221,7 @@ export async function runPortfolioAlertsRoutine(rc: RoutineContext): Promise<str
   return (
     `${bySettlement.size} acordo(s) com parcela na janela, ${pending.length} processo(s) com valor aguardando conferência, ` +
     `${enforcement.length} execução(ões) sem valor apurado, ${idle} garantia(s) parada(s) e ` +
-    `${verification.length} processo(s) para verificação; ${resolved} alerta(s) encerrado(s) automaticamente.`
+    `${verification.length} processo(s) pendente(s) de conferência; ${resolved} alerta(s) encerrado(s) automaticamente.`
   );
 }
 

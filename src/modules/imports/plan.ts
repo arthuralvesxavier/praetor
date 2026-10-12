@@ -25,19 +25,37 @@
  *     planilha nunca apagam dados; processo encerrado não é reaberto; valor
  *     diferente do oficial vigente vira valoração proposta (RN-08); a marcação
  *     de verificação só é ligada (desligar é decisão humana).
+ *   - Processo encerrado na planilha sem data de encerramento: usa a data-base
+ *     da importação como `closedAt` (alerta `closed_at_assumed`, para conferir),
+ *     para não ficar encerrado sem data (prévias e relatório de movimentação).
+ *   - Fase e instância são eixos distintos (P0.5): encerramento é a situação,
+ *     nunca a fase; a fase vem só dos termos Conhecimento/Liquidação/Execução (da
+ *     linha atual ou, na falta, de outra linha do mesmo CNJ). Sem termo de fase:
+ *     Conhecimento, com alerta e verificação (`phase_fallback`; quando o texto
+ *     só indica a instância, `phase_fallback_instance_only`) ou, se o processo
+ *     está encerrado, só informativo (`phase_fallback_closed`). Fase presumida
+ *     nunca sobrescreve a fase de um processo existente. Termos recursais acima
+ *     da instância da linha atual, sem linha dessa instância, pedem conferência
+ *     da instância atual (`forwarded_without_row`); instância deduzida dos termos
+ *     recursais (sem célula nem aba de instância) marca o processo para verificação.
+ *   - Linhas gravadas antes da P0.5 (lote analisado e confirmado depois) têm a
+ *     fase relida do texto da célula (`normalizeStoredPhase`): nenhuma fase do
+ *     modelo anterior chega ao banco.
  */
-import type {
-  ClosureReason,
-  ImportRowAction,
-  LegalArea,
-  ProcessInstance,
-  ProcessPhase,
-  ProcessStatus,
+import {
+  isProcessPhase,
+  type ClosureReason,
+  type ImportRowAction,
+  type LegalArea,
+  type ProcessInstance,
+  type ProcessPhase,
+  type ProcessStatus,
 } from "@/domain/enums";
 import type { ImportStats } from "@/server/db/schema/imports";
 import {
   formatCentsPlain,
   normalizeKey,
+  normalizeStoredPhase,
   type CanonicalField,
   type NormalizedRow,
   type ParsedIssue,
@@ -46,9 +64,23 @@ import {
 } from "./parser";
 
 export const INSTANCE_ORDER: readonly ProcessInstance[] = ["first", "second", "superior"];
-const INSTANCE_TEXT: Record<ProcessInstance, string> = { first: "1º grau", second: "2º grau", superior: "tribunal superior" };
+const INSTANCE_TEXT: Record<ProcessInstance, string> = { first: "1º grau", second: "2º grau", superior: "3º grau" };
 
 export type RowKey = string;
+/**
+ * Before-state for the rollback of a batch. One recorded before P0.5 may hold a phase of the
+ * previous model ("appeal", "closed"...), which can no longer be written (phase and instance are
+ * distinct axes): that phase is not restored (the current one is kept); every other field is.
+ */
+export function withoutLegacyPhase<T extends object>(values: T | null | undefined): T | null {
+  if (!values) return null;
+  const phase = (values as { phase?: unknown }).phase;
+  if (phase === null || phase === undefined || isProcessPhase(phase)) return values;
+  const rest: T & { phase?: unknown } = { ...values };
+  delete rest.phase;
+  return rest;
+}
+
 export function rowKey(sheet: string, rowNumber: number): RowKey {
   return `${sheet}\u0000${rowNumber}`;
 }
@@ -180,7 +212,15 @@ export type PlanInput = {
   fileName: string;
   /** process id -> keys "kind:amountCents" of valuations already recorded (any status), for idempotency. */
   existingValuationKeys?: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * Base date of the import ("YYYY-MM-DD"; the commit date-base, or the one known at
+   * analysis). Used as the closing date of a process the spreadsheet marks as closed
+   * without a date, so it never ends up `closed` with `closedAt = null`.
+   */
+  baseDate?: string | null;
 };
+
+export const CLOSED_AT_ASSUMED_MESSAGE = "Data de encerramento não informada: usada a data-base da importação; conferir.";
 
 type DataRow = PlanRow & { data: NormalizedRow & { cnj: string; instance: ProcessInstance } };
 
@@ -292,7 +332,9 @@ export function buildImportPlan(input: PlanInput): ImportPlan {
     }
     const cnj = row.data.cnj;
     if (!groups.has(cnj)) groups.set(cnj, []);
-    groups.get(cnj)!.push(row as DataRow);
+    // A row stored before P0.5 may carry a phase of the previous model: re-read it from the cell text.
+    const phase = normalizeStoredPhase(row.data.phase);
+    groups.get(cnj)!.push((phase === row.data.phase ? row : { ...row, data: { ...row.data, phase } }) as DataRow);
   }
 
   const processes: ProcessPlan[] = [];
@@ -323,7 +365,7 @@ export function buildImportPlan(input: PlanInput): ImportPlan {
           level: "warning",
           code: "duplicate_in_sheet",
           field: null,
-          message: `Número repetido na mesma aba para o ${INSTANCE_TEXT[inst]} (já na linha ${firstInSheet.rowNumber})${valuesDiffer(firstInSheet, row) ? " com valores diferentes" : ""} — linha ignorada; conferir.`,
+          message: `Número repetido na mesma aba para o ${INSTANCE_TEXT[inst]} (já na linha ${firstInSheet.rowNumber})${valuesDiffer(firstInSheet, row) ? " com valores diferentes" : ""}: linha ignorada; conferir.`,
         });
         continue;
       }
@@ -334,7 +376,7 @@ export function buildImportPlan(input: PlanInput): ImportPlan {
         level: "info",
         code: "conferred",
         field: null,
-        message: `Linha conferida com ${where(eff)} — os valores oficiais vêm dessa linha.`,
+        message: `Linha conferida com ${where(eff)}: os valores oficiais vêm dessa linha.`,
       });
       for (const d of divergences) {
         const msg = divergenceMessage(d);
@@ -421,33 +463,67 @@ function planProcess(
   const baseRow = effRows[0];
 
   if (!current) {
-    const note = `Instância atual não determinada: ${effRows.length === 1 ? "a única instância informada consta" : "todas as instâncias informadas constam"} como baixada(s) — conferir.`;
+    const note = `Instância atual não determinada: ${effRows.length === 1 ? "a única instância informada consta" : "todas as instâncias informadas constam"} como baixada(s); conferir.`;
     notes.push(note);
     primaryIssues.push({ level: "warning", code: "current_instance_undetermined", field: null, message: note });
   } else if (current === highest && current.data.phase.forwarded && current.data.instance !== "superior") {
-    const note = "A planilha indica remessa à instância superior, mas não há linha dessa instância — conferir a instância atual.";
+    const note = "A planilha indica remessa à instância superior, mas não há linha dessa instância; conferir a instância atual.";
+    notes.push(note);
+    primaryIssues.push({ level: "warning", code: "forwarded_without_row", field: null, message: note });
+  } else if (
+    current === highest &&
+    current.data.phase.instance &&
+    instanceIndex(current.data.phase.instance) > instanceIndex(current.data.instance)
+  ) {
+    // P0.5: appeal terms name the instance. A higher instance without a line of its own is not invented: conferir.
+    const note = `A fase cita recurso no ${INSTANCE_TEXT[current.data.phase.instance]}, mas não há linha dessa instância; conferir a instância atual.`;
     notes.push(note);
     primaryIssues.push({ level: "warning", code: "forwarded_without_row", field: null, message: note });
   }
   const closedBelow = current ? effRows.filter((r) => instanceIndex(r.data.instance) < instanceIndex(current.data.instance) && r.data.phase.closed) : [];
   if (current && !current.data.phase.closed && closedBelow.length > 0) {
-    const note = `${INSTANCE_TEXT[closedBelow[0].data.instance]} consta encerrado, mas o ${INSTANCE_TEXT[current.data.instance]} segue em andamento — conferir.`;
+    const note = `${INSTANCE_TEXT[closedBelow[0].data.instance]} consta encerrado, mas o ${INSTANCE_TEXT[current.data.instance]} segue em andamento; conferir.`;
     notes.push(note);
     primaryIssues.push({ level: "warning", code: "instances_contradict", field: null, message: note });
   }
   for (const r of effRows) if (r.data.phase.needsVerification && r.data.phase.verificationNote) notes.push(r.data.phase.verificationNote);
+  // An instance read from the appeal terms of the Fase text (no Instância cell or sheet) is a presumption.
+  for (const r of effRows) {
+    if (r.data.instanceFromPhase) {
+      notes.push(`Instância não informada na planilha (${at(r)}): ${INSTANCE_TEXT[r.data.instance]} deduzido dos termos recursais da fase; conferir.`);
+    }
+  }
 
+  // Phase (P0.5): only conhecimento / liquidação / execução; appeal terms never set it (they name the instance).
+  const closed = primary.data.phase.closed;
   let phase: ProcessPhase | null = primary.data.phase.phase;
   if (!phase) {
     phase = [...effRows].reverse().find((r) => r.data.phase.phase)?.data.phase.phase ?? null;
   }
+  const phaseFromFile = phase !== null;
   if (!phase) {
     phase = "knowledge";
-    const note = `Fase não reconhecida ("${truncate(primary.data.phase.detail ?? "vazia", 80)}") — registrada como Conhecimento; conferir.`;
-    notes.push(note);
-    primaryIssues.push({ level: "warning", code: "phase_fallback", field: "Fase", message: note });
+    if (closed) {
+      // Out of the active portfolio: the phase drives no calculation, so no verification is raised.
+      primaryIssues.push({
+        level: "info",
+        code: "phase_fallback_closed",
+        field: "Fase",
+        message: `Processo encerrado sem fase na planilha ("${truncate(primary.data.phase.detail ?? "vazia", 80)}"): registrado como Conhecimento.`,
+      });
+    } else {
+      // The parser recognized appeal terms as the INSTANCE: the text names no phase (it was not "unrecognized").
+      const instanceOnly = [primary, ...effRows].find((r) => r.data.phase.instance)?.data.phase.instance ?? null;
+      const note = instanceOnly
+        ? `Fase não informada (o texto indica só a instância: ${INSTANCE_TEXT[instanceOnly]}). Registrada como Conhecimento; conferir.`
+        : `Fase não reconhecida ("${truncate(primary.data.phase.detail ?? "vazia", 80)}"): registrada como Conhecimento; conferir.`;
+      notes.push(note);
+      primaryIssues.push({ level: "warning", code: instanceOnly ? "phase_fallback_instance_only" : "phase_fallback", field: "Fase", message: note });
+    }
   }
-  const closed = primary.data.phase.closed;
+  // A closed process needs a closing date (snapshots and the movement report filter on it).
+  const closedAtAssumed = closed && !primary.data.phase.closedAt;
+  const closedAt = closed ? (primary.data.phase.closedAt ?? input.baseDate ?? null) : null;
 
   const located = effRows.find((r) => r.data.city || r.data.state);
   const claimRow = effRows.find((r) => r.data.claimAmountCents !== null) ?? null;
@@ -480,10 +556,10 @@ function planProcess(
     processClass: primary.data.processClass,
     city: located?.data.city ?? null,
     state: located?.data.state ?? null,
-    phase: closed ? "closed" : phase,
+    phase,
     status: closed ? "closed" : "active",
     closureReason: closed ? primary.data.phase.closureReason : null,
-    closedAt: closed ? primary.data.phase.closedAt : null,
+    closedAt,
     needsVerification,
     verificationNote,
     phaseDetail: primary.data.phase.detail,
@@ -556,12 +632,15 @@ function planProcess(
 
   const officialReason = (row: DataRow, kind: "claim" | "liquidated") => {
     if (kind === "liquidated" && row.data.liquidatedAmountCents === 0 && row.data.phase.closureReason === "paid_extinct") {
-      return `Quitação — planilha ${input.fileName} indica pago/extinto (${at(row)}).`;
+      return `Quitação: planilha ${input.fileName} indica pago/extinto (${at(row)}).`;
     }
     return `Carga da planilha ${input.fileName} (${at(row)}).`;
   };
 
+  const closedAtIssue: ParsedIssue = { level: "warning", code: "closed_at_assumed", field: "Fase", message: CLOSED_AT_ASSUMED_MESSAGE };
+
   if (!existing) {
+    if (closedAtAssumed) primaryIssues.push(closedAtIssue);
     if (claimRow) {
       valuations.push({ kind: "claim", amountCents: claimRow.data.claimAmountCents!, instance: claimRow.data.instance, status: "official", reason: officialReason(claimRow, "claim"), rowKey: rowKey(claimRow.sheet, claimRow.rowNumber) });
     }
@@ -586,18 +665,20 @@ function planProcess(
     if (target.status === "closed") {
       if (!existingClosed) {
         set("status", "closed");
-        set("phase", "closed");
+        if (phaseFromFile) set("phase", target.phase);
         set("closureReason", target.closureReason);
         set("closedAt", target.closedAt);
+        if (closedAtAssumed) primaryIssues.push(closedAtIssue);
       }
     } else if (existingClosed) {
       primaryIssues.push({
         level: "warning",
         code: "existing_closed_not_reopened",
         field: "Fase",
-        message: "Processo encerrado no sistema, mas a planilha o indica em andamento — não foi reaberto automaticamente; conferir.",
+        message: "Processo encerrado no sistema, mas a planilha o indica em andamento. Não foi reaberto automaticamente; conferir.",
       });
-    } else {
+    } else if (phaseFromFile) {
+      // A presumed phase (text not recognized) never overwrites the phase already registered.
       set("phase", target.phase);
     }
     if (target.needsVerification && !existing.needsVerification) {
@@ -622,7 +703,7 @@ function planProcess(
           level: "warning",
           code: "existing_value_differs",
           field: kind === "claim" ? "Valor da causa" : "Valor liquidado",
-          message: `A planilha informa ${label} de ${formatCentsPlain(value)} e o valor oficial vigente é ${formatCentsPlain(current)} — registrado como valor proposto para conferência (não sobrescrito).`,
+          message: `A planilha informa ${label} de ${formatCentsPlain(value)} e o valor oficial vigente é ${formatCentsPlain(current)}: registrado como valor proposto para conferência (não sobrescrito).`,
         });
         if (!existingKeys.has(`${kind}:${value}`)) {
           valuations.push({
@@ -650,7 +731,7 @@ function planProcess(
         level: "info",
         code: "only_in_instance_sheet",
         field: null,
-        message: "Número e instância presentes somente nesta aba (não constam da aba consolidada) — linha usada como base.",
+        message: "Número e instância presentes somente nesta aba (não constam da aba consolidada): linha usada como base.",
       });
     }
     if (isPrimary) o.issues.push(...primaryIssues);

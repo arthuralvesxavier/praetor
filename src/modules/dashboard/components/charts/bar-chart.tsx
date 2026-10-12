@@ -10,6 +10,8 @@ export type BarRow = { key: string; label: string; href?: string; values: number
  * series (same scale, e.g. valor da causa × provisão); `stacked` joins the
  * series into one bar separated by a 2px surface gap (e.g. prazos + tarefas).
  * The whole row is the hit target and links to the originating records.
+ * `header` labels the columns like an axis (e.g. "Tribunal (processos)" and the
+ * chart's single money unit, "R$ milhões"), so the values carry no unit of their own.
  */
 export function BarChart({
   rows,
@@ -17,7 +19,9 @@ export function BarChart({
   mode = "grouped",
   format = (n) => String(n),
   valueText,
+  tipValue,
   label,
+  header,
 }: {
   rows: BarRow[];
   series: BarSeries[];
@@ -25,18 +29,34 @@ export function BarChart({
   format?: (n: number) => string;
   /** Text at the end of the row (defaults to the formatted first series, or the stacked total). */
   valueText?: (row: BarRow) => string;
+  /**
+   * Tooltip and accessible text of the row (defaults to "<series>: <formatted value>" for every
+   * series). Pass it when a value of 0 does not mean zero (e.g. "não apurado").
+   */
+  tipValue?: (row: BarRow) => string;
   label: string;
+  /** Column headers: the category column and the value column (the unit of every value). */
+  header?: { label: string; value: string };
 }) {
   const total = (r: BarRow) => r.values.reduce((a, b) => a + b, 0);
   const max = Math.max(0, ...rows.map((r) => (mode === "stacked" ? total(r) : Math.max(0, ...r.values))));
   if (rows.length === 0 || max === 0) return <EmptyChart />;
   const pct = (v: number) => `${Math.max(0, (v / max) * 100)}%`;
+  const grid =
+    "grid grid-cols-[minmax(0,9rem)_minmax(0,1fr)_auto] items-center gap-3 px-2 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)_auto]";
 
   return (
     <ChartTooltip>
-      <ul aria-label={label} className="space-y-1">
+      {header ? (
+        <div className={`${grid} border-b border-border/60 pb-1 text-xs font-medium text-muted-foreground`}>
+          <span className="truncate">{header.label}</span>
+          <span aria-hidden="true" />
+          <span className="text-right">{header.value}</span>
+        </div>
+      ) : null}
+      <ul aria-label={label} className={header ? "mt-1 space-y-1" : "space-y-1"}>
         {rows.map((row) => {
-          const tipValue = series.map((s, i) => `${s.label}: ${format(row.values[i] ?? 0)}`).join(" · ");
+          const tip = tipValue ? tipValue(row) : series.map((s, i) => `${s.label}: ${format(row.values[i] ?? 0)}`).join(" · ");
           const end = valueText ? valueText(row) : mode === "stacked" ? format(total(row)) : format(row.values[0] ?? 0);
           const content = (
             <>
@@ -75,11 +95,10 @@ export function BarChart({
             </>
           );
           const common = {
-            "data-tip-value": tipValue,
+            "data-tip-value": tip,
             "data-tip-label": row.label,
-            "aria-label": `${row.label}: ${tipValue}`,
-            className:
-              "grid grid-cols-[minmax(0,9rem)_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-2 py-1.5 hover:bg-slate-100/70 focus-visible:bg-slate-100/70 focus-visible:outline-2 focus-visible:outline-ring sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)_auto]",
+            "aria-label": `${row.label}: ${tip}`,
+            className: `${grid} rounded-md py-1.5 hover:bg-slate-100/70 focus-visible:bg-slate-100/70 focus-visible:outline-2 focus-visible:outline-ring`,
           };
           return (
             <li key={row.key}>

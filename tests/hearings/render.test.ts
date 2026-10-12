@@ -69,7 +69,9 @@ describe("server rendering", () => {
   it("renders the process hearings tab with actions for writers and without for readers", async () => {
     const writer = renderToStaticMarkup((await ProcessHearingsTab({ ctx: fx.ctx.lawyer, processId: ids.p })) as ReactElement);
     expect(writer).toContain("Próximas audiências");
-    expect(writer).toContain("não integrado nesta versão");
+    expect(writer).toContain("não informa a data");
+    expect(writer).toContain("PJe e MNI não estão integrados nesta versão");
+    expect(writer).not.toContain("não integrado nesta versão");
     expect(writer).toContain("Redesignar");
     expect(writer).toContain("Resultado pendente");
     expect(writer).toContain("13:45");
@@ -85,14 +87,14 @@ describe("server rendering", () => {
   it("renders agenda rows with the process link", async () => {
     const { items } = await listHearings(fx.ctx.admin, {});
     const html = renderToStaticMarkup(HearingRow({ item: items[0], users: [], today, showProcess: true }));
-    expect(html).toContain(`/processos/${ids.p}?aba=audiencias`);
+    expect(html).toContain(`/processos/${ids.p}?aba=prazos-e-audiencias#audiencias`);
     expect(html).toContain("Abrir sala virtual");
   });
 
   it("renders alert rows with links and the resolve button", async () => {
     const items = await listAlerts(fx.ctx.lawyer, {});
     const html = renderToStaticMarkup(AlertRows({ items, canResolve: true, label: "Alertas", showOpenLink: true }));
-    expect(html).toContain(`/processos/${ids.p}?aba=audiencias`);
+    expect(html).toContain(`/processos/${ids.p}?aba=prazos-e-audiencias#audiencias`);
     expect(html).toContain("Resolver");
     expect(html).toContain("Crítico");
   });

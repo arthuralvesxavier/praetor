@@ -12,6 +12,8 @@ import {
 } from "@/domain/enums";
 import { addDaysISO, APP_LOCALE, todayISO } from "@/lib/format";
 import { enumParam, idParam, type SearchParams } from "@/lib/search-params";
+import { MISSING_FIELD_PARAMS } from "@/modules/processes/filters";
+import type { ProcessMissingField } from "@/modules/processes/schemas";
 
 export const BI_PERIODS = ["30d", "90d", "6m", "12m", "ytd", "all"] as const;
 export type BiPeriod = (typeof BI_PERIODS)[number];
@@ -191,6 +193,8 @@ export type ProcessLinkExtra = {
   carteira?: "ativa" | "encerrada" | "todas";
   /** With (`com`) or without (`sem`, "não apurado") an official liquidated value. */
   liquidado?: "com" | "sem";
+  /** Registration gap: processes whose field is empty (URL `pendencia=tribunal|instancia|…`). */
+  pendencia?: ProcessMissingField;
 };
 
 /** Link to /processos with the dashboard filters (params documented in docs/dev/MODULE_CONTRACTS.md). */
@@ -208,6 +212,7 @@ export function processesHref(f: BiFilters, extra: ProcessLinkExtra = {}): strin
     cidade: extra.cidade,
     carteira: extra.carteira,
     liquidado: extra.liquidado,
+    pendencia: extra.pendencia ? MISSING_FIELD_PARAMS[extra.pendencia] : undefined,
   })}`;
 }
 
@@ -228,8 +233,16 @@ export function deadlinesHref(f: BiFilters, extra: { situacao?: string; aba?: st
   return `/prazos${qs({ aba: extra.aba ?? "prazos", situacao: extra.situacao, mes: extra.mes, responsavel: f.responsibleId })}`;
 }
 
-export function tasksHref(f: BiFilters, responsibleId?: string | null): string {
-  return `/prazos${qs({ aba: "tarefas", responsavel: responsibleId ?? f.responsibleId })}`;
+export function tasksHref(f: BiFilters, responsibleId?: string | null, extra: { situacao?: "vencidos" } = {}): string {
+  return `/prazos${qs({ aba: "tarefas", situacao: extra.situacao, responsavel: responsibleId ?? f.responsibleId })}`;
+}
+
+/**
+ * `/prazos` filters deadlines and tasks by responsible only: with a unit, legal-area or
+ * company filter the dashboard figure is narrower than the list, so it gets no link.
+ */
+export function workListMatchesFilters(f: BiFilters): boolean {
+  return !f.unitId && !f.area && !f.companyId;
 }
 
 export function contractsHref(f: BiFilters, extra: { vencendo?: boolean } = {}): string {

@@ -99,7 +99,7 @@ function CnjHint({ value, court, onUseCourt }: { value: string; court: string; o
       ) : (
         <span className="inline-flex items-center gap-1 text-amber-800">
           <CircleAlert aria-hidden="true" className="size-3.5" />
-          Dígito verificador não confere — o processo será marcado para verificação.
+          Dígito verificador não confere: o processo ficará pendente de conferência.
         </span>
       )}
       {suggested && suggested !== court.trim().toUpperCase() ? (
@@ -442,7 +442,7 @@ export function IntakeForm({ companies, units, users, maxUploadMb }: IntakeFormP
           </ul>
         ) : (
           <p className="text-xs text-muted-foreground sm:col-span-2">
-            Nenhum arquivo selecionado. Você pode registrar sem documentos e enviá-los depois pela aba Documentos do processo.
+            Nenhum arquivo selecionado. Você pode registrar sem documentos e enviá-los depois pela aba Documentos e análises do processo.
           </p>
         )}
       </Section>

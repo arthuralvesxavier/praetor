@@ -1,7 +1,8 @@
 /**
  * Executive portfolio panel (TE-01): current position of the active portfolio
- * of legal liabilities and the follow-up cards (hearings, intake, alerts,
- * preliminary analyses awaiting review).
+ * of legal liabilities and the follow-up cards (intake, alerts, preliminary
+ * analyses awaiting review). Hearings appear only in the decision band
+ * (`./decision-service.ts`, `DECISION_WINDOW_DAYS`).
  *
  * Scope: every figure is bounded by the row-visibility rules of
  * `@/server/auth/access` — executives, accountants and auditors aggregate the
@@ -9,12 +10,27 @@
  * external counsel their firm's processes. Rows returned by the contingency
  * module are additionally intersected with `processWhere(ctx)` here (defense
  * in depth), so a widened upstream result can never leak into the panel.
+ * Net exposure (P1.8): valor apurado vigente − linked guarantees per process (never
+ * negative), with the deductions by guarantee kind (SQL aggregate) and the processes with
+ * the largest deductions; the estimate stays apart.
+ * Previous closing (RN-10): the stored items of the latest CLOSED competência are summed
+ * in SQL; a process deleted after the close still counts (same visibility policy as the
+ * reports and the provision memo: the scope rules without the soft-delete condition).
+ * Follow-up cards: alert counts only for the modules the role can read
+ * (`visibleAlertsWhere`), and briefs awaiting review only in their latest version.
  *
  * Money rules: see `./portfolio.ts` (RN-02, RN-03, RN-04, RN-05, RN-07, RN-09, RN-10).
+ * Coverage: `coverage` says in how many active processes the official liquidated
+ * value is assessed (null = não apurado, never zero); the UI shows every
+ * apurado-based amount together with it.
+ * Registration gaps: a process without tribunal/instância/fase/cidade/empresa/unidade
+ * stays out of that chart and is counted in `registrationGaps`, which links to
+ * `/processos?pendencia=<campo>` (same rule as the processes list filter).
  * Services never import next/*; the page handles the UI states.
  */
-import { and, asc, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
-import { emptyBucket, netExposure, type MoneyBucket } from "@/domain/contingency";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, notExists, sql, type SQL } from "drizzle-orm";
+import { alias, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { emptyBucket, netExposure, type AmountBasisCounts, type MoneyBucket } from "@/domain/contingency";
 import {
   ALERT_TYPE_LABELS,
   LOSS_PROBABILITIES,
@@ -22,13 +38,14 @@ import {
   PROCESS_PHASE_LABELS,
   type AlertType,
   type CaseBriefStatus,
+  type GuaranteeKind,
   type LossProbability,
   type ProcessInstance,
   type ProcessPhase,
 } from "@/domain/enums";
 import { todayISO } from "@/lib/format";
 import type { AuthContext } from "@/server/auth/context";
-import { caseBriefWhere, entityReferenceWhere, processWhere } from "@/server/auth/access";
+import { caseBriefWhere, processWhere, scopedRecordWhere } from "@/server/auth/access";
 import { assertCan, can } from "@/server/auth/permissions";
 import { getDb } from "@/server/db/client";
 import {
@@ -38,20 +55,26 @@ import {
   legalProcesses,
   portfolioSnapshotItems,
   portfolioSnapshots,
+  processGuarantees,
   units,
 } from "@/server/db/schema";
 import { logger } from "@/server/lib/logger";
-import { loadOrganization } from "@/modules/analyses/org-settings";
+import { visibleAlertsWhere } from "@/modules/alerts/service";
 import { getPortfolioExposure, type PortfolioExposureRow } from "@/modules/contingency/service";
-import { listUpcomingHearings, type UpcomingHearing } from "@/modules/hearings/service";
-import { getIntakeCounts, type IntakeCounts } from "@/modules/intake/service";
+import { getIntakeStatusCounts } from "@/modules/intake/service";
 import { processesHref, type BiFilters } from "./bi-filters";
 import {
-  bucketFromSnapshotItems,
+  DIMENSIONS,
   bucketOf,
+  dimensionGroups,
   groupRows,
-  rankGroups,
+  liquidatedCoverage,
+  netExposureSummary,
+  provisionBasisOf,
   uniqueProcessCount,
+  type DimensionKey,
+  type LiquidatedCoverage,
+  type NetExposureSummary,
   type PortfolioRowLike,
 } from "./portfolio";
 
@@ -62,11 +85,30 @@ import {
 /** Outcome of a panel section that depends on a permission and on another module. */
 export type Section<T> = { status: "ok"; data: T } | { status: "forbidden" } | { status: "error" };
 
-export const DIMENSIONS = ["court", "instance", "phase", "city", "company", "unit"] as const;
-export type DimensionKey = (typeof DIMENSIONS)[number];
+export { DIMENSIONS, type DimensionKey } from "./portfolio";
 
-export type DimensionRow = { key: string | null; label: string; bucket: MoneyBucket; href: string | null };
-export type Dimension = { key: DimensionKey; rows: DimensionRow[]; others: { groups: number; bucket: MoneyBucket } | null };
+/**
+ * One chart category: always an informed value (processes without it are a registration gap).
+ * `provisionBasis`: processes of the group with a provision on the valor apurado, on the valor da
+ * causa or none (a group mixes classified and unclassified processes, so its bucket cannot tell).
+ */
+export type DimensionRow = { key: string; label: string; bucket: MoneyBucket; href: string; provisionBasis: AmountBasisCounts };
+export type Dimension = {
+  key: DimensionKey;
+  rows: DimensionRow[];
+  others: { groups: number; bucket: MoneyBucket; provisionBasis: AmountBasisCounts } | null;
+  /** Processes without this field: kept out of the chart; `href` opens them in the portfolio. */
+  missing: { bucket: MoneyBucket; href: string } | null;
+};
+
+/** "Pendência de cadastro": active processes without a field used by the charts. */
+export type RegistrationGap = {
+  field: DimensionKey;
+  /** Unique processes without the field. */
+  count: number;
+  /** `/processos?pendencia=<campo>` with the dashboard filters. */
+  href: string;
+};
 
 export type TopExposureItem = {
   processId: string;
@@ -88,13 +130,31 @@ export type PreviousClosing = {
   closedAt: Date | null;
   /** Stored figures of the closed period, restricted to the same scope and filters. */
   totals: MoneyBucket;
+  /**
+   * Stored items with an exposure on the valor apurado, on the valor da causa (estimate) or none,
+   * counted from the stored items as they are (RN-10). A side without any is "not calculated",
+   * never R$ 0, and is not compared (RN-03).
+   */
+  exposureBasis: AmountBasisCounts;
+  /** Same for the provision (a valor apurado without risk classification has none). */
+  provisionBasis: AmountBasisCounts;
 };
 
 export type PortfolioData = {
   /** Unique CNJ numbers in the active portfolio (RN-09). */
   activeProcesses: number;
   totals: MoneyBucket;
-  byClassification: { key: LossProbability | "unclassified"; bucket: MoneyBucket }[];
+  /** "Exposição líquida" with what was deducted (P1.8); the estimate is kept apart. */
+  netExposure: NetExposureSummary;
+  /** "Valor apurado em X de Y processos": official liquidated value assessed (null never counts, zero does). */
+  coverage: LiquidatedCoverage;
+  /** Fields missing in active processes (only fields with at least one process), in `DIMENSIONS` order. */
+  registrationGaps: RegistrationGap[];
+  /**
+   * `provisionBasis`: processes with a provision on the valor apurado, on the valor da causa
+   * or none, so "Estimada" reads "Sem estimativa" instead of a R$ 0 that was never calculated.
+   */
+  byClassification: { key: LossProbability | "unclassified"; bucket: MoneyBucket; provisionBasis?: AmountBasisCounts }[];
   dimensions: Record<DimensionKey, Dimension>;
   top: TopExposureItem[];
   /** Latest CLOSED monthly snapshot before the current month; null = "sem fechamento anterior". */
@@ -120,15 +180,35 @@ export type BriefAwaiting = {
   generatedAt: Date | null;
 };
 
+/**
+ * Preliminary analyses awaiting review: latest version of each process only (a newer
+ * generated version supersedes the older ones). `readyForReview` and `inReview` are
+ * exactly what `/analises-preliminares?status=ready_for_review|in_review` lists.
+ */
+export type BriefsAwaiting = { total: number; readyForReview: number; inReview: number; items: BriefAwaiting[] };
+
+/**
+ * Intakes by step, from the effective statuses of `/entrada` (`getIntakeStatusCounts`):
+ * each figure except `inProgress` is exactly what `/entrada?status=<status>` lists.
+ */
+export type IntakeFollowUp = {
+  received: number;
+  /** assigned + analyzing + brief_ready (no single list reproduces it). */
+  inProgress: number;
+  notified: number;
+  inReview: number;
+  approved: number;
+  failed: number;
+};
+
 export type FollowUpData = {
-  upcomingHearingDays: number;
-  hearings: Section<UpcomingHearing[]>;
-  intake: Section<IntakeCounts>;
+  intake: Section<IntakeFollowUp>;
   alerts: { total: number; critical: number; groups: AlertGroupSummary[] };
-  briefs: Section<{ total: number; items: BriefAwaiting[] }>;
+  briefs: Section<BriefsAwaiting>;
 };
 
 const ACTIVE_STATUSES = ["active", "suspended"] as const;
+const REVIEW_BRIEF_STATUSES = ["ready_for_review", "in_review"] as const satisfies readonly CaseBriefStatus[];
 const CITY_TOP = 10;
 const TOP_EXPOSURES = 8;
 
@@ -157,6 +237,118 @@ export const ALERT_GROUPS: { key: AlertGroupKey; label: string; types: AlertType
 
 function logSectionError(section: string, error: unknown) {
   logger.error("dashboard_section_failed", { section, error });
+}
+
+/** Processes of the panel: visible, in the active portfolio and inside the BI filters (period excluded). */
+function panelProcessWhere(ctx: AuthContext, filters: BiFilters): SQL {
+  const p = legalProcesses;
+  return and(
+    processWhere(ctx),
+    inArray(p.status, [...ACTIVE_STATUSES]),
+    filters.companyId ? eq(p.companyId, filters.companyId) : undefined,
+    filters.unitId ? eq(p.unitId, filters.unitId) : undefined,
+    filters.area ? eq(p.area, filters.area) : undefined,
+    filters.responsibleId ? eq(p.responsibleId, filters.responsibleId) : undefined,
+  )!;
+}
+
+/**
+ * Visibility of a process listed in a CLOSED competência (RN-10): every rule of
+ * `processWhere` (organization, confidentiality, unit, responsible, law firm) except the
+ * soft-delete condition, so a process deleted after the close keeps counting in the closed
+ * figures. Same policy as the reports and the provision memo
+ * (`canViewScopedRecord(ctx, { ...row, deletedAt: null })`).
+ */
+export function closedCompetenceProcessWhere(ctx: AuthContext): SQL {
+  const p = legalProcesses;
+  return scopedRecordWhere(ctx, {
+    organizationId: p.organizationId,
+    unitId: p.unitId,
+    responsibleId: p.responsibleId,
+    createdById: p.createdById,
+    isConfidential: p.isConfidential,
+    lawFirmId: p.lawFirmId,
+    // `scopedRecordWhere` adds `<deletedAt> is null`: a constant null keeps every other rule and drops that one.
+    deletedAt: sql`null` as unknown as AnyPgColumn,
+  });
+}
+
+const sumText = (expr: SQL) => sql<string>`coalesce(${expr}, 0)::text`;
+const countInt = (where?: SQL) =>
+  where ? sql<number>`(count(*) filter (where ${where}))::int` : sql<number>`count(*)::int`;
+
+/**
+ * Stored figures of a closed competência, summed in SQL (RN-10: never recomputed). Same
+ * result as `bucketFromSnapshotItems` over the same items (null values counted as unknown,
+ * official and estimated amounts apart, negative guarantees ignored), plus how many items
+ * carry an exposure and a provision on each basis.
+ */
+async function closedSnapshotBucket(
+  ctx: AuthContext,
+  snapshotId: string,
+  filters: BiFilters,
+): Promise<Pick<PreviousClosing, "totals" | "exposureBasis" | "provisionBasis">> {
+  const it = portfolioSnapshotItems;
+  const p = legalProcesses;
+  const [row] = await getDb()
+    .select({
+      count: countInt(),
+      claimCents: sumText(sql`sum(${it.claimAmountCents})`),
+      claimUnknown: countInt(sql`${it.claimAmountCents} is null`),
+      liquidatedCents: sumText(sql`sum(${it.liquidatedAmountCents})`),
+      liquidatedUnknown: countInt(sql`${it.liquidatedAmountCents} is null`),
+      guaranteesCents: sumText(sql`sum(greatest(${it.guaranteesCents}, 0))`),
+      exposureCents: sumText(sql`sum(${it.exposureCents}) filter (where not ${it.exposureIsEstimate})`),
+      exposureEstimateCents: sumText(sql`sum(${it.exposureCents}) filter (where ${it.exposureIsEstimate})`),
+      exposureUnknown: countInt(sql`${it.exposureCents} is null`),
+      provisionCents: sumText(sql`sum(${it.provisionCents}) filter (where not ${it.provisionIsEstimate})`),
+      provisionEstimateCents: sumText(sql`sum(${it.provisionCents}) filter (where ${it.provisionIsEstimate})`),
+      exposureOfficial: countInt(sql`${it.exposureCents} is not null and not ${it.exposureIsEstimate}`),
+      exposureEstimate: countInt(sql`${it.exposureCents} is not null and ${it.exposureIsEstimate}`),
+      provisionOfficial: countInt(sql`${it.provisionCents} is not null and not ${it.provisionIsEstimate}`),
+      provisionEstimate: countInt(sql`${it.provisionCents} is not null and ${it.provisionIsEstimate}`),
+      provisionNone: countInt(sql`${it.provisionCents} is null`),
+    })
+    .from(it)
+    .innerJoin(p, and(eq(p.id, it.processId), eq(p.organizationId, ctx.organizationId)))
+    .where(
+      and(
+        eq(it.organizationId, ctx.organizationId),
+        eq(it.snapshotId, snapshotId),
+        closedCompetenceProcessWhere(ctx),
+        // Company and unit as stored at the close; area and responsible are not stored: current process.
+        filters.companyId ? eq(it.companyId, filters.companyId) : undefined,
+        filters.unitId ? eq(it.unitId, filters.unitId) : undefined,
+        filters.area ? eq(p.area, filters.area) : undefined,
+        filters.responsibleId ? eq(p.responsibleId, filters.responsibleId) : undefined,
+      ),
+    );
+  const n = (v: string | number | null | undefined) => (v == null ? 0 : Number(v));
+  return {
+    totals: {
+      count: n(row?.count),
+      claimCents: n(row?.claimCents),
+      claimUnknown: n(row?.claimUnknown),
+      liquidatedCents: n(row?.liquidatedCents),
+      liquidatedUnknown: n(row?.liquidatedUnknown),
+      guaranteesCents: n(row?.guaranteesCents),
+      exposureCents: n(row?.exposureCents),
+      exposureEstimateCents: n(row?.exposureEstimateCents),
+      exposureUnknown: n(row?.exposureUnknown),
+      provisionCents: n(row?.provisionCents),
+      provisionEstimateCents: n(row?.provisionEstimateCents),
+    },
+    exposureBasis: {
+      official: n(row?.exposureOfficial),
+      estimate: n(row?.exposureEstimate),
+      none: n(row?.exposureUnknown),
+    },
+    provisionBasis: {
+      official: n(row?.provisionOfficial),
+      estimate: n(row?.provisionEstimate),
+      none: n(row?.provisionNone),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -193,17 +385,8 @@ export async function getPortfolioPanel(
     return { status: "error" };
   }
 
-  // Visible processes narrowed by the filters that exposure rows do not carry (area, responsible).
-  const visible = await db
-    .select({ id: p.id, status: p.status })
-    .from(p)
-    .where(
-      and(
-        processWhere(ctx),
-        filters.area ? eq(p.area, filters.area) : undefined,
-        filters.responsibleId ? eq(p.responsibleId, filters.responsibleId) : undefined,
-      ),
-    );
+  // Visible ACTIVE processes inside every filter (area and responsible are not in the exposure rows).
+  const visible = await db.select({ id: p.id }).from(p).where(panelProcessWhere(ctx, filters));
   const visibleIds = new Set(visible.map((v) => v.id));
   const inFilters = (r: { companyId: string | null; unitId: string | null }) =>
     (!filters.companyId || r.companyId === filters.companyId) && (!filters.unitId || r.unitId === filters.unitId);
@@ -232,31 +415,35 @@ export async function getPortfolioPanel(
   const companyName = new Map(companyNames.map((c) => [c.id, c.name]));
   const unitName = new Map(unitNames.map((u) => [u.id, u.name]));
 
-  const NOT_INFORMED = "Não informado";
+  // A null key never becomes a "Não informado" category: it is a registration gap.
   const dimension = (
     key: DimensionKey,
     keyOf: (r: PortfolioRowLike) => string | null,
     label: (k: string) => string,
-    href: (k: string) => string | null,
+    href: (k: string) => string,
     limit?: number,
   ): Dimension => {
-    const ranked = rankGroups(groupRows(rows, keyOf), limit);
+    const groups = dimensionGroups(rows, keyOf, limit);
     return {
       key,
-      rows: ranked.top.map((g) => ({
+      rows: groups.top.map((g) => ({
         key: g.key,
-        label: g.key === null ? NOT_INFORMED : label(g.key),
+        label: label(g.key),
         bucket: g.bucket,
-        href: g.key === null ? null : href(g.key),
+        href: href(g.key),
+        provisionBasis: g.provisionBasis,
       })),
-      others: ranked.others,
+      others: groups.others,
+      missing: groups.missing ? { bucket: groups.missing, href: processesHref(filters, { pendencia: key }) } : null,
     };
   };
+  // Blank text counts as missing (same rule as `/processos?pendencia=`).
+  const informed = (v: string | null) => (v !== null && v.trim() !== "" ? v : null);
 
   const dimensions: Record<DimensionKey, Dimension> = {
     court: dimension(
       "court",
-      (r) => r.court || null,
+      (r) => informed(r.court),
       (k) => k,
       (k) => processesHref(filters, { tribunal: k }),
     ),
@@ -274,7 +461,7 @@ export async function getPortfolioPanel(
     ),
     city: dimension(
       "city",
-      (r) => (r.city && r.city.trim() ? r.city.trim() : null),
+      (r) => informed(r.city)?.trim() ?? null,
       (k) => k,
       (k) => processesHref(filters, { cidade: k }),
       CITY_TOP,
@@ -293,10 +480,16 @@ export async function getPortfolioPanel(
     ),
   };
 
+  const registrationGaps: RegistrationGap[] = DIMENSIONS.flatMap((k) => {
+    const missing = dimensions[k].missing;
+    return missing ? [{ field: k, count: missing.bucket.count, href: missing.href }] : [];
+  });
+
   const byClassificationMap = groupRows(rows, (r) => r.classification);
   const byClassification = [...LOSS_PROBABILITIES, "unclassified" as const].map((key) => ({
     key,
     bucket: byClassificationMap.get(key === "unclassified" ? null : key) ?? emptyBucket(),
+    provisionBasis: provisionBasisOf(rows.filter((r) => (r.classification ?? "unclassified") === key)),
   }));
 
   const top: TopExposureItem[] = rows
@@ -325,6 +518,32 @@ export async function getPortfolioPanel(
     .sort((a, b) => (b.exposureCents ?? 0) - (a.exposureCents ?? 0) || a.number.localeCompare(b.number))
     .slice(0, TOP_EXPOSURES);
 
+  // --- net exposure (P1.8): deductions by guarantee kind, aggregated in SQL -------
+  const g = processGuarantees;
+  const kindRows = await db
+    .select({
+      kind: g.kind,
+      count: sql<number>`count(*)::int`,
+      cents: sql<string>`coalesce(sum(${g.amountCents}), 0)::text`,
+    })
+    .from(g)
+    .innerJoin(p, eq(p.id, g.processId))
+    .where(
+      and(
+        // Same guarantees as the exposure rows (linked, not deleted) of the same processes with a valor apurado.
+        eq(g.organizationId, ctx.organizationId),
+        eq(g.status, "linked"),
+        isNull(g.deletedAt),
+        panelProcessWhere(ctx, filters),
+        isNotNull(p.liquidatedAmountCents),
+      ),
+    )
+    .groupBy(g.kind);
+  const netExposureData = netExposureSummary(
+    rows,
+    kindRows.map((k) => ({ kind: k.kind as GuaranteeKind, count: Number(k.count), amountCents: Number(k.cents) })),
+  );
+
   // --- previous closed month (read-only, stored figures) ------------------------
   let previous: PreviousClosing | null = null;
   const [snapshot] = await db
@@ -345,39 +564,23 @@ export async function getPortfolioPanel(
     .orderBy(desc(portfolioSnapshots.period))
     .limit(1);
   if (snapshot) {
-    const items = await db
-      .select({
-        processId: portfolioSnapshotItems.processId,
-        companyId: portfolioSnapshotItems.companyId,
-        unitId: portfolioSnapshotItems.unitId,
-        claimAmountCents: portfolioSnapshotItems.claimAmountCents,
-        liquidatedAmountCents: portfolioSnapshotItems.liquidatedAmountCents,
-        guaranteesCents: portfolioSnapshotItems.guaranteesCents,
-        exposureCents: portfolioSnapshotItems.exposureCents,
-        exposureIsEstimate: portfolioSnapshotItems.exposureIsEstimate,
-        provisionCents: portfolioSnapshotItems.provisionCents,
-        provisionIsEstimate: portfolioSnapshotItems.provisionIsEstimate,
-      })
-      .from(portfolioSnapshotItems)
-      .where(
-        and(
-          eq(portfolioSnapshotItems.organizationId, ctx.organizationId),
-          eq(portfolioSnapshotItems.snapshotId, snapshot.id),
-        ),
-      );
     previous = {
       period: snapshot.period,
       referenceDate: snapshot.referenceDate,
       closedAt: snapshot.closedAt,
-      totals: bucketFromSnapshotItems(items.filter((it) => visibleIds.has(it.processId) && inFilters(it))),
+      ...(await closedSnapshotBucket(ctx, snapshot.id, filters)),
     };
   }
 
+  const totals = bucketOf(rows);
   return {
     status: "ok",
     data: {
       activeProcesses: uniqueProcessCount(rows),
-      totals: bucketOf(rows),
+      totals,
+      netExposure: netExposureData,
+      coverage: liquidatedCoverage(totals),
+      registrationGaps,
       byClassification,
       dimensions,
       top,
@@ -393,22 +596,20 @@ export async function getPortfolioPanel(
 export async function getFollowUpPanel(ctx: AuthContext): Promise<FollowUpData> {
   assertCan(ctx, "dashboard:read");
   const db = getDb();
-  const org = await loadOrganization(ctx.organizationId);
-  const upcomingHearingDays = Math.max(1, Math.min(365, Math.floor(org.settings.alerts.upcomingHearingDays)));
 
-  const hearingsP: Promise<Section<UpcomingHearing[]>> = can(ctx, "process:read")
-    ? listUpcomingHearings(ctx, { days: upcomingHearingDays, limit: 6 }).then(
-        (data) => ({ status: "ok" as const, data }),
-        (error: unknown) => {
-          logSectionError("upcoming_hearings", error);
-          return { status: "error" as const };
-        },
-      )
-    : Promise.resolve({ status: "forbidden" as const });
-
-  const intakeP: Promise<Section<IntakeCounts>> = can(ctx, "process:read")
-    ? getIntakeCounts(ctx).then(
-        (data) => ({ status: "ok" as const, data }),
+  const intakeP: Promise<Section<IntakeFollowUp>> = can(ctx, "process:read")
+    ? getIntakeStatusCounts(ctx).then(
+        (s) => ({
+          status: "ok" as const,
+          data: {
+            received: s.received,
+            inProgress: s.assigned + s.analyzing + s.brief_ready,
+            notified: s.notified,
+            inReview: s.in_review,
+            approved: s.approved,
+            failed: s.failed,
+          },
+        }),
         (error: unknown) => {
           logSectionError("intake_counts", error);
           return { status: "error" as const };
@@ -416,6 +617,7 @@ export async function getFollowUpPanel(ctx: AuthContext): Promise<FollowUpData> 
       )
     : Promise.resolve({ status: "forbidden" as const });
 
+  // Same scope as the alerts center, the header bell and the digest: module read permission + row visibility.
   const alertsP = db
     .select({
       type: alerts.type,
@@ -423,20 +625,38 @@ export async function getFollowUpPanel(ctx: AuthContext): Promise<FollowUpData> 
       critical: sql<number>`(count(*) filter (where ${alerts.severity} = 'critical'))::int`,
     })
     .from(alerts)
-    .where(
-      and(
-        eq(alerts.organizationId, ctx.organizationId),
-        isNull(alerts.resolvedAt),
-        entityReferenceWhere(ctx, alerts.entityType, alerts.entityId),
-      ),
-    )
+    .where(and(isNull(alerts.resolvedAt), visibleAlertsWhere(ctx)))
     .groupBy(alerts.type);
 
-  const briefsP: Promise<Section<{ total: number; items: BriefAwaiting[] }>> = can(ctx, "brief:read")
+  const briefsP: Promise<Section<BriefsAwaiting>> = can(ctx, "brief:read")
     ? (async () => {
-        const awaiting = and(caseBriefWhere(ctx), inArray(caseBriefs.status, ["ready_for_review", "in_review"]));
-        const [[{ total }], items] = await Promise.all([
-          db.select({ total: sql<number>`count(*)::int` }).from(caseBriefs).where(awaiting),
+        // Only the latest generated version of a process is reviewable (same rule as the briefs queue).
+        const newer = alias(caseBriefs, "newer_brief");
+        const latest = notExists(
+          db
+            .select({ one: sql`1` })
+            .from(newer)
+            .where(
+              and(
+                eq(newer.organizationId, caseBriefs.organizationId),
+                eq(newer.processId, caseBriefs.processId),
+                gt(newer.version, caseBriefs.version),
+                isNotNull(newer.content),
+              ),
+            ),
+        );
+        const awaiting = and(caseBriefWhere(ctx), inArray(caseBriefs.status, [...REVIEW_BRIEF_STATUSES]), latest);
+        const [byStatus, items] = await Promise.all([
+          // Same join as listCaseBriefs, so each figure equals the list of its status.
+          db
+            .select({ status: caseBriefs.status, n: sql<number>`count(*)::int` })
+            .from(caseBriefs)
+            .innerJoin(
+              legalProcesses,
+              and(eq(legalProcesses.id, caseBriefs.processId), eq(legalProcesses.organizationId, ctx.organizationId)),
+            )
+            .where(awaiting)
+            .groupBy(caseBriefs.status),
           db
             .select({
               id: caseBriefs.id,
@@ -449,17 +669,20 @@ export async function getFollowUpPanel(ctx: AuthContext): Promise<FollowUpData> 
             .from(caseBriefs)
             .innerJoin(legalProcesses, and(eq(legalProcesses.id, caseBriefs.processId), processWhere(ctx)))
             .where(awaiting)
-            .orderBy(asc(sql`coalesce(${caseBriefs.generatedAt}, ${caseBriefs.createdAt})`))
+            .orderBy(asc(sql`coalesce(${caseBriefs.generatedAt}, ${caseBriefs.createdAt})`), asc(caseBriefs.id))
             .limit(5),
         ]);
-        return { status: "ok" as const, data: { total: Number(total), items } };
+        const of = (status: CaseBriefStatus) => Number(byStatus.find((r) => r.status === status)?.n ?? 0);
+        const readyForReview = of("ready_for_review");
+        const inReview = of("in_review");
+        return { status: "ok" as const, data: { total: readyForReview + inReview, readyForReview, inReview, items } };
       })().catch((error: unknown) => {
         logSectionError("briefs_awaiting", error);
         return { status: "error" as const };
       })
     : Promise.resolve({ status: "forbidden" as const });
 
-  const [hearings, intake, alertRows, briefs] = await Promise.all([hearingsP, intakeP, alertsP, briefsP]);
+  const [intake, alertRows, briefs] = await Promise.all([intakeP, alertsP, briefsP]);
 
   const counts = new Map(alertRows.map((r) => [r.type, { total: Number(r.total), critical: Number(r.critical) }]));
   const known = new Set(ALERT_GROUPS.flatMap((g) => g.types));
@@ -494,8 +717,6 @@ export async function getFollowUpPanel(ctx: AuthContext): Promise<FollowUpData> 
   }
 
   return {
-    upcomingHearingDays,
-    hearings,
     intake,
     alerts: {
       total: groups.reduce((a, g) => a + g.total, 0),

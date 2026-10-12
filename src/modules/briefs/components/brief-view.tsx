@@ -45,7 +45,7 @@ const SECTION_HINTS: Partial<Record<CaseBriefSectionKey, string>> = {
   claims: "Pedidos listados na petição inicial, com o valor atribuído a cada um.",
   amounts: "Valor da causa e valor liquidado aparecem lado a lado e nunca são somados. Ausência de valor não é zero.",
   plaintiffArguments: "Resumo dos fundamentos apresentados pelo autor.",
-  theses: "Hipóteses ilustrativas a verificar — sem jurisprudência e sem fundamento legal citado.",
+  theses: "Hipóteses ilustrativas a verificar, sem jurisprudência e sem fundamento legal citado.",
   risks: "Separados entre o que foi calculado a partir da carteira e as sugestões ilustrativas.",
   possibleDeadlines: "Somente datas escritas nos documentos. Nada é contado pelo sistema; o prazo só vale após validação humana.",
   missingDocuments: "Documentos esperados para os pedidos identificados que não estão no processo.",
@@ -191,7 +191,7 @@ export function BriefView({ briefId, processId, content, sourceLabels, abilities
             {withAmount > 0 ? (
               <p className="mt-3 flex justify-between gap-3 border-t border-border pt-3 text-sm">
                 <span className="text-muted-foreground">
-                  Soma dos pedidos com valor ({withAmount}) — calculada para conferência
+                  Soma dos pedidos com valor ({withAmount}), calculada para conferência
                 </span>
                 <span className="font-semibold tabular-nums">{formatMoneyCents(total)}</span>
               </p>
@@ -294,7 +294,7 @@ export function BriefView({ briefId, processId, content, sourceLabels, abilities
                   d.date ? (
                     <span className="text-sm font-semibold whitespace-nowrap tabular-nums">{formatDate(d.date)}</span>
                   ) : (
-                    <Badge tone="alert">Sem data — contar manualmente</Badge>
+                    <Badge tone="alert">Sem data: contar manualmente</Badge>
                   )
                 }
                 actions={

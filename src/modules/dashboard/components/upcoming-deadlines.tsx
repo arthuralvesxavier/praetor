@@ -77,6 +77,13 @@ export function UpcomingDeadlines({
                           </Link>
                           {" · "}
                         </>
+                      ) : d.restricted ? (
+                        <>
+                          <span className="italic" title="Vinculado a um registro que o seu perfil não pode ver">
+                            Registro sem acesso
+                          </span>
+                          {" · "}
+                        </>
                       ) : null}
                       Responsável: {d.responsibleName ?? "não definido"}
                     </p>

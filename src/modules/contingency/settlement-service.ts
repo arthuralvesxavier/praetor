@@ -355,7 +355,7 @@ export async function createSettlement(ctx: AuthContext, input: SettlementCreate
         entityId: p.id,
         summary:
           `Acordo (${SETTLEMENT_STATUS_LABELS[data.status].toLowerCase()}) registrado no processo ${p.number}` +
-          (data.totalAmountCents !== null ? ` — total ${formatMoneyCents(data.totalAmountCents)}` : "") +
+          (data.totalAmountCents !== null ? `, total de ${formatMoneyCents(data.totalAmountCents)}` : "") +
           (data.installmentsCount ? ` em ${data.installmentsCount} parcela(s).` : "."),
         metadata: { settlementId: created.id },
       },
@@ -440,7 +440,7 @@ export async function setSettlementStatus(ctx: AuthContext, id: string, input: S
         action: "settlement.status_change",
         entityType: "legal_process",
         entityId: s.processId,
-        summary: `Acordo do processo ${s.processNumber}: ${SETTLEMENT_STATUS_LABELS[s.status]} → ${SETTLEMENT_STATUS_LABELS[data.status]}.`,
+        summary: `Acordo do processo ${s.processNumber}: ${SETTLEMENT_STATUS_LABELS[s.status]} para ${SETTLEMENT_STATUS_LABELS[data.status]}.`,
         changes: { settlementStatus: { from: s.status, to: data.status } },
         metadata: { settlementId: s.id, date },
       },

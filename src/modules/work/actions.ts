@@ -4,17 +4,19 @@ import { revalidatePath } from "next/cache";
 import type { DeadlineStatus, TaskStatus } from "@/domain/enums";
 import { str, strOrNull } from "@/lib/form";
 import { requireActionContext } from "@/server/auth/session";
-import { AppError, toActionError, type ActionResult } from "@/server/lib/errors";
+import { AppError, toActionError, ValidationError, type ActionResult } from "@/server/lib/errors";
 import { logger } from "@/server/lib/logger";
 import type { DeadlineInput, TaskInput } from "./schemas";
 import {
   createDeadline,
   createTask,
   deleteTask,
+  searchWorkLinkProcesses,
   setDeadlineStatus,
   updateTask,
   validateDeadline,
 } from "./service";
+import type { WorkProcessHit } from "./types";
 
 /**
  * Thin server actions over ./service (which validates everything with zod and
@@ -41,6 +43,8 @@ function linkFields(fd: FormData): { processId?: string; occurrenceId?: string; 
   const link = str(fd, "link");
   if (link) {
     const [type, id] = link.split(":", 2);
+    // A link type was chosen but no record (e.g. "Processo" without picking a search result).
+    if (!id) throw new ValidationError(undefined, { link: ["Selecione o registro a vincular ou escolha “Sem vínculo”."] });
     if (type === "legal_process") return { processId: id };
     if (type === "occurrence") return { occurrenceId: id };
     if (type === "contract") return { contractId: id };
@@ -56,6 +60,16 @@ function withLinkFieldError(result: ActionResult<{ id: string }>): ActionResult<
   const linkErrors = [...(fe.processId ?? []), ...(fe.occurrenceId ?? []), ...(fe.contractId ?? [])];
   if (linkErrors.length > 0) fe.link = linkErrors;
   return { ...result, fieldErrors: fe };
+}
+
+/** Process search of the deadline/task forms (called directly by the client field; at least 2 characters). */
+export async function searchWorkLinkProcessesAction(query: string): Promise<ActionResult<WorkProcessHit[]>> {
+  try {
+    const ctx = await requireActionContext();
+    return { ok: true, data: await searchWorkLinkProcesses(ctx, query) };
+  } catch (err) {
+    return fail("searchWorkLinkProcesses", err);
+  }
 }
 
 export async function createDeadlineAction(

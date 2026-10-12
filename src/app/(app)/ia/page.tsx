@@ -76,7 +76,7 @@ export default async function AiCenterPage(props: PageProps<"/ia">) {
       <PageHeader
         title="Central de Inteligência Artificial"
         description="Análises automáticas de processos, ocorrências, contratos e documentos, sempre com fontes, limitações e validação humana."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Inteligência Artificial" }]}
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Inteligência Artificial" }]}
         meta={<AiModeBadge mode={runtime.mode} />}
       />
 
@@ -130,7 +130,7 @@ function RuntimeCard({ mode, provider, model }: { mode: "live" | "demo"; provide
           <>
             <p>
               As análises são feitas pelo modelo <strong>{model}</strong> (provedor “{provider}”), usando apenas as fontes que
-              você pode acessar, enviadas como dados — instruções contidas nos documentos são ignoradas.
+              você pode acessar, enviadas como dados. Instruções contidas nos documentos são ignoradas.
             </p>
             <p>
               Os resultados não substituem a avaliação de um advogado, não preveem resultados e exigem revisão jurídica
@@ -282,7 +282,7 @@ async function AnalysesTab({ ctx, sp }: { ctx: UserContext; sp: SearchParams }) 
                   </TableCell>
                   <TableCell>
                     <ReviewStatusBadge status={a.reviewStatus} analysisStatus={a.status} />
-                    {a.status !== "succeeded" ? <span className="text-sm text-muted-foreground">—</span> : null}
+                    {a.status !== "succeeded" ? <span className="text-sm text-muted-foreground">Não se aplica</span> : null}
                   </TableCell>
                   <TableCell className="text-sm whitespace-nowrap text-slate-700">{formatDateTime(a.createdAt)}</TableCell>
                 </TableRow>
@@ -389,9 +389,9 @@ async function RequestTab({ ctx }: { ctx: UserContext }) {
   ]);
 
   const subjectOptions: Partial<Record<RecordSubjectType, Option[]>> = {
-    legal_process: processes.map((p) => ({ value: p.id, label: truncate(`${p.number} — ${p.title}`, 120) })),
+    legal_process: processes.map((p) => ({ value: p.id, label: truncate(`${p.number} · ${p.title}`, 120) })),
     occurrence: occurrences.map((o) => ({ value: o.id, label: truncate(o.title, 120) })),
-    contract: contracts.map((c) => ({ value: c.id, label: truncate(`${c.title} — ${c.counterparty}`, 120) })),
+    contract: contracts.map((c) => ({ value: c.id, label: truncate(`${c.title} (${c.counterparty})`, 120) })),
     document: documents.items.map((d) => ({ value: d.id, label: truncate(d.title, 120) })),
   };
 

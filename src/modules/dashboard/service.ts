@@ -130,6 +130,8 @@ export type UpcomingDeadline = {
   responsibleName: string | null;
   /** Linked record (only when visible to the user). */
   linked: { type: "legal_process" | "occurrence" | "contract"; label: string; href: string } | null;
+  /** Linked to a record the user cannot see: the UI reads "Registro sem acesso" (never its title). */
+  restricted: boolean;
   href: string;
 };
 
@@ -417,6 +419,9 @@ async function loadDeadlines(ctx: AuthContext, today: string, upcomingUntil: str
       validationStatus: d.validationStatus,
       responsibleId: d.responsibleId,
       responsibleName: users.name,
+      linkedProcessId: d.processId,
+      linkedOccurrenceId: d.occurrenceId,
+      linkedContractId: d.contractId,
       processId: legalProcesses.id,
       processNumber: legalProcesses.number,
       processTitle: legalProcesses.title,
@@ -456,6 +461,7 @@ async function loadDeadlines(ctx: AuthContext, today: string, upcomingUntil: str
       responsibleId: r.responsibleId,
       responsibleName: r.responsibleName ?? null,
       linked,
+      restricted: !linked && (r.linkedProcessId !== null || r.linkedOccurrenceId !== null || r.linkedContractId !== null),
       href: entityHref({ type: "deadline", id: r.id }),
     };
   });

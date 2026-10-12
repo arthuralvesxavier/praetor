@@ -23,6 +23,7 @@ import type { AuthContext } from "@/server/auth/context";
 import { can } from "@/server/auth/permissions";
 import { requirePageContext } from "@/server/auth/session";
 import { NotFoundError } from "@/server/lib/errors";
+import { PROCESS_SECTION_IDS, processTabUrl } from "@/modules/processes/tabs";
 
 export const metadata: Metadata = { title: "Análise preliminar" };
 
@@ -43,23 +44,24 @@ export default async function CaseBriefPage(props: PageProps<"/analises-prelimin
   const content = brief.content;
 
   const canReview = can(ctx, "brief:review");
-  const reviewable = !!content && REVIEWABLE_STATUSES.includes(brief.status);
+  // A superseded version (a newer one already generated) is kept for history only.
+  const reviewable = !!content && REVIEWABLE_STATUSES.includes(brief.status) && !brief.superseded;
   const wantsEdit = flagParam(sp, "editar");
   const editing = wantsEdit && canReview && reviewable;
-  const applicable = !!content && ["ready_for_review", "in_review", "approved"].includes(brief.status);
+  const applicable = !!content && ["ready_for_review", "in_review", "approved"].includes(brief.status) && !brief.superseded;
   const canOpenDocuments = can(ctx, "document:read");
   const sourceLabels = Object.fromEntries(brief.sources.map((s) => [s.ref, s.label]));
   const basePath = `/analises-preliminares/${brief.id}`;
-  const processTab = `/processos/${brief.process.id}?aba=analise-preliminar`;
+  const processTab = processTabUrl(brief.process.id, "documentos-e-analises", PROCESS_SECTION_IDS.brief);
   const stuck = brief.status === "generating" && isStuckGenerating(brief.createdAt);
 
   return (
     <>
       <PageHeader
-        title={`Análise preliminar — ${brief.process.number}`}
+        title={`Análise preliminar do processo ${brief.process.number}`}
         description={brief.process.title}
         breadcrumbs={[
-          { label: "Dashboard", href: "/dashboard" },
+          { label: "Painel executivo", href: "/dashboard" },
           { label: "Análises preliminares", href: "/analises-preliminares" },
           { label: `${brief.process.number} · v${brief.version}` },
         ]}
@@ -72,6 +74,7 @@ export default async function CaseBriefPage(props: PageProps<"/analises-prelimin
               {brief.currentRevision > 0 ? ` · revisão ${brief.currentRevision}` : ""}
             </Badge>
             {brief.isStale ? <Badge tone="alert">Possivelmente desatualizada</Badge> : null}
+            {brief.superseded ? <Badge tone="neutral">Substituída</Badge> : null}
           </div>
         }
         actions={
@@ -113,9 +116,11 @@ export default async function CaseBriefPage(props: PageProps<"/analises-prelimin
           <StatusCallouts brief={brief} />
           {wantsEdit && !editing ? (
             <Callout tone="info" title="Edição indisponível">
-              {canReview
-                ? `Análises na situação “${CASE_BRIEF_STATUS_LABELS[brief.status]}” não podem ser editadas. Gere uma nova versão para revisar novamente.`
-                : "Seu perfil pode consultar, mas não editar análises preliminares."}
+              {!canReview
+                ? "Seu perfil pode consultar, mas não editar análises preliminares."
+                : brief.superseded
+                  ? "Esta versão foi substituída por uma mais recente e não pode mais ser editada."
+                  : `Análises na situação “${CASE_BRIEF_STATUS_LABELS[brief.status]}” não podem ser editadas. Gere uma nova versão para revisar novamente.`}
             </Callout>
           ) : null}
 
@@ -371,7 +376,7 @@ function HistoryLine({ label, who, when }: { label: string; who: string | null; 
     <li className="flex flex-col">
       <span className="font-medium">{label}</span>
       <span className="text-xs text-muted-foreground">
-        {who ?? "—"} · {formatDateTime(when)}
+        {who ?? "Não informado"} · {formatDateTime(when)}
       </span>
     </li>
   );
@@ -380,6 +385,19 @@ function HistoryLine({ label, who, when }: { label: string; who: string | null; 
 function StatusCallouts({ brief }: { brief: CaseBriefDetail }) {
   return (
     <>
+      {brief.superseded ? (
+        <Callout tone="warning" title="Versão substituída">
+          Existe uma versão mais recente desta análise preliminar. Esta versão fica apenas no histórico: não pode mais ser
+          editada, aprovada, rejeitada nem gerar prazos, tarefas ou valores.{" "}
+          {brief.latestVersion ? (
+            <Link href={`/analises-preliminares/${brief.latestVersion.id}`} className="font-medium text-primary-700 underline">
+              Revise a versão {brief.latestVersion.version}
+            </Link>
+          ) : (
+            "Revise a versão mais recente."
+          )}
+        </Callout>
+      ) : null}
       {brief.status === "failed" ? (
         <Callout tone="danger" title="Não foi possível gerar a análise">
           {brief.errorMessage ?? "Falha na geração."} Use “Gerar nova versão” para tentar novamente.
@@ -387,13 +405,13 @@ function StatusCallouts({ brief }: { brief: CaseBriefDetail }) {
       ) : null}
       {brief.status === "approved" ? (
         <Callout tone="success" title="Aprovada pelo advogado">
-          {brief.approvedByName ?? "—"}
+          {brief.approvedByName ?? "Responsável não informado"}
           {brief.approvedAt ? ` em ${formatDateTime(brief.approvedAt)}` : ""}.{brief.approvalNote ? ` Observação: ${brief.approvalNote}` : ""}
         </Callout>
       ) : null}
       {brief.status === "rejected" ? (
         <Callout tone="warning" title="Rejeitada">
-          {brief.rejectedByName ?? "—"}
+          {brief.rejectedByName ?? "Responsável não informado"}
           {brief.rejectedAt ? ` em ${formatDateTime(brief.rejectedAt)}` : ""}. Motivo: {brief.rejectionReason ?? "não informado"}
         </Callout>
       ) : null}

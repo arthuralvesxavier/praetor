@@ -77,7 +77,7 @@ export function ClassificationBadge({
 /** RN-07: every estimated amount carries this badge. */
 export function EstimateBadge({ className, label = "Estimativa" }: { className?: string; label?: string }) {
   return (
-    <Badge tone="warning" icon={<Calculator />} className={className} title="Sem valor liquidado: base = valor da causa ponderado pelo risco (RN-07)">
+    <Badge tone="warning" icon={<Calculator />} className={className} title="Sem valor liquidado: base = valor da causa ponderado pelo risco">
       {label}
     </Badge>
   );

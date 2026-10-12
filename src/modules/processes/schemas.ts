@@ -218,6 +218,14 @@ export type PortfolioView = (typeof PORTFOLIO_VIEWS)[number];
 export const LIQUIDATED_FILTERS = ["with", "without"] as const;
 export type LiquidatedFilter = (typeof LIQUIDATED_FILTERS)[number];
 
+/**
+ * Registration gaps ("pendências de cadastro", URL `pendencia=`): processes whose
+ * field is empty — null, or blank text for court and city. The dashboard keeps
+ * these processes out of its charts and links here (same rule on both sides).
+ */
+export const PROCESS_MISSING_FIELDS = ["court", "instance", "phase", "city", "company", "unit"] as const;
+export type ProcessMissingField = (typeof PROCESS_MISSING_FIELDS)[number];
+
 export const PROCESS_SORTS = [
   "updated_desc",
   "number_asc",
@@ -252,6 +260,8 @@ export const processFiltersSchema = z.object({
   claimMaxCents: z.number().int().min(0).max(MAX_CENTS).optional(),
   /** `with` = valor liquidado apurado; `without` = não apurado (null, RN-03). */
   liquidated: z.enum(LIQUIDATED_FILTERS).optional(),
+  /** Only processes whose field is empty (registration gap). */
+  missingField: z.enum(PROCESS_MISSING_FIELDS).optional(),
   needsVerification: z.boolean().optional(),
   /** Omitted = every status (callers such as the list page default to `active`). */
   portfolio: z.enum(PORTFOLIO_VIEWS).optional(),
@@ -280,7 +290,7 @@ export const reactivateProcessSchema = z.object({
 export type ReactivateProcessInput = z.input<typeof reactivateProcessSchema>;
 
 export const flagVerificationSchema = z.object({
-  note: requiredText(2000, "Descreva o que precisa ser verificado."),
+  note: requiredText(2000, "Descreva o que precisa ser conferido."),
 });
 export type FlagVerificationInput = z.input<typeof flagVerificationSchema>;
 
@@ -419,8 +429,8 @@ export const PROCESS_FIELD_LABELS: Record<string, string> = {
   state: "UF",
   phaseDetail: "detalhe da fase",
   closureReason: "motivo de saída",
-  needsVerification: "marcação para verificação",
-  verificationNote: "nota de verificação",
+  needsVerification: "marcação para conferência",
+  verificationNote: "nota de conferência",
   lastMovementAt: "última movimentação",
 };
 

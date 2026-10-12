@@ -6,6 +6,7 @@ import { int, moneyCents, str, strOrNull } from "@/lib/form";
 import { requireActionContext } from "@/server/auth/session";
 import { AppError, toActionError, type ActionResult } from "@/server/lib/errors";
 import { logger } from "@/server/lib/logger";
+import type { AssignmentEmailOutcome } from "./assignment";
 import type { RegisterIntakeInput } from "./schemas";
 import {
   assignIntakeManually,
@@ -16,6 +17,14 @@ import {
   resendIntakeEmail,
   simulateIncomingProcess,
 } from "./service";
+
+/** What the user is told about the "Novo processo atribuído" e-mail — only what really happened. */
+const ASSIGNMENT_EMAIL_NOTES: Record<AssignmentEmailOutcome, string> = {
+  sent: " E-mail simulado “Novo processo atribuído” registrado na Central de e-mails (nenhuma mensagem real foi enviada).",
+  disabled: " O aviso de atribuição por e-mail está desativado nas configurações da organização.",
+  skipped: "",
+  failed: " Não foi possível gerar o e-mail simulado de atribuição; a atribuição foi registrada.",
+};
 
 function fail(action: string, err: unknown) {
   if (!(err instanceof AppError)) logger.error("action_failed", { action, error: err });
@@ -133,12 +142,13 @@ export async function assignIntakeAction(_prev: ActionResult | null, formData: F
   const intakeId = str(formData, "intakeId") ?? "";
   try {
     const ctx = await requireActionContext();
-    const decision = await assignIntakeManually(ctx, intakeId, {
+    const result = await assignIntakeManually(ctx, intakeId, {
       userId: str(formData, "userId") ?? "",
       reason: str(formData, "reason") ?? "",
     });
     revalidateIntake(intakeId);
-    return { ok: true, message: `Responsável alterado para ${decision.userName}. O novo responsável será avisado por e-mail (simulado).` };
+    revalidatePath("/emails");
+    return { ok: true, message: `Responsável definido: ${result.userName}.${ASSIGNMENT_EMAIL_NOTES[result.assignmentEmail]}` };
   } catch (err) {
     return fail("assignIntake", err);
   }
@@ -165,7 +175,7 @@ export async function resendIntakeEmailAction(_prev: ActionResult | null, formDa
     await resendIntakeEmail(ctx, intakeId);
     revalidateIntake(intakeId);
     revalidatePath("/emails");
-    return { ok: true, message: "E-mail simulado registrado na Central de e-mails — nenhuma mensagem real foi enviada." };
+    return { ok: true, message: "E-mail simulado registrado na Central de e-mails. Nenhuma mensagem real foi enviada." };
   } catch (err) {
     return fail("resendIntakeEmail", err);
   }

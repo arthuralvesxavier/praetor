@@ -10,13 +10,13 @@
  *  RN-07  estimates (exposure/provision based on the claim value) are always
  *         flagged and kept in their own columns.
  */
-import type { MoneyBucket, SnapshotParams } from "@/domain/contingency";
+import type { AmountBasisCounts, MoneyBucket, SnapshotParams } from "@/domain/contingency";
 import type {
   ClosureReason,
   LossProbability,
   ProcessInstance,
-  ProcessPhase,
   SnapshotStatus,
+  StoredProcessPhase,
   ValuationKind,
 } from "@/domain/enums";
 
@@ -44,7 +44,7 @@ export const REPORT_TAB_LABELS: Record<ReportType, string> = {
 
 export const REPORT_TYPE_DESCRIPTIONS: Record<ReportType, string> = {
   carteira:
-    "Carteira ativa por empresa e por unidade: quantidade de processos (CNJ únicos), valor da causa e valor liquidado lado a lado, exposição oficial e estimada e provisão por classificação de risco.",
+    "Carteira ativa por empresa e por unidade: quantidade de processos (CNJ únicos), valor da causa e valor liquidado lado a lado, exposição apurada e estimada e provisão por classificação de risco.",
   exposicao:
     "Posição atual da carteira ativa por tribunal, cidade, fase e instância, comparada com o fechamento mensal anterior quando ele existe.",
   provisao:
@@ -94,6 +94,12 @@ export type BucketRow = {
   /** Distinct CNJ numbers in the group (RN-01: instances are never counted twice). */
   processCount: number;
   bucket: MoneyBucket;
+  /**
+   * How many processes have a provision on the valor apurado, on the valor da causa or none
+   * (RN-03: a zero sum of nothing calculated is never shown as R$ 0). Absent in rows built
+   * without the processes (e.g. groups that exist only in a previous competência).
+   */
+  provisionBasis?: AmountBasisCounts;
 };
 
 // ---------------------------------------------------------------------------
@@ -127,6 +133,8 @@ export type PreviousPosition = {
   exposureCents: number;
   exposureEstimateCents: number;
   exposureUnknown: number;
+  /** Processes of the previous position by exposure basis (official / estimate / none). */
+  exposureBasis?: AmountBasisCounts;
 };
 
 export type ExposureRow = BucketRow & { previous: PreviousPosition | null };
@@ -159,6 +167,15 @@ export const CLASSIFICATION_LABELS: Record<ClassificationKey, string> = {
 
 export type ProvisionAmounts = { provisionCents: number; provisionEstimateCents: number };
 
+/** Position of a classification in the previous closed competência. */
+export type ProvisionPreviousPosition = ProvisionAmounts & {
+  processCount: number;
+  /** Processes by stored provision basis (RN-03: nothing calculated there is not R$ 0). */
+  basis?: AmountBasisCounts;
+  /** Processes with a valor apurado ("Não calculada" with one, "Não apurada" without). */
+  liquidatedCount?: number;
+};
+
 export type ProvisionClassRow = {
   key: ClassificationKey;
   label: string;
@@ -166,7 +183,11 @@ export type ProvisionClassRow = {
   percentageBp: number | null;
   processCount: number;
   current: ProvisionAmounts;
-  previous: (ProvisionAmounts & { processCount: number }) | null;
+  /** Processes of the current position by provision basis (RN-03: nothing calculated is not R$ 0). */
+  currentBasis?: AmountBasisCounts;
+  /** Processes of the current position with a valor apurado ("Não calculada" with one, "Não apurada" without). */
+  currentLiquidatedCount?: number;
+  previous: ProvisionPreviousPosition | null;
 };
 
 export const MOVEMENT_KINDS = ["entered", "left", "changed", "unchanged"] as const;
@@ -194,6 +215,8 @@ export type ProvisionItem = {
   previousProvisionCents: number | null;
   previousIsEstimate: boolean;
   movement: ProvisionMovementKind | null;
+  /** The process was deleted from the system after the close; the row stays (RN-10). */
+  deletedAfterClose?: boolean;
 };
 
 export type ProvisionReport = ReportContext & {
@@ -221,7 +244,8 @@ export type AuditLetterRow = {
   court: string | null;
   courtDivision: string | null;
   instance: ProcessInstance | null;
-  phase: ProcessPhase | null;
+  /** From a closed competência it may be a phase of the previous model (RN-10): show with `processPhaseLabel`. */
+  phase: StoredProcessPhase | null;
   classification: LossProbability | null;
   percentageBp: number | null;
   claimCents: number | null;
@@ -232,6 +256,8 @@ export type AuditLetterRow = {
   provisionCents: number | null;
   provisionIsEstimate: boolean;
   caveats: string[];
+  /** Closed competência whose process was deleted afterwards: listed without a link (RN-10). */
+  deletedAfterClose?: boolean;
 };
 
 export type AuditLetterReport = ReportContext & {
@@ -261,12 +287,18 @@ export type AuditLetterReport = ReportContext & {
 // Movimentação
 // ---------------------------------------------------------------------------
 
-export const MOVEMENT_EVENT_KINDS = ["added", "closed", "value_change", "phase_change", "status_change"] as const;
+/**
+ * `index_change`: "Trocar índice" (P1.7) on an official value: a new official record with the same
+ * kind, amount, base date and instance and another correction index superseded it. Not a value
+ * change: no previous/new amount, not counted in `summary.valueChanges`.
+ */
+export const MOVEMENT_EVENT_KINDS = ["added", "closed", "value_change", "index_change", "phase_change", "status_change"] as const;
 export type MovementEventKind = (typeof MOVEMENT_EVENT_KINDS)[number];
 export const MOVEMENT_EVENT_LABELS: Record<MovementEventKind, string> = {
   added: "Entrada na carteira",
   closed: "Encerramento",
   value_change: "Alteração de valor oficial",
+  index_change: "Troca de índice de atualização",
   phase_change: "Mudança de fase",
   status_change: "Mudança de situação",
 };
@@ -295,6 +327,11 @@ export type MovementReport = ReportContext & {
     closed: number;
     closedByReason: { reason: ClosureReason | "unknown"; label: string; count: number }[];
     valueChanges: number;
+    /**
+     * Index swaps of the period (`index_change` events, not value changes). Optional while the
+     * service does not fill it: the screen then counts the listed events.
+     */
+    indexChanges?: number;
     phaseChanges: number;
     statusChanges: number;
   };

@@ -67,7 +67,7 @@ describe("admin forms", () => {
         },
       }),
     );
-    expect(email).toContain("Simulado — fixo nesta versão");
+    expect(email).toContain("Simulado (fixo nesta versão)");
     expect(email).toContain("nenhuma mensagem");
     expect(email).toContain('name="autoGenerateBrief"');
   });

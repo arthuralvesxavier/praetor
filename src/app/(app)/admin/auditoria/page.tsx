@@ -113,7 +113,7 @@ export default async function AuditPage(props: PageProps<"/admin/auditoria">) {
       <AdminNav ctx={ctx} active="auditoria" />
 
       <Callout tone="info" className="mb-4">
-        A trilha não armazena conteúdo de documentos, textos extraídos, perguntas ou respostas da IA nem senhas — apenas o
+        A trilha não armazena conteúdo de documentos, textos extraídos, perguntas ou respostas da IA nem senhas: apenas o
         registro de que a ação ocorreu e os campos alterados (textos longos aparecem resumidos).
       </Callout>
 
@@ -126,7 +126,7 @@ export default async function AuditPage(props: PageProps<"/admin/auditoria">) {
           aria-current={confidentialOnly ? "true" : undefined}
         >
           <EyeOff aria-hidden="true" />
-          {confidentialOnly ? "Mostrando acessos a processos sigilosos — remover filtro" : "Acessos a processos sigilosos"}
+          {confidentialOnly ? "Mostrando acessos a processos sigilosos (remover filtro)" : "Acessos a processos sigilosos"}
         </ButtonLink>
       </div>
 
@@ -214,7 +214,7 @@ export default async function AuditPage(props: PageProps<"/admin/auditoria">) {
                             </details>
                           ) : null}
                         </TableCell>
-                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{entry.ipAddress ?? "—"}</TableCell>
+                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{entry.ipAddress ?? "Não informado"}</TableCell>
                       </TableRow>
                     );
                   })

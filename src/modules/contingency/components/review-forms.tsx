@@ -11,12 +11,32 @@ import { Input } from "@/components/ui/input";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { CORRECTION_INDEX_LABELS, type CorrectionIndex } from "@/domain/enums";
 import { fieldError } from "@/lib/form";
 import { cn } from "@/lib/utils";
+import { ValuationUpdatedValue } from "@/modules/indices/components/valuation-values";
+import type { ValuationUpdate } from "@/modules/indices/types";
 import { bulkApproveValuationsAction, reviewValuationAction } from "../actions";
 
-/** Approve / correct (inline amount) / reject one proposed valuation (RN-11). */
-export function ReviewActions({ id, amountInput }: { id: string; amountInput: string }) {
+/** "IPCA-E", "Sem atualização" or "sem índice informado" (P1.7). */
+function correctionIndexText(index: CorrectionIndex | null): string {
+  return index ? CORRECTION_INDEX_LABELS[index] : "sem índice informado";
+}
+
+/**
+ * Approve / correct (inline amount) / reject one proposed valuation (RN-11).
+ * `correctionIndex` (P1.7): the index shown to the reviewer; it is sent with the
+ * decision and the service refuses an approval or correction if it changed since.
+ */
+export function ReviewActions({
+  id,
+  amountInput,
+  correctionIndex,
+}: {
+  id: string;
+  amountInput: string;
+  correctionIndex?: CorrectionIndex | null;
+}) {
   const [mode, setMode] = useState<"approve" | "correct" | "reject">("approve");
   const [state, action] = useActionState(reviewValuationAction, null);
   return (
@@ -38,14 +58,23 @@ export function ReviewActions({ id, amountInput }: { id: string; amountInput: st
       <form action={action} className="space-y-3 rounded-md border border-border bg-surface-muted p-3" key={mode}>
         <input type="hidden" name="id" value={id} />
         <input type="hidden" name="decision" value={mode} />
+        {correctionIndex !== undefined ? (
+          <input type="hidden" name="expectedCorrectionIndex" value={correctionIndex ?? ""} />
+        ) : null}
         <FormMessage state={state} />
+        {correctionIndex !== undefined && mode !== "reject" ? (
+          <p className="text-sm text-slate-700">
+            Índice de atualização: <strong>{correctionIndexText(correctionIndex)}</strong>. O valor fica oficial com este
+            índice; depois, somente quem confere valores troca o índice, com um novo registro de mesmo valor e data-base.
+          </p>
+        ) : null}
         {mode === "correct" ? (
           <FormField
             label="Valor corrigido (R$)"
             htmlFor={`corrected-${id}`}
             required
             error={fieldError(state, "correctedAmountCents")}
-            hint="O valor proposto fica registrado como rejeitado e um novo valor oficial é criado (append-only)."
+            hint="O valor proposto fica registrado como rejeitado e um novo valor oficial é criado; nenhum registro anterior é apagado ou alterado."
           >
             <Input name="correctedAmount" inputMode="decimal" defaultValue={amountInput} autoFocus required />
           </FormField>
@@ -86,9 +115,13 @@ export type QueueRow = {
   confidence: number | null;
   bulkEligible: boolean;
   documentLabel: string | null;
+  /** P1.7: index of the proposal (null = sem índice informado), pinned on bulk approval. */
+  correctionIndex: CorrectionIndex | null;
+  /** P1.7: updated value computed on read (`computeValuationUpdates`); undefined = not calculated. */
+  update?: ValuationUpdate;
 };
 
-/** Queue table with bulk approval of high-confidence items (RN-11). */
+/** Queue table with bulk approval of high-confidence items (RN-11); simulated extractions are never bulk-eligible. */
 export function ReviewQueueTable({ rows, canApprove, threshold }: { rows: QueueRow[]; canApprove: boolean; threshold: number }) {
   const [state, action] = useActionState(bulkApproveValuationsAction, null);
   const eligible = rows.filter((r) => r.bulkEligible).map((r) => r.id);
@@ -115,7 +148,10 @@ export function ReviewQueueTable({ rows, canApprove, threshold }: { rows: QueueR
             <CheckCheck aria-hidden="true" />
             Aprovar selecionados ({effective.length})
           </SubmitButton>
-          <span className="text-xs text-muted-foreground">Conferência em lote só para confiança ≥ {threshold}%.</span>
+          <span className="text-xs text-muted-foreground">
+            Conferência em lote só para confiança ≥ {threshold}%
+            {rows.some((r) => r.isSimulation) ? "; extrações simuladas nunca entram no lote: confira cada uma no documento." : "."}
+          </span>
         </div>
       ) : null}
       {state ? <FormMessage state={state} className="mx-5" /> : null}
@@ -130,6 +166,7 @@ export function ReviewQueueTable({ rows, canApprove, threshold }: { rows: QueueR
             <TableHead>Processo</TableHead>
             <TableHead>Tipo</TableHead>
             <TableHead className="text-right">Valor proposto</TableHead>
+            <TableHead className="text-right">Índice e valor atualizado</TableHead>
             <TableHead>Origem</TableHead>
             <TableHead className="text-right">Confiança</TableHead>
             <TableHead>
@@ -139,24 +176,30 @@ export function ReviewQueueTable({ rows, canApprove, threshold }: { rows: QueueR
         </TableHeader>
         <TableBody>
           {rows.length === 0 ? (
-            <TableEmpty colSpan={canApprove ? 7 : 6} message="Nenhum valor aguardando conferência." description="Valores propostos por planilha, documento ou lançamento de advogado aparecerão aqui." />
+            <TableEmpty colSpan={canApprove ? 8 : 7} message="Nenhum valor aguardando conferência." description="Valores propostos por planilha, documento ou lançamento de advogado aparecerão aqui." />
           ) : (
             rows.map((r) => (
               <TableRow key={r.id} className={cn(r.selected && "bg-primary-50/60")}>
                 {canApprove ? (
                   <TableCell>
                     {r.bulkEligible ? (
-                      <input
-                        type="checkbox"
-                        name="ids"
-                        value={r.id}
-                        checked={selected.includes(r.id)}
-                        onChange={() => toggle(r.id)}
-                        aria-label={`Selecionar ${r.kindLabel} de ${r.processNumber} para aprovação em lote`}
-                        className="size-4 cursor-pointer rounded border-border-strong accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                      />
+                      <>
+                        <input
+                          type="checkbox"
+                          name="ids"
+                          value={r.id}
+                          checked={selected.includes(r.id)}
+                          onChange={() => toggle(r.id)}
+                          aria-label={`Selecionar ${r.kindLabel} de ${r.processNumber} para aprovação em lote`}
+                          className="size-4 cursor-pointer rounded border-border-strong accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                        />
+                        {/* P1.7: the index shown in this row; a row whose index changed since is refused. */}
+                        <input type="hidden" name={`expectedCorrectionIndex:${r.id}`} value={r.correctionIndex ?? ""} />
+                      </>
                     ) : (
-                      <span className="sr-only">Conferência individual</span>
+                      <span className="sr-only">
+                        {r.isSimulation ? "Conferência individual: extração simulada" : "Conferência individual"}
+                      </span>
                     )}
                   </TableCell>
                 ) : null}
@@ -174,6 +217,10 @@ export function ReviewQueueTable({ rows, canApprove, threshold }: { rows: QueueR
                   {r.amount}
                   {r.currentOfficial ? <span className="block text-xs text-muted-foreground">oficial: {r.currentOfficial}</span> : null}
                 </TableCell>
+                <TableCell className="min-w-44 text-right">
+                  <span className="block text-xs font-medium text-slate-700">{`Índice: ${correctionIndexText(r.correctionIndex)}`}</span>
+                  <ValuationUpdatedValue update={r.update} compact />
+                </TableCell>
                 <TableCell className="min-w-40 text-sm">
                   {r.isSimulation ? <Badge tone="warning">{r.sourceLabel}</Badge> : r.sourceLabel}
                   {r.documentLabel ? <span className="block text-xs text-muted-foreground">{r.documentLabel}</span> : null}
@@ -183,7 +230,10 @@ export function ReviewQueueTable({ rows, canApprove, threshold }: { rows: QueueR
                     <span className="text-xs text-muted-foreground">não informada</span>
                   ) : (
                     <span className={cn(r.bulkEligible ? "text-emerald-800" : "text-amber-800")}>
-                      {r.confidence}%<span className="block text-xs">{r.bulkEligible ? "alta" : "baixa"}</span>
+                      {r.confidence}%
+                      <span className="block text-xs">
+                        {r.isSimulation ? "simulada · individual" : r.bulkEligible ? "alta" : "baixa"}
+                      </span>
                     </span>
                   )}
                 </TableCell>

@@ -1,12 +1,13 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import type { JobType } from "@/domain/enums";
+import { BI_REFRESH_TRIGGERS, type JobType } from "@/domain/enums";
 import { getDb } from "@/server/db/client";
 import { documentVersions } from "@/server/db/schema";
 import { logger } from "@/server/lib/logger";
 import { onDocumentVersionTextReady, runAnalysisJob } from "@/modules/analyses/service";
 import { onDocumentTextReadyForBriefs, runCaseBriefJob } from "@/modules/briefs/service";
 import { processIntakeJob } from "@/modules/intake/service";
+import { courtSyncJobPayloadSchema } from "@/modules/court-sync/schemas";
 import type { JobRow } from "./queue";
 import { runRoutine } from "./routines";
 
@@ -31,6 +32,12 @@ const extractPayload = z.object({ versionId: z.uuid() });
 const routinePayload = z.object({ routineId: z.uuid() });
 const intakePayload = z.object({ intakeId: z.uuid() });
 const briefPayload = z.object({ briefId: z.uuid() });
+const importDistributePayload = z.object({ batchId: z.guid() });
+const biRefreshPayload = z.object({
+  trigger: z.enum(BI_REFRESH_TRIGGERS),
+  watermark: z.iso.datetime({ offset: true }).nullish(),
+  requestedById: z.guid().nullish(),
+});
 
 export const JOB_HANDLERS: Record<JobType, JobHandler> = {
   "analysis.run": async (job) => {
@@ -82,5 +89,27 @@ export const JOB_HANDLERS: Record<JobType, JobHandler> = {
     const p = briefPayload.safeParse(job.payload);
     if (!p.success) throw new InvalidJobPayloadError(job.type);
     await runCaseBriefJob(p.data.briefId, { attempt: job.attempts, maxAttempts: job.maxAttempts });
+  },
+
+  "court_sync.run": async (job) => {
+    const p = courtSyncJobPayloadSchema.safeParse(job.payload);
+    if (!p.success || !job.organizationId) throw new InvalidJobPayloadError(job.type);
+    const { runCourtSyncJob } = await import("@/modules/court-sync/service");
+    await runCourtSyncJob(job.organizationId, p.data);
+  },
+
+  "bi.refresh": async (job) => {
+    const p = biRefreshPayload.safeParse(job.payload);
+    if (!p.success || !job.organizationId) throw new InvalidJobPayloadError(job.type);
+    const { runBiRefreshJob } = await import("@/modules/bi/refresh");
+    await runBiRefreshJob(job.organizationId, p.data);
+  },
+
+  // Post-import distribution (chunked; a retry resumes from the last chunk recorded).
+  "import.distribute": async (job) => {
+    const p = importDistributePayload.safeParse(job.payload);
+    if (!p.success || !job.organizationId) throw new InvalidJobPayloadError(job.type);
+    const { runImportDistributionJob } = await import("@/modules/imports/service");
+    await runImportDistributionJob(job.organizationId, p.data.batchId);
   },
 };

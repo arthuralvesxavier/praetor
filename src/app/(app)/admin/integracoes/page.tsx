@@ -1,4 +1,4 @@
-import { Activity, Cable, Clock, FileSpreadsheet, FileSearch, Mail } from "lucide-react";
+import { Activity, Cable, ChartPie, Clock, FileSpreadsheet, FileSearch, KeyRound, Landmark, Mail } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -25,6 +25,8 @@ import { processQueueNowAction } from "@/modules/admin/actions";
 import { AdminNav } from "@/modules/admin/components/admin-nav";
 import { ActionButtonForm } from "@/modules/admin/components/form-utils";
 import { getIntegrationsOverview, type IntegrationStatus } from "@/modules/admin/integrations";
+import { describeDataJudIntegration } from "@/modules/court-sync/service";
+import { IndexSeriesCard } from "@/modules/indices/components/index-series-card";
 import { can } from "@/server/auth/permissions";
 import { requirePageContext } from "@/server/auth/session";
 
@@ -44,6 +46,8 @@ const JOB_TYPE_LABELS: Record<string, string> = {
   "routine.run": "Execução de rotina",
   "intake.process": "Processamento de entrada de processo",
   "case_brief.generate": "Geração de análise preliminar (simulada)",
+  "bi.refresh": "Atualização dos painéis Power BI",
+  "court_sync.run": "Consulta ao DataJud (CNJ)",
 };
 
 const JOB_STATUS_LABELS: Record<JobStatus, string> = {
@@ -71,7 +75,24 @@ function formatAge(minutes: number): string {
 
 export default async function IntegrationsPage() {
   const ctx = await requirePageContext("admin:organization");
-  const data = await getIntegrationsOverview(ctx);
+  const overview = await getIntegrationsOverview(ctx);
+  // DataJud: real status from the court-sync module (replaces the static "não integrado").
+  const datajud = await describeDataJudIntegration(ctx);
+  // P1.7: collection of the correction index series (resolved here, like the other data of the page).
+  const indexSeriesCard = await IndexSeriesCard({ ctx });
+  const data = {
+    ...overview,
+    integrations: overview.integrations.map((i) =>
+      i.key === "datajud"
+        ? {
+            ...i,
+            status: (datajud.operational ? "operational" : "not_integrated") as IntegrationStatus,
+            statusText: datajud.statusText,
+            detail: datajud.detail,
+          }
+        : i,
+    ),
+  };
   const q = data.queue;
   const groups = [...new Set(data.integrations.map((i) => i.group))];
   const problems = q.byStatus.dead + q.byStatus.failed;
@@ -95,10 +116,79 @@ export default async function IntegrationsPage() {
       <AdminNav ctx={ctx} active="integracoes" />
 
       <div className="flex flex-col gap-8">
-        <Callout tone="warning" title="Sem integração com tribunais nesta versão">
-          A carteira é alimentada por cadastro manual e importação de planilhas. Nenhum dado é coletado automaticamente de
-          tribunais, diários oficiais ou do CNJ, e nenhuma movimentação é inventada pelo sistema.
-        </Callout>
+        {datajud.operational ? (
+          <Callout tone="info" title="Coleta automática: somente o DataJud (CNJ)">
+            A carteira é alimentada por cadastro manual, importação de planilhas, API de entrada e pela consulta periódica à API
+            pública do DataJud (classe, órgão, assuntos e movimentações). Diários oficiais, MNI e consultas aos sites dos
+            tribunais não são integrados, e nenhuma movimentação é inventada pelo sistema.
+          </Callout>
+        ) : (
+          <Callout tone="warning" title="Sem coleta automática nos tribunais no momento">
+            A carteira é alimentada por cadastro manual, importação de planilhas e API de entrada. {datajud.statusText}: nenhum
+            dado é coletado do CNJ ou dos tribunais, e nenhuma movimentação é inventada pelo sistema.
+          </Callout>
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <Card>
+            <CardHeader
+              actions={
+                <ButtonLink href="/admin/integracoes/datajud" variant="outline" size="sm">
+                  Abrir
+                </ButtonLink>
+              }
+            >
+              <CardTitle className="flex items-center gap-2">
+                <Landmark aria-hidden="true" className="size-4 text-muted-foreground" />
+                DataJud (CNJ): saúde da coleta
+              </CardTitle>
+              <CardDescription>
+                {datajud.statusText}. Por tribunal: última execução, encontrados, falhas, processos aguardando consulta e
+                parâmetros.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader
+              actions={
+                <ButtonLink href="/admin/integracoes/api" variant="outline" size="sm">
+                  Abrir
+                </ButtonLink>
+              }
+            >
+              <CardTitle className="flex items-center gap-2">
+                <KeyRound aria-hidden="true" className="size-4 text-muted-foreground" />
+                API de entrada de processos
+              </CardTitle>
+              <CardDescription>
+                Chaves para sistemas externos enviarem processos novos, com registro das últimas requisições.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        </div>
+
+        {/* P1.7: correction index series collected from the Banco Central (SGS). */}
+        {indexSeriesCard}
+
+        {/* Power BI */}
+        <Card>
+          <CardHeader
+            actions={
+              <ButtonLink href="/admin/integracoes/power-bi" variant="outline" size="sm">
+                Configurar Power BI
+              </ButtonLink>
+            }
+          >
+            <CardTitle className="flex items-center gap-2">
+              <ChartPie aria-hidden="true" className="size-4 text-muted-foreground" />
+              Painéis Power BI
+            </CardTitle>
+            <CardDescription>
+              Credenciais, workspace, relatórios, papel de segurança (RLS) e histórico das atualizações automáticas dos
+              painéis exibidos em Painéis Power BI.
+            </CardDescription>
+          </CardHeader>
+        </Card>
 
         {/* Integrations */}
         <section aria-labelledby="integracoes-titulo">
@@ -174,8 +264,8 @@ export default async function IntegrationsPage() {
             />
           </div>
 
-          <div className="grid gap-6 xl:grid-cols-2">
-            <Card className="pb-0">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <Card className="min-w-0 pb-0">
               <CardHeader>
                 <CardTitle>Tarefas por tipo</CardTitle>
               </CardHeader>
@@ -214,7 +304,7 @@ export default async function IntegrationsPage() {
               </CardContent>
             </Card>
 
-            <Card className="pb-0">
+            <Card className="min-w-0 pb-0">
               <CardHeader>
                 <CardTitle>Falhas recentes</CardTitle>
                 <CardDescription>
@@ -252,7 +342,7 @@ export default async function IntegrationsPage() {
                           <TableCell className="text-right tabular-nums">
                             {formatNumber(j.attempts)}/{formatNumber(j.maxAttempts)}
                           </TableCell>
-                          <TableCell className="min-w-48 text-xs text-slate-700">{j.lastError ?? "—"}</TableCell>
+                          <TableCell className="min-w-48 text-xs text-slate-700">{j.lastError ?? <span className="text-muted-foreground">Nenhum</span>}</TableCell>
                         </TableRow>
                       ))
                     )}
@@ -308,7 +398,7 @@ export default async function IntegrationsPage() {
                         {r.lastRunAt ? formatDateTime(r.lastRunAt) : <span className="text-muted-foreground">Nunca</span>}
                       </TableCell>
                       <TableCell className="min-w-56 text-sm">
-                        {r.lastStatus ?? <span className="text-muted-foreground">—</span>}
+                        {r.lastStatus ?? <span className="text-muted-foreground">Sem resultado</span>}
                         {r.lastError ? <span className="mt-1 block text-xs text-red-700">Erro: {r.lastError}</span> : null}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
@@ -322,9 +412,9 @@ export default async function IntegrationsPage() {
           </Card>
         </section>
 
-        <div className="grid gap-6 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
           {/* Import batches */}
-          <Card className="pb-0 xl:col-span-2">
+          <Card className="min-w-0 pb-0 xl:col-span-2">
             <CardHeader
               actions={
                 canImports ? (
@@ -371,12 +461,12 @@ export default async function IntegrationsPage() {
                         <TableCell className="whitespace-nowrap">
                           <StatusBadge label={IMPORT_BATCH_STATUS_LABELS[b.status] ?? b.status} tone={IMPORT_TONES[b.status] ?? "neutral"} />
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">{b.stats ? formatNumber(b.stats.rowsRead) : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums">{b.stats ? formatNumber(b.stats.rowsRead) : <span className="text-muted-foreground">Sem dados</span>}</TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {b.stats ? formatNumber(b.stats.processesDetected) : "—"}
+                          {b.stats ? formatNumber(b.stats.processesDetected) : <span className="text-muted-foreground">Sem dados</span>}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">{b.stats ? formatNumber(b.stats.errors) : "—"}</TableCell>
-                        <TableCell className="text-right tabular-nums">{b.stats ? formatNumber(b.stats.divergences) : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums">{b.stats ? formatNumber(b.stats.errors) : <span className="text-muted-foreground">Sem dados</span>}</TableCell>
+                        <TableCell className="text-right tabular-nums">{b.stats ? formatNumber(b.stats.divergences) : <span className="text-muted-foreground">Sem dados</span>}</TableCell>
                       </TableRow>
                     ))
                   )}
@@ -385,7 +475,7 @@ export default async function IntegrationsPage() {
             </CardContent>
           </Card>
 
-          <div className="flex flex-col gap-6">
+          <div className="flex min-w-0 flex-col gap-6">
             {/* Case briefs */}
             <Card>
               <CardHeader
@@ -428,10 +518,10 @@ export default async function IntegrationsPage() {
               >
                 <CardTitle className="flex items-center gap-2">
                   <Mail aria-hidden="true" className="size-4 text-muted-foreground" />
-                  E-mails simulados — últimos 7 dias
+                  E-mails simulados nos últimos 7 dias
                 </CardTitle>
                 <CardDescription>
-                  Envio simulado — nenhuma mensagem foi enviada. {formatNumber(data.emails.last7Days)} gerados
+                  Envio simulado: nenhuma mensagem foi enviada. {formatNumber(data.emails.last7Days)} gerados
                   {data.emails.failedLast7Days > 0 ? `, ${formatNumber(data.emails.failedLast7Days)} com falha` : ""}.
                 </CardDescription>
               </CardHeader>

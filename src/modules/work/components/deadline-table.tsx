@@ -21,7 +21,7 @@ export function DeadlineStatusActions({ item, size = "sm" }: { item: DeadlineLis
           triggerVariant="outline"
           triggerSize={size}
           title="Marcar prazo como cumprido?"
-          description={`"${item.title}" — vencimento em ${formatDate(item.dueDate)}.`}
+          description={`"${item.title}", com vencimento em ${formatDate(item.dueDate)}.`}
           confirmLabel="Marcar como cumprido"
         />
         <ConfirmDialog

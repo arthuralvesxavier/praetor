@@ -7,11 +7,11 @@ import type { EmailStatus } from "@/domain/enums";
 import type { Tone } from "@/lib/tones";
 
 /** Mandatory banner of every simulated e-mail screen (MODULE_CONTRACTS → Simulation labeling). */
-export const SIMULATED_EMAIL_BANNER = "Envio simulado — nenhuma mensagem foi enviada";
+export const SIMULATED_EMAIL_BANNER = "Envio simulado: nenhuma mensagem foi enviada";
 
 /** Header callout of the Central de e-mails. */
 export const EMAIL_CENTER_NOTICE =
-  "Central de e-mails simulados — nenhuma mensagem é entregue; os envios ficam registrados aqui para demonstração";
+  "Central de e-mails simulados: nenhuma mensagem é entregue; os envios ficam registrados aqui para demonstração";
 
 /** Short status label for tables and badges (the long one is EMAIL_STATUS_LABELS). */
 export const EMAIL_STATUS_SHORT_LABELS: Record<EmailStatus, string> = {

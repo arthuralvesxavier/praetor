@@ -1,5 +1,5 @@
-import { and, asc, count, desc, eq, gte, ilike, inArray, lt, ne, or, sql, type SQL } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
+import { and, asc, count, desc, eq, gte, ilike, inArray, lt, ne, or, sql, type SQL, type SQLWrapper } from "drizzle-orm";
+import { alias, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import type { EntityRef, Page, Paginated } from "@/domain/entities";
 import { normalizePage } from "@/domain/entities";
@@ -13,7 +13,9 @@ import {
   documentWhere,
   occurrenceWhere,
   processWhere,
+  seesConfidential,
   taskWhere,
+  userDirectoryWhere,
 } from "@/server/auth/access";
 import { hashPassword, passwordPolicyError } from "@/server/auth/password";
 import { assertCan, can, type Permission } from "@/server/auth/permissions";
@@ -21,15 +23,24 @@ import { getDb, type DbOrTx } from "@/server/db/client";
 import {
   aiAnalyses,
   auditLogs,
+  caseBriefs,
+  caseIntakes,
   companies,
   contracts,
   deadlines,
   documents,
+  emailMessages,
+  hearings,
   lawFirms,
   legalProcesses,
   occurrences,
   organizations,
+  portfolioSnapshotItems,
+  processGuarantees,
+  processRiskAssessments,
+  processValuations,
   scheduledRoutines,
+  settlements,
   tasks,
   teamMembers,
   teams,
@@ -179,14 +190,18 @@ async function assertUsersInOrg(
 // Shared lookups (contract)
 // ---------------------------------------------------------------------------
 
-/** Active users of the organization (for "responsável" selects and filters). */
+/**
+ * Active users of the organization (for "responsável" selects and filters).
+ * External counsel only receives the users of their own law firm and the
+ * responsible people of the processes they see (`userDirectoryWhere`, rule 10).
+ */
 export async function listUserOptions(
   ctx: AuthContext,
 ): Promise<{ id: string; name: string; role: Role; unitId: string | null }[]> {
   return getDb()
     .select({ id: users.id, name: users.name, role: users.role, unitId: users.unitId })
     .from(users)
-    .where(and(eq(users.organizationId, ctx.organizationId), eq(users.isActive, true)))
+    .where(and(eq(users.organizationId, ctx.organizationId), eq(users.isActive, true), userDirectoryWhere(ctx)))
     .orderBy(asc(users.name));
 }
 
@@ -1114,6 +1129,9 @@ export async function updateOrganizationSettings(ctx: AuthContext, input: Organi
       contingency: current.contingency,
       email: current.email,
       intake: current.intake,
+      // Not edited by this form: keep what is stored (never reset to defaults).
+      integrations: current.integrations,
+      legalReports: current.legalReports,
     };
     const changes = diffChanges(flattenSettings(org.name, current), flattenSettings(data.name, next));
     if (!changes) return;
@@ -1178,6 +1196,8 @@ export async function updateContingencySettings(
       confidenceThreshold: data.confidenceThreshold,
       idleGuaranteeDays: data.idleGuaranteeDays,
       rulesVersion: percentagesChanged ? before.rulesVersion + 1 : before.rulesVersion,
+      // Not edited by this form (P1.7, @/modules/indices): keep the stored choice.
+      defaultCorrectionIndex: before.defaultCorrectionIndex,
     };
     const changes = diffChanges(flattenContingency(before), flattenContingency(next));
     if (!changes) return { rulesVersion: before.rulesVersion, rulesVersionChanged: false };
@@ -1192,7 +1212,7 @@ export async function updateContingencySettings(
         entityType: "organization",
         entityId: ctx.organizationId,
         summary: percentagesChanged
-          ? `Parâmetros de contingência alterados — percentuais de risco na versão ${next.rulesVersion} das regras`
+          ? `Parâmetros de contingência alterados: percentuais de risco na versão ${next.rulesVersion} das regras`
           : "Parâmetros de contingência alterados",
         changes,
         metadata: {
@@ -1429,6 +1449,11 @@ export type AuditLogItem = {
   ipAddress: string | null;
   actorId: string | null;
   actorName: string | null;
+  /**
+   * True when the entry is about a confidential record the reader cannot see:
+   * `summary` is then AUDIT_REDACTED_SUMMARY and `changes` is null.
+   */
+  redacted: boolean;
   /** Names of users/units/teams whose ids appear in `changes`. */
   refNames: Record<string, string>;
 };
@@ -1497,7 +1522,129 @@ function auditWhere(ctx: AuthContext, f: z.output<typeof auditFiltersSchema>): S
   return and(...conds);
 }
 
-function auditSelect() {
+/** Snapshot audit actions whose summary carries the org-wide provision totals. */
+const SNAPSHOT_TOTALS_ACTIONS = ["snapshot.generate", "snapshot.close"] as const;
+
+/** Summary shown instead of the real one for entries about confidential records. */
+export const AUDIT_REDACTED_SUMMARY =
+  "Registro sigiloso: resumo e campos alterados ocultos para o seu perfil (visíveis só para administradores e gestores jurídicos).";
+
+/**
+ * True when an audit entry is about a record hidden by confidentiality:
+ * a confidential process, occurrence or contract (deleted ones included, so
+ * deletion entries are covered too); a process-owned record (hearing,
+ * settlement, valuation, guarantee, risk assessment, preliminary analysis,
+ * intake) or simulated e-mail of a confidential process — child actions
+ * recorded as `legal_process` carry the process id and are covered by the
+ * first branch —; a task, deadline or document linked to a confidential
+ * record; a document that is not `internal` or holds health data (rules 7
+ * and 12); an AI analysis whose subject is one of those; for readers without
+ * `snapshot:close`, the generation and the close of a monthly competência that
+ * includes a confidential process (their summaries carry org-wide totals,
+ * confidential amounts included).
+ */
+function confidentialAuditEntry(ctx: AuthContext): SQL {
+  const db = getDb();
+  const org = ctx.organizationId;
+  const l = auditLogs;
+  const confProcesses = db
+    .select({ id: legalProcesses.id })
+    .from(legalProcesses)
+    .where(and(eq(legalProcesses.organizationId, org), eq(legalProcesses.isConfidential, true)));
+  const confOccurrences = db
+    .select({ id: occurrences.id })
+    .from(occurrences)
+    .where(and(eq(occurrences.organizationId, org), eq(occurrences.isConfidential, true)));
+  const confContracts = db
+    .select({ id: contracts.id })
+    .from(contracts)
+    .where(and(eq(contracts.organizationId, org), eq(contracts.isConfidential, true)));
+  const linkedToConfidential = (t: { processId: AnyPgColumn; occurrenceId: AnyPgColumn; contractId: AnyPgColumn }) =>
+    or(
+      inArray(t.processId, confProcesses),
+      inArray(t.occurrenceId, confOccurrences),
+      inArray(t.contractId, confContracts),
+    );
+  type OrgColumns = { id: AnyPgColumn; organizationId: AnyPgColumn };
+  const hiddenDocuments = db
+    .select({ id: documents.id })
+    .from(documents)
+    .where(
+      and(
+        eq(documents.organizationId, org),
+        or(
+          linkedToConfidential(documents),
+          ne(documents.confidentiality, "internal"),
+          eq(documents.category, "sensitive_health"),
+        ),
+      ),
+    );
+  const processChild = (table: PgTable, t: OrgColumns & { processId: AnyPgColumn }) =>
+    db.select({ id: t.id }).from(table).where(and(eq(t.organizationId, org), inArray(t.processId, confProcesses)));
+  const workItem = (table: PgTable, t: OrgColumns & Parameters<typeof linkedToConfidential>[0]) =>
+    db.select({ id: t.id }).from(table).where(and(eq(t.organizationId, org), linkedToConfidential(t)));
+  const a = aiAnalyses;
+  const hiddenAnalyses = db
+    .select({ id: a.id })
+    .from(a)
+    .where(
+      and(
+        eq(a.organizationId, org),
+        or(
+          and(eq(a.subjectType, "legal_process"), inArray(a.subjectId, confProcesses)),
+          and(eq(a.subjectType, "occurrence"), inArray(a.subjectId, confOccurrences)),
+          and(eq(a.subjectType, "contract"), inArray(a.subjectId, confContracts)),
+          and(eq(a.subjectType, "document"), inArray(a.subjectId, hiddenDocuments)),
+        ),
+      ),
+    );
+  const hiddenEmails = db
+    .select({ id: emailMessages.id })
+    .from(emailMessages)
+    .where(and(eq(emailMessages.organizationId, org), inArray(emailMessages.processId, confProcesses)));
+  // Snapshot items keep the confidentiality of the process at the time of the calculation;
+  // a process made confidential afterwards also hides the totals that include it.
+  const confidentialSnapshots = db
+    .selectDistinct({ id: portfolioSnapshotItems.snapshotId })
+    .from(portfolioSnapshotItems)
+    .where(
+      and(
+        eq(portfolioSnapshotItems.organizationId, org),
+        or(eq(portfolioSnapshotItems.isConfidential, true), inArray(portfolioSnapshotItems.processId, confProcesses)),
+      ),
+    );
+  const snapshotTotals = can(ctx, "snapshot:close")
+    ? undefined
+    : and(
+        eq(l.entityType, "snapshot"),
+        inArray(l.action, [...SNAPSHOT_TOTALS_ACTIONS]),
+        inArray(l.entityId, confidentialSnapshots),
+      );
+
+  const ref = (type: EntityType, ids: SQLWrapper) => and(eq(l.entityType, type), inArray(l.entityId, ids));
+  const hidden = or(
+    ref("legal_process", confProcesses),
+    ref("occurrence", confOccurrences),
+    ref("contract", confContracts),
+    ref("document", hiddenDocuments),
+    ref("task", workItem(tasks, tasks)),
+    ref("deadline", workItem(deadlines, deadlines)),
+    ref("analysis", hiddenAnalyses),
+    ref("hearing", processChild(hearings, hearings)),
+    ref("settlement", processChild(settlements, settlements)),
+    ref("valuation", processChild(processValuations, processValuations)),
+    ref("guarantee", processChild(processGuarantees, processGuarantees)),
+    ref("risk_assessment", processChild(processRiskAssessments, processRiskAssessments)),
+    ref("case_brief", processChild(caseBriefs, caseBriefs)),
+    ref("intake", processChild(caseIntakes, caseIntakes)),
+    ref("email", hiddenEmails),
+    snapshotTotals,
+  );
+  // NULL entity ids / parent ids make IN yield NULL: treat as "not hidden".
+  return sql`coalesce(${hidden}, false)`;
+}
+
+function auditSelect(ctx: AuthContext) {
   return getDb()
     .select({
       id: auditLogs.id,
@@ -1510,8 +1657,20 @@ function auditSelect() {
       ipAddress: auditLogs.ipAddress,
       actorId: auditLogs.actorId,
       actorName: users.name,
+      redacted: seesConfidential(ctx) ? sql<boolean>`false` : sql<boolean>`${confidentialAuditEntry(ctx)}`,
     })
     .from(auditLogs);
+}
+
+/**
+ * Audit-trail confidentiality: readers who do not see confidential records
+ * (today the auditor, rule 4 of access.ts) keep every entry — the trail stays
+ * complete (action, actor, date, IP, record id) — but entries about
+ * confidential records lose the summary and the field diff, which carry
+ * titles, numbers, amounts and responsible people.
+ */
+function redactAuditRow<T extends { redacted: boolean; summary: string; changes: Changes | null }>(row: T): T {
+  return row.redacted ? { ...row, summary: AUDIT_REDACTED_SUMMARY, changes: null } : row;
 }
 
 export async function listAuditLogs(ctx: AuthContext, filters: AuditFilters = {}): Promise<Paginated<AuditLogItem>> {
@@ -1520,12 +1679,14 @@ export async function listAuditLogs(ctx: AuthContext, filters: AuditFilters = {}
   const { page, pageSize, offset } = normalizePage(f);
   const where = auditWhere(ctx, f);
 
-  const rows = await auditSelect()
-    .leftJoin(users, and(eq(users.id, auditLogs.actorId), eq(users.organizationId, ctx.organizationId)))
-    .where(where)
-    .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
-    .limit(pageSize)
-    .offset(offset);
+  const rows = (
+    await auditSelect(ctx)
+      .leftJoin(users, and(eq(users.id, auditLogs.actorId), eq(users.organizationId, ctx.organizationId)))
+      .where(where)
+      .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
+      .limit(pageSize)
+      .offset(offset)
+  ).map(redactAuditRow);
   const [{ total }] = await getDb().select({ total: count() }).from(auditLogs).where(where);
   const refNames = await resolveReferenceNames(ctx, rows.map((r) => r.changes));
   return { items: rows.map((r) => ({ ...r, refNames })), total, page, pageSize };
@@ -1546,11 +1707,13 @@ export async function exportAuditLogs(
   assertCan(ctx, "audit:read");
   const f = parse(auditFiltersSchema, { ...filters, page: undefined, pageSize: undefined });
   const where = auditWhere(ctx, f);
-  const rows = await auditSelect()
-    .leftJoin(users, and(eq(users.id, auditLogs.actorId), eq(users.organizationId, ctx.organizationId)))
-    .where(where)
-    .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
-    .limit(AUDIT_EXPORT_MAX_ROWS);
+  const rows = (
+    await auditSelect(ctx)
+      .leftJoin(users, and(eq(users.id, auditLogs.actorId), eq(users.organizationId, ctx.organizationId)))
+      .where(where)
+      .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
+      .limit(AUDIT_EXPORT_MAX_ROWS)
+  ).map(redactAuditRow);
   const [{ total }] = await getDb().select({ total: count() }).from(auditLogs).where(where);
   const refNames = await resolveReferenceNames(ctx, rows.map((r) => r.changes), 5_000);
   await recordAudit(ctx, {
@@ -1643,6 +1806,8 @@ export async function listEntityHistory(ctx: AuthContext, entity: EntityRef): Pr
       action: auditLogs.action,
       summary: auditLogs.summary,
       actorName: users.name,
+      // Automatic actors (e.g. "Sistema · DataJud", an API key name) record their label in the metadata.
+      actorLabel: sql<string | null>`${auditLogs.metadata} ->> 'actorLabel'`,
       changes: auditLogs.changes,
       createdAt: auditLogs.createdAt,
     })
@@ -1658,7 +1823,11 @@ export async function listEntityHistory(ctx: AuthContext, entity: EntityRef): Pr
     .orderBy(desc(auditLogs.createdAt), desc(auditLogs.id))
     .limit(100);
   const refNames = await resolveReferenceNames(ctx, rows.map((r) => r.changes));
-  return rows.map((r) => ({ ...r, refNames }));
+  return rows.map(({ actorLabel, ...r }) => ({
+    ...r,
+    actorName: r.actorName ?? (actorLabel ? actorLabel.slice(0, 120) : null),
+    refNames,
+  }));
 }
 
 // ---------------------------------------------------------------------------

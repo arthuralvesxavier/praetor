@@ -1,11 +1,11 @@
-import { BellRing, FileSearch, Gavel, Inbox } from "lucide-react";
+import { BellRing, ChevronRight, FileSearch, Inbox } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { CASE_BRIEF_STATUS_LABELS, HEARING_KIND_LABELS, HEARING_MODE_LABELS } from "@/domain/enums";
-import { formatDate, formatDateTime, formatNumber } from "@/lib/format";
+import { CASE_BRIEF_STATUS_LABELS } from "@/domain/enums";
+import { formatDate, formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { FollowUpData } from "../portfolio-service";
 import { MetricList } from "./metric-list";
@@ -27,71 +27,15 @@ function Empty({ icon, children }: { icon: ReactNode; children: ReactNode }) {
 
 // ---------------------------------------------------------------------------
 
-export function UpcomingHearingsCard({ data }: { data: FollowUpData }) {
-  const s = data.hearings;
-  if (s.status === "forbidden") return null;
-  return (
-    <Card className="flex min-w-0 flex-col">
-      <CardHeader
-        actions={
-          <ButtonLink href="/audiencias" variant="outline" size="sm">
-            Agenda
-          </ButtonLink>
-        }
-      >
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Gavel aria-hidden="true" className="size-4 text-muted-foreground" />
-          Próximas audiências
-        </CardTitle>
-        <CardDescription>Designadas nos próximos {formatNumber(data.upcomingHearingDays)} dias.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {s.status === "error" ? (
-          <Unavailable />
-        ) : s.data.length === 0 ? (
-          <Empty icon={<Gavel />}>Nenhuma audiência designada no período.</Empty>
-        ) : (
-          <ol className="divide-y divide-border" aria-label="Próximas audiências em ordem de data">
-            {s.data.map((h) => (
-              <li key={h.id} className="py-2.5 first:pt-0 last:pb-0">
-                <p className="text-sm font-semibold text-slate-900 tabular-nums">
-                  <time dateTime={h.scheduledAt.toISOString()}>{formatDateTime(h.scheduledAt)}</time>
-                </p>
-                <p className="text-sm text-slate-700">
-                  {HEARING_KIND_LABELS[h.kind]} · {HEARING_MODE_LABELS[h.mode]}
-                </p>
-                <p className="text-xs text-muted-foreground break-words">
-                  <Link
-                    href={`/processos/${h.processId}?aba=audiencias`}
-                    className="font-medium text-primary-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
-                  >
-                    {h.processNumber}
-                  </Link>
-                  {h.responsibleName ? ` · ${h.responsibleName}` : " · sem responsável"}
-                </p>
-              </li>
-            ))}
-          </ol>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-export function IntakeCard({
-  data,
-  canOpenIntake,
-  canOpenBriefs,
-}: {
-  data: FollowUpData;
-  canOpenIntake: boolean;
-  canOpenBriefs: boolean;
-}) {
+/**
+ * Intakes by step. Each linked figure opens `/entrada?status=<status>`, which lists exactly
+ * that many intakes; "Em processamento" groups three steps and has no single list (no link).
+ * Without `intake:manage` (the permission of `/entrada`) the figures are shown without links.
+ */
+export function IntakeCard({ data, canOpenIntake }: { data: FollowUpData; canOpenIntake: boolean }) {
   const s = data.intake;
   if (s.status === "forbidden") return null;
-  const href = (status?: string) => (canOpenIntake ? `/entrada${status ? `?status=${status}` : ""}` : undefined);
+  const href = (status: string) => (canOpenIntake ? `/entrada?status=${status}` : undefined);
   return (
     <Card className="flex min-w-0 flex-col">
       <CardHeader
@@ -107,7 +51,7 @@ export function IntakeCard({
           <Inbox aria-hidden="true" className="size-4 text-muted-foreground" />
           Entrada de processos
         </CardTitle>
-        <CardDescription>Pipeline: recebido → responsável → análise preliminar (simulada) → aviso → revisão.</CardDescription>
+        <CardDescription>Etapas: recebido, responsável, análise preliminar (simulada), aviso e revisão do advogado.</CardDescription>
       </CardHeader>
       <CardContent>
         {s.status === "error" ? (
@@ -117,14 +61,22 @@ export function IntakeCard({
             label="Entradas de processos por etapa"
             items={[
               { key: "received", label: "Recebidos", hint: "Aguardando distribuição", value: s.data.received, href: href("received"), tone: "info" },
-              { key: "progress", label: "Em processamento", value: s.data.inProgress, href: href(), tone: "info" },
               {
-                key: "review",
+                key: "progress",
+                label: "Em processamento",
+                hint: "Responsável definido, análise em geração ou aviso pendente",
+                value: s.data.inProgress,
+                tone: "info",
+              },
+              {
+                key: "notified",
                 label: "Aguardando revisão do advogado",
-                value: s.data.awaitingReview,
-                href: canOpenBriefs ? "/analises-preliminares?status=ready_for_review" : href(),
+                hint: "Aviso enviado (e-mail simulado), revisão não iniciada",
+                value: s.data.notified,
+                href: href("notified"),
                 tone: "warning",
               },
+              { key: "in_review", label: "Em revisão pelo advogado", value: s.data.inReview, href: href("in_review"), tone: "warning" },
               { key: "approved", label: "Análise aprovada", value: s.data.approved, href: href("approved"), tone: "success" },
               { key: "failed", label: "Com falha", value: s.data.failed, href: href("failed"), tone: "danger" },
             ]}
@@ -200,6 +152,15 @@ export function AlertGroupsCard({ data }: { data: FollowUpData }) {
 
 // ---------------------------------------------------------------------------
 
+const BRIEFS_HREF = {
+  ready_for_review: "/analises-preliminares?status=ready_for_review",
+  in_review: "/analises-preliminares?status=in_review",
+} as const;
+
+/**
+ * Preliminary analyses awaiting review (latest version of each process). The total is split
+ * by status, each part linking to the list of that status, which shows exactly that many.
+ */
 export function BriefsAwaitingCard({ data }: { data: FollowUpData }) {
   const s = data.briefs;
   if (s.status === "forbidden") return null;
@@ -207,7 +168,7 @@ export function BriefsAwaitingCard({ data }: { data: FollowUpData }) {
     <Card className="flex min-w-0 flex-col">
       <CardHeader
         actions={
-          <ButtonLink href="/analises-preliminares?status=ready_for_review" variant="outline" size="sm">
+          <ButtonLink href={BRIEFS_HREF.ready_for_review} variant="outline" size="sm">
             Revisar
           </ButtonLink>
         }
@@ -225,10 +186,28 @@ export function BriefsAwaitingCard({ data }: { data: FollowUpData }) {
           <Empty icon={<FileSearch />}>Nenhuma análise preliminar aguardando revisão.</Empty>
         ) : (
           <>
-            <p className="mb-2 text-2xl font-semibold tracking-tight text-slate-900 tabular-nums">
+            <p className="text-2xl font-semibold tracking-tight text-slate-900 tabular-nums">
               {formatNumber(s.data.total)}
               <span className="ml-1.5 text-sm font-normal text-muted-foreground">aguardando revisão</span>
             </p>
+            <ul className="mt-1 mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" aria-label="Análises a revisar por situação">
+              {(
+                [
+                  ["ready_for_review", s.data.readyForReview],
+                  ["in_review", s.data.inReview],
+                ] as const
+              ).map(([status, n]) => (
+                <li key={status}>
+                  <Link
+                    href={BRIEFS_HREF[status]}
+                    className="inline-flex items-center gap-0.5 font-medium text-primary-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    {CASE_BRIEF_STATUS_LABELS[status]}: {formatNumber(n)}
+                    <ChevronRight aria-hidden="true" className="size-3.5" />
+                  </Link>
+                </li>
+              ))}
+            </ul>
             <ul className="divide-y divide-border" aria-label="Análises preliminares mais antigas aguardando revisão">
               {s.data.items.map((b) => (
                 <li key={b.id} className="flex flex-wrap items-center justify-between gap-2 py-2">

@@ -21,7 +21,7 @@ const HIGHLIGHTS = [
   },
   {
     icon: Inbox,
-    text: "Entrada de processos com análise preliminar e aviso ao advogado responsável — ambos simulados nesta versão.",
+    text: "Entrada de processos com análise preliminar e aviso ao advogado responsável, ambos simulados nesta versão.",
   },
   { icon: Landmark, text: "Valores, garantias, risco e provisão com fechamento mensal conferido por pessoas." },
   { icon: UsersRound, text: "Perfis para jurídico, diretoria, contabilidade, auditoria e escritórios externos." },
@@ -68,7 +68,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
         />
         <Link
           href="/"
-          aria-label="Praetor — página inicial"
+          aria-label="Praetor, página inicial"
           className="relative w-fit rounded-md py-1 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-gold-400"
         >
           <LogoWordmark variant="light" title="" className="h-8" />
@@ -93,8 +93,8 @@ export default async function LoginPage(props: PageProps<"/login">) {
           </ul>
         </div>
         <p className="relative max-w-md text-xs leading-relaxed text-sidebar-muted">
-          Nesta versão, a análise preliminar por IA e o envio de e-mails são simulações demonstrativas — nenhuma
-          mensagem é enviada — e não há integração com tribunais.
+          Nesta versão, a análise preliminar por IA e o envio de e-mails são simulações demonstrativas (nenhuma
+          mensagem é enviada) e não há integração com tribunais.
         </p>
       </aside>
 
@@ -103,7 +103,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
           <div className="mb-8 lg:hidden">
             <Link
               href="/"
-              aria-label="Praetor — página inicial"
+              aria-label="Praetor, página inicial"
               className="inline-flex w-fit rounded-md py-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
               <LogoWordmark variant="color" title="" className="h-7" />

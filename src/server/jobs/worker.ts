@@ -34,11 +34,20 @@ async function runJob(job: JobRow): Promise<void> {
     const handler = JOB_HANDLERS[job.type];
     if (!handler) throw Object.assign(new Error(`unknown_job_type`), { retryable: false });
     await handler(job);
-    await completeJob(job.id);
-    logger.info("job_succeeded", { jobId: job.id, type: job.type, attempt: job.attempts, ms: Date.now() - started });
+    // Conditional on this execution still holding the job (it may have been recovered as stuck).
+    const completed = await completeJob(job.id, undefined, { lockedBy: job.lockedBy, attempts: job.attempts });
+    if (completed) {
+      logger.info("job_succeeded", { jobId: job.id, type: job.type, attempt: job.attempts, ms: Date.now() - started });
+    } else {
+      logger.warn("job_lease_lost", { jobId: job.id, type: job.type, attempt: job.attempts, ms: Date.now() - started });
+    }
   } catch (err) {
     const retryable = isRetryableError(err);
     const outcome = await failJob(job, err, retryable);
+    if (outcome.status === "ignored") {
+      logger.warn("job_lease_lost", { jobId: job.id, type: job.type, attempt: job.attempts, error: safeErrorMessage(err) });
+      return;
+    }
     logger.warn("job_failed", {
       jobId: job.id,
       type: job.type,
@@ -52,18 +61,22 @@ async function runJob(job: JobRow): Promise<void> {
   }
 }
 
-/** Claims and runs due jobs until none are left or `limit` jobs were processed. */
+/**
+ * Claims and runs due jobs until none are left or `limit` jobs were processed.
+ * One job is claimed at a time, right before it runs, so `lockedAt` is the start
+ * of its execution (never the start of a sibling's), and the stuck-job recovery
+ * only requeues executions that really exceeded `STUCK_JOB_TIMEOUT_MS`.
+ */
 export async function processPendingJobs(
   opts: { limit?: number; organizationId?: string } = {},
 ): Promise<{ processed: number }> {
   const limit = Math.max(1, Math.min(500, Math.floor(opts.limit ?? 50)));
   let processed = 0;
   while (processed < limit) {
-    const batch = await claimJobs(WORKER_ID, Math.min(10, limit - processed), undefined, {
-      organizationId: opts.organizationId,
-    });
-    if (!batch.length) break;
-    for (const job of batch) {
+    const claimed = await claimJobs(WORKER_ID, 1, undefined, { organizationId: opts.organizationId });
+    if (claimed.length === 0) break;
+    // Never leave a claimed job behind (claimJobs returns at most one here).
+    for (const job of claimed) {
       await runJob(job);
       processed++;
     }

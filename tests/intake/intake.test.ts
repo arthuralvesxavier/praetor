@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 
 // Cross-module services of other packages (briefs, e-mails): mocked so the
 // pipeline orchestration is tested on its own. Other exports stay real.
@@ -27,6 +27,10 @@ vi.mock("@/modules/briefs/demo-documents", async (importOriginal) => ({
 import { runJobs, setupFixture, utf8, type Fixture } from "../helpers/fixtures";
 import { isValidCnj, laborCourtFromCnj, parseCnj } from "@/domain/cnj";
 import type { DemoCaseInfo } from "@/modules/briefs/demo-documents";
+import { todayISO } from "@/lib/format";
+import { loadOrganization } from "@/modules/analyses/org-settings";
+import { reviewValuation } from "@/modules/contingency/service";
+import { runSimulatedFeedRoutine } from "@/modules/court-sync/routines";
 import { normalizeCourt } from "@/modules/distribution/matching";
 import { FICTITIOUS_PLAINTIFFS, buildSimulatedCnj } from "@/modules/intake/simulation";
 import type { RegisterIntakeInput } from "@/modules/intake/schemas";
@@ -55,6 +59,7 @@ import {
   jobs,
   organizations,
   processParties,
+  processValuations,
   users,
 } from "@/server/db/schema";
 import { DEFAULT_ORGANIZATION_SETTINGS } from "@/server/db/schema";
@@ -85,6 +90,15 @@ function input(overrides: Partial<RegisterIntakeInput> = {}): RegisterIntakeInpu
   };
 }
 
+/** Claim (valor da causa) valuations of a process, oldest first. */
+async function claimValuations(processId: string) {
+  return f.db
+    .select()
+    .from(processValuations)
+    .where(and(eq(processValuations.processId, processId), eq(processValuations.kind, "claim")))
+    .orderBy(processValuations.createdAt);
+}
+
 async function intakeRow(id: string) {
   const [row] = await f.db.select().from(caseIntakes).where(eq(caseIntakes.id, id));
   return row;
@@ -92,6 +106,11 @@ async function intakeRow(id: string) {
 
 function callsFor(mock: ReturnType<typeof vi.fn>, processId: string) {
   return mock.mock.calls.filter((c) => c[1] === processId || (c[1] as { processId?: string })?.processId === processId);
+}
+
+/** "Análise preliminar disponível" e-mails of a process (the assignment e-mail is another template). */
+function briefEmailsFor(processId: string) {
+  return mocks.sendTemplatedEmail.mock.calls.filter((c) => c[1].processId === processId && c[1].template === "case_brief_ready");
 }
 
 beforeAll(async () => {
@@ -216,6 +235,12 @@ describe("registerIncomingProcess", () => {
     const proc = await getProcess(f.ctx.analyst, r.processId);
     expect(proc.createdById).toBe(f.ctx.analyst.userId);
     expect(proc.isConfidential).toBe(false);
+    // A typed valor da causa is a manual proposal (never labeled as simulated).
+    expect(proc.claimAmountCents).toBeNull();
+    expect(await claimValuations(r.processId)).toMatchObject([{ status: "proposed", source: "manual", amountCents: 4_500_000 }]);
+    const received = (await intakeRow(r.intakeId)).steps[0].detail.replace(/\s/g, " ");
+    expect(received).toContain("Valor da causa de R$ 45.000,00 enviado para a conferência de valores");
+    expect(received).not.toContain("simulado");
     const [audit] = await f.db
       .select()
       .from(auditLogs)
@@ -224,6 +249,9 @@ describe("registerIncomingProcess", () => {
   });
 
   it("validates the number, the parties and every foreign id", async () => {
+    // The simulated feed has its own entry point (demo organizations, simulated valor da causa).
+    await expect(registerIncomingProcess(f.ctx.manager, { ...input(), source: "simulated_feed" })).rejects.toBeInstanceOf(ValidationError);
+    await expect(registerIncomingProcess(f.ctx.executive, { ...input(), source: "simulated_feed" })).rejects.toBeInstanceOf(ForbiddenError);
     await expect(registerIncomingProcess(f.ctx.manager, input({ number: "12345" }))).rejects.toMatchObject({
       fieldErrors: { number: expect.any(Array) },
     });
@@ -291,19 +319,19 @@ describe("processIntakeJob", () => {
     expect(intake.steps.map((s) => s.status)).toEqual(["received", "assigned", "analyzing", "brief_ready", "notified"]);
     for (const s of intake.steps) expect(Number.isNaN(Date.parse(s.at))).toBe(false);
     expect(intake.steps[2].detail).toContain("simulação");
-    expect(intake.steps[4].detail).toContain("nenhuma mensagem real foi enviada");
+    expect(intake.steps[4].detail).toContain("Nenhuma mensagem real foi enviada");
     expect((await getProcess(f.ctx.manager, r.processId)).responsibleId).toBe(f.ctx.lawyer.userId);
 
     const briefCalls = callsFor(mocks.requestCaseBrief, r.processId);
     expect(briefCalls).toHaveLength(1);
     expect(briefCalls[0][0]).toMatchObject({ kind: "system", organizationId: f.orgA });
     expect(briefCalls[0][2]).toEqual({ intakeId: r.intakeId, inline: true });
-    const emailCalls = mocks.sendTemplatedEmail.mock.calls.filter((c) => c[1].processId === r.processId);
+    const emailCalls = briefEmailsFor(r.processId);
     expect(emailCalls).toHaveLength(1);
     expect(emailCalls[0][1]).toMatchObject({
       template: "case_brief_ready",
       toUserId: f.ctx.lawyer.userId,
-      linkPath: `/processos/${r.processId}?aba=analise-preliminar`,
+      linkPath: `/processos/${r.processId}?aba=documentos-e-analises#analise-preliminar`,
       briefId: intake.briefId,
       intakeId: r.intakeId,
       entity: { type: "intake", id: r.intakeId },
@@ -317,13 +345,20 @@ describe("processIntakeJob", () => {
     // Idempotent: running again does nothing new.
     await processIntakeJob(r.intakeId, { attempt: 1, maxAttempts: 3 });
     expect(callsFor(mocks.requestCaseBrief, r.processId)).toHaveLength(1);
-    expect(mocks.sendTemplatedEmail.mock.calls.filter((c) => c[1].processId === r.processId)).toHaveLength(1);
+    expect(briefEmailsFor(r.processId)).toHaveLength(1);
     expect((await intakeRow(r.intakeId)).steps).toHaveLength(5);
   });
 
   it("records a sanitized failure, rethrows for the queue and resumes from the failed step on retry", async () => {
     const r = await registerIncomingProcess(f.ctx.manager, input({ unitId: f.unitRe }));
-    mocks.sendTemplatedEmail.mockRejectedValueOnce(new Error("conexão recusada: texto sigiloso do documento"));
+    let failBriefEmail = true;
+    mocks.sendTemplatedEmail.mockImplementation(async (_ctx: AuthContext, mail: { template: string }) => {
+      if (mail.template === "case_brief_ready" && failBriefEmail) {
+        failBriefEmail = false;
+        throw new Error("conexão recusada: texto sigiloso do documento");
+      }
+      return { emailId: randomUUID() };
+    });
     await expect(processIntakeJob(r.intakeId, { attempt: 1, maxAttempts: 3 })).rejects.toThrow();
     let intake = await intakeRow(r.intakeId);
     expect(intake.status).toBe("failed");
@@ -422,15 +457,17 @@ describe("manual actions", () => {
     const target = before.assignedToId === f.ctx.lawyerRe.userId ? f.ctx.lawyer : f.ctx.lawyerRe;
 
     await expect(assignIntakeManually(f.ctx.executive, r.intakeId, { userId: target.userId!, reason: "x" })).rejects.toBeInstanceOf(ForbiddenError);
-    await expect(assignIntakeManually(f.ctx.lawyer, r.intakeId, { userId: target.userId!, reason: "" })).rejects.toBeInstanceOf(ValidationError);
-    const d = await assignIntakeManually(f.ctx.lawyer, r.intakeId, { userId: target.userId!, reason: "Redistribuição por férias" });
+    // Replacing a responsible is a redistribution (distribution:manage): a lawyer with intake:manage cannot.
+    await expect(assignIntakeManually(f.ctx.lawyer, r.intakeId, { userId: target.userId!, reason: "Férias" })).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(assignIntakeManually(f.ctx.manager, r.intakeId, { userId: target.userId!, reason: "" })).rejects.toBeInstanceOf(ValidationError);
+    const d = await assignIntakeManually(f.ctx.manager, r.intakeId, { userId: target.userId!, reason: "Redistribuição por férias" });
     expect(d.method).toBe("manual");
     const after = await intakeRow(r.intakeId);
     expect(after).toMatchObject({ assignedToId: target.userId, assignmentMethod: "manual", lastEmailId: null, status: "brief_ready" });
     expect(after.steps[after.steps.length - 1].detail).toContain("Redistribuição por férias");
 
     await processIntakeJob(r.intakeId, { attempt: 1, maxAttempts: 3 });
-    const emails = mocks.sendTemplatedEmail.mock.calls.filter((c) => c[1].processId === r.processId);
+    const emails = briefEmailsFor(r.processId);
     expect(emails).toHaveLength(2);
     expect(emails[1][1].toUserId).toBe(target.userId);
     expect((await intakeRow(r.intakeId)).status).toBe("notified");
@@ -441,7 +478,7 @@ describe("manual actions", () => {
     await processIntakeJob(r.intakeId, { attempt: 1, maxAttempts: 3 });
     await expect(resendIntakeEmail(f.ctx.analyst, r.intakeId)).rejects.toBeInstanceOf(ForbiddenError);
     await resendIntakeEmail(f.ctx.lawyer, r.intakeId);
-    const emails = mocks.sendTemplatedEmail.mock.calls.filter((c) => c[1].processId === r.processId);
+    const emails = briefEmailsFor(r.processId);
     expect(emails).toHaveLength(2);
     expect(emails[1][0]).toMatchObject({ kind: "user", userId: f.ctx.lawyer.userId });
     const steps = (await intakeRow(r.intakeId)).steps;
@@ -528,10 +565,22 @@ describe("simulateIncomingProcess (demo)", () => {
     expect(parts.year).toBe(new Date().getFullYear());
     const proc = await getProcess(f.ctx.manager, r.processId);
     expect(laborCourtFromCnj(r.number)).toBe(normalizeCourt(proc.court));
-    expect(proc.title).toContain("Chegada simulada — dados fictícios");
+    expect(proc.title).toContain("chegada simulada com dados fictícios");
     expect(proc.description).toContain("dados fictícios");
     expect(proc.area).toBe("labor");
-    expect(proc.claimAmountCents).toBeGreaterThan(0);
+    // An analyst cannot make values official: the simulated valor da causa waits in the
+    // review queue, labeled as simulated, and the record stays without it (null, never 0).
+    expect(proc.claimAmountCents).toBeNull();
+    const analystClaims = await claimValuations(r.processId);
+    expect(analystClaims).toHaveLength(1);
+    expect(analystClaims[0]).toMatchObject({
+      status: "proposed",
+      source: "simulation",
+      reviewedById: null,
+      createdById: f.ctx.analyst.userId,
+    });
+    expect(analystClaims[0].amountCents).toBeGreaterThan(0);
+    expect(analystClaims[0].reason).toContain("simulado (demonstração)");
     expect(proc.companyId).toBe(f.companyA);
     const parties = await f.db.select().from(processParties).where(eq(processParties.processId, r.processId));
     const plaintiff = parties.find((p) => p.role === "plaintiff")!;
@@ -540,7 +589,7 @@ describe("simulateIncomingProcess (demo)", () => {
     expect(r.documentIds).toHaveLength(2);
     const intake = await intakeRow(r.intakeId);
     expect(intake.source).toBe("simulated_feed");
-    expect(intake.steps[0].detail).toContain("Chegada simulada — dados fictícios");
+    expect(intake.steps[0].detail).toContain("Chegada simulada com dados fictícios");
     const info = mocks.buildDemoCaseDocuments.mock.calls.at(-1)![0] as DemoCaseInfo;
     expect(info).toMatchObject({ number: r.number, plaintiff: plaintiff.name, defendant: "Empresa Fictícia A Ltda." });
     expect(await f.db.select().from(jobs).where(eq(jobs.dedupeKey, `intake.process:${r.intakeId}`))).toHaveLength(1);
@@ -549,6 +598,62 @@ describe("simulateIncomingProcess (demo)", () => {
     const again = await simulateIncomingProcess(f.ctx.manager, { seed: 3 });
     expect(again.number).not.toBe(r.number);
     expect(isValidCnj(again.number)).toBe(true);
+    // A gestor makes it official at once, still labeled as simulated.
+    const managerClaims = await claimValuations(again.processId);
+    expect(managerClaims).toHaveLength(1);
+    expect(managerClaims[0]).toMatchObject({ status: "official", source: "simulation", reviewedById: f.ctx.manager.userId });
+    expect(managerClaims[0].amountCents).toBeGreaterThan(0);
+    expect((await getProcess(f.ctx.manager, again.processId)).claimAmountCents).toBe(managerClaims[0].amountCents);
+  });
+
+  it("the automatic feed (no identified person) keeps the simulated valor da causa off the record, as a labeled proposal", async () => {
+    await f.db.update(organizations).set({ isDemo: true });
+    // The worker routine runs `simulateIncomingProcess(systemContext(org, true))`: userId null.
+    await f.db
+      .update(caseIntakes)
+      .set({ receivedAt: sql`now() - interval '1 day'` })
+      .where(and(eq(caseIntakes.organizationId, f.orgA), eq(caseIntakes.source, "simulated_feed")));
+    const org = await loadOrganization(f.orgA);
+    const settings = {
+      ...org.settings,
+      integrations: { ...org.settings.integrations, simulatedFeed: { enabled: true, intervalMinutes: 60 } },
+    };
+    const status = await runSimulatedFeedRoutine({ organizationId: f.orgA, isDemo: true, settings, config: {}, today: todayISO() });
+    expect(status).toContain("Chegada simulada (dados fictícios)");
+    const [intake] = await f.db
+      .select()
+      .from(caseIntakes)
+      .where(and(eq(caseIntakes.organizationId, f.orgA), eq(caseIntakes.source, "simulated_feed")))
+      .orderBy(desc(caseIntakes.receivedAt))
+      .limit(1);
+    expect(intake.createdById).toBeNull();
+
+    // Nothing unlabeled on the record (null, never 0): one PROPOSED valuation, source simulation, no author.
+    expect((await getProcess(f.ctx.manager, intake.processId)).claimAmountCents).toBeNull();
+    const proposed = await claimValuations(intake.processId);
+    expect(proposed).toHaveLength(1);
+    expect(proposed[0]).toMatchObject({ status: "proposed", source: "simulation", createdById: null, reviewedById: null, isEstimate: false });
+    expect(proposed[0].amountCents).toBeGreaterThan(0);
+    expect(proposed[0].reason).toContain("simulado (demonstração)");
+    expect(intake.steps[0].detail).toContain("Valor da causa simulado (demonstração)");
+    expect(intake.steps[0].detail).toContain("conferência de valores");
+    expect(intake.steps[0].detail).not.toContain("—");
+
+    // A gestor confers it in the queue: official, still labeled as simulated, and only then on the record.
+    expect((await reviewValuation(f.ctx.manager, proposed[0].id, { decision: "approve" })).status).toBe("official");
+    const [official] = (await claimValuations(intake.processId)).filter((v) => v.status === "official");
+    expect(official).toMatchObject({ source: "simulation", amountCents: proposed[0].amountCents, reviewedById: f.ctx.manager.userId });
+    expect((await getProcess(f.ctx.manager, intake.processId)).claimAmountCents).toBe(proposed[0].amountCents);
+  });
+
+  it("an analyst's arrival says in the received step that the valor da causa waits for the review", async () => {
+    const r = await simulateIncomingProcess(f.ctx.analyst, { seed: 21 });
+    const [claim] = await claimValuations(r.processId);
+    expect(claim).toMatchObject({ status: "proposed", source: "simulation" });
+    expect((await intakeRow(r.intakeId)).steps[0].detail).toContain("Valor da causa simulado (demonstração)");
+    // A gestor's value is official at once: no pending note.
+    const g = await simulateIncomingProcess(f.ctx.manager, { seed: 22 });
+    expect((await intakeRow(g.intakeId)).steps[0].detail).not.toContain("conferência de valores");
   });
 
   it("samples court/city from the labor portfolio and falls back to TRT10 / Palmas-TO", async () => {

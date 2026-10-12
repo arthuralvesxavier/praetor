@@ -20,7 +20,7 @@ export async function loadContractFormOptions(ctx: AuthContext): Promise<{
   return {
     users: users.map((u) => ({ value: u.id, label: u.name })),
     units: units.map((u) => ({ value: u.id, label: u.name })),
-    processes: processes.map((p) => ({ value: p.id, label: `${p.number} — ${p.title}` })),
+    processes: processes.map((p) => ({ value: p.id, label: `${p.number} · ${p.title}` })),
     occurrences: occurrences.map((o) => ({ value: o.id, label: o.title })),
   };
 }

@@ -11,5 +11,7 @@
 | [0007](0007-ai-provider-abstraction.md) | Abstração de provedor de IA, saída estruturada e modo demonstrativo |
 | [0008](0008-local-file-storage.md) | Armazenamento local de arquivos atrás de uma interface |
 | [0009](0009-row-visibility-in-services.md) | Visibilidade por linha na camada de serviço (não em Postgres RLS) |
+| [0010](0010-simulated-integrations-behind-interfaces.md) | Integrações simuladas atrás de interfaces: análise preliminar e e-mail |
+| [0011](0011-append-only-values-risk-vigency-monthly-close.md) | Valores append-only, vigência de risco e fechamento mensal imutável |
 
 Formato: contexto, decisão, consequências e alternativas consideradas. Para mudar uma decisão, crie um novo ADR que substitua o anterior e marque o antigo como "substituída por ADR-NNNN".

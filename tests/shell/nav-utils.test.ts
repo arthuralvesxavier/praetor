@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { activeNavHref, filterNavGroups, matchesNavHref } from "@/components/layout/nav-utils";
-import { alertsBellLabel, formatBadgeCount } from "@/components/layout/shell-format";
+import { alertsBellLabel, formatBadgeCount, formatCount, simulationItems } from "@/components/layout/shell-format";
 import type { Role } from "@/domain/enums";
 import { NAV_GROUPS } from "@/lib/nav";
 import { can } from "@/server/auth/permissions";
@@ -142,5 +142,61 @@ describe("header text helpers", () => {
     expect(alertsBellLabel({ total: 1, critical: 0 })).toBe("Alertas e pendências: 1 aberto");
     expect(alertsBellLabel({ total: 5, critical: 1 })).toBe("Alertas e pendências: 5 abertos, 1 crítico");
     expect(alertsBellLabel({ total: 1200, critical: 3 })).toBe("Alertas e pendências: 1.200 abertos, 3 críticos");
+  });
+
+  it("formats the counts of the bell panel with pt-BR grouping", () => {
+    expect(formatCount(0)).toBe("0");
+    expect(formatCount(-3)).toBe("0");
+    expect(formatCount(Number.NaN)).toBe("0");
+    expect(formatCount(12)).toBe("12");
+    expect(formatCount(1200)).toBe("1.200");
+  });
+});
+
+describe("Simulações badge items", () => {
+  const allSimulated = { caseBriefMode: "demo", aiMode: "demo", emailMode: "simulated" } as const;
+  const linksFor = (role: Role) =>
+    simulationItems(allSimulated, (p) => can({ role, kind: "user" }, p)).map((i) => [i.key, i.link?.href ?? null]);
+
+  it("lists every running simulation, in a fixed order, with pt-BR text and no dashes", () => {
+    const items = simulationItems(allSimulated, () => true);
+    expect(items.map((i) => i.title)).toEqual([
+      "Análise preliminar simulada",
+      "Central de IA em modo demonstrativo",
+      "E-mails simulados",
+    ]);
+    for (const i of items) {
+      expect(`${i.title} ${i.detail} ${i.link?.label ?? ""}`).not.toMatch(/[—–]/);
+    }
+  });
+
+  it("lists nothing for providers that are live or unknown", () => {
+    expect(simulationItems({ caseBriefMode: "live", aiMode: "live", emailMode: "live" }, () => true)).toEqual([]);
+    expect(simulationItems({ caseBriefMode: "demo", aiMode: null, emailMode: null }, () => true).map((i) => i.key)).toEqual([
+      "case_brief",
+    ]);
+    expect(simulationItems({ caseBriefMode: "live", aiMode: "live", emailMode: "simulated" }, () => true).map((i) => i.key)).toEqual(
+      ["email"],
+    );
+  });
+
+  it("links to /analises-preliminares, /ia and /emails only with the matching read permission", () => {
+    expect(linksFor("admin")).toEqual([
+      ["case_brief", "/analises-preliminares"],
+      ["ai", "/ia"],
+      ["email", "/emails"],
+    ]);
+    // Accountant: no brief:read, analysis:read or email:read; the simulations are still listed.
+    expect(linksFor("accountant")).toEqual([
+      ["case_brief", null],
+      ["ai", null],
+      ["email", null],
+    ]);
+    for (const role of ["legal_manager", "lawyer", "analyst", "executive", "auditor", "external_counsel"] as const) {
+      const links = new Map(linksFor(role) as [string, string | null][]);
+      expect(links.get("case_brief") !== null, role).toBe(can({ role, kind: "user" }, "brief:read"));
+      expect(links.get("ai") !== null, role).toBe(can({ role, kind: "user" }, "analysis:read"));
+      expect(links.get("email") !== null, role).toBe(can({ role, kind: "user" }, "email:read"));
+    }
   });
 });

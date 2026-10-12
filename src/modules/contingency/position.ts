@@ -12,6 +12,16 @@
  *   either still linked or released/returned only after the date (RN-04).
  * - Without any history of a kind, the denormalized process field is used
  *   (initial load / registration without history).
+ * - Ties on the same date (e.g. official values of different instances from
+ *   one import) are broken deterministically: most recently reviewed
+ *   (`reviewedAt`, else `createdAt`), then `createdAt`, then `id` — the same
+ *   order as `syncProcessMirrors`.
+ * - Valor da causa REMOVED (process field null, claim history present but no
+ *   `official` claim valuation): the claim is null (never zero) on dates
+ *   from today on, so current positions and the open competência carry no
+ *   estimate on a deleted value. LIMITATION: the removal date is not recorded
+ *   (that needs a schema change), so positions/previews of PAST dates still
+ *   show the last value that was official on them.
  */
 import {
   netExposure,
@@ -22,22 +32,39 @@ import {
   type RiskPercentages,
 } from "@/domain/contingency";
 import type { GuaranteeStatus, LossProbability, ValuationKind, ValuationStatus } from "@/domain/enums";
-import { toISODate } from "@/lib/format";
+import { toISODate, todayISO } from "@/lib/format";
 
-export type PositionValuation = {
+/** Tiebreakers of rows sharing the same date (optional: older callers may not load them). */
+type Tiebreak = { createdAt: Date; reviewedAt?: Date | null; id?: string };
+
+export type PositionValuation = Tiebreak & {
   kind: ValuationKind;
   amountCents: number;
   baseDate: string;
   status: ValuationStatus;
-  createdAt: Date;
 };
 
-export type PositionRisk = {
+export type PositionRisk = Tiebreak & {
   classification: LossProbability;
   percentageBp: number;
   effectiveFrom: string;
   status: ValuationStatus;
-  createdAt: Date;
+};
+
+/**
+ * "Has history" flags. Computed from the given rows by default; callers that
+ * load rows with a date bound (monthly snapshot) pass them precomputed over
+ * the WHOLE history, so the record fallback is not used by mistake.
+ */
+export type PositionHistory = {
+  /** Some claim valuation is or was official (any base date). */
+  claim: boolean;
+  /** Some claim valuation is official now. */
+  claimOfficial: boolean;
+  /** Some liquidated valuation is or was official (any base date). */
+  liquidated: boolean;
+  /** Some official risk assessment exists (any effective date). */
+  risk: boolean;
 };
 
 export type PositionGuarantee = {
@@ -74,11 +101,28 @@ export type ProcessPosition = {
 
 const HISTORY_STATUSES: readonly ValuationStatus[] = ["official", "superseded"];
 
-function later<T extends { createdAt: Date }>(a: T, b: T, dateOf: (r: T) => string): T {
+/** The row in force between two candidates: later date, then most recently reviewed, then created, then id. */
+function later<T extends Tiebreak>(a: T, b: T, dateOf: (r: T) => string): T {
   const da = dateOf(a);
   const db = dateOf(b);
   if (da !== db) return da > db ? a : b;
-  return a.createdAt.getTime() >= b.createdAt.getTime() ? a : b;
+  const ra = (a.reviewedAt ?? a.createdAt).getTime();
+  const rb = (b.reviewedAt ?? b.createdAt).getTime();
+  if (ra !== rb) return ra > rb ? a : b;
+  const ca = a.createdAt.getTime();
+  const cb = b.createdAt.getTime();
+  if (ca !== cb) return ca > cb ? a : b;
+  return (a.id ?? "") >= (b.id ?? "") ? a : b;
+}
+
+export function historyOf(valuations: readonly PositionValuation[], risks: readonly PositionRisk[]): PositionHistory {
+  const inHistory = (kind: ValuationKind) => valuations.some((v) => v.kind === kind && HISTORY_STATUSES.includes(v.status));
+  return {
+    claim: inHistory("claim"),
+    claimOfficial: valuations.some((v) => v.kind === "claim" && v.status === "official"),
+    liquidated: inHistory("liquidated"),
+    risk: risks.some((r) => r.status === "official"),
+  };
 }
 
 /** Latest official/superseded valuation of `kind` with base date on/before `date`. */
@@ -132,31 +176,39 @@ export function positionAt(input: {
   risks: readonly PositionRisk[];
   guarantees: readonly PositionGuarantee[];
   params: RiskPercentages;
+  /** Precomputed history flags (see `PositionHistory`); default: computed from `valuations`/`risks`. */
+  history?: PositionHistory;
+  /** Today's date (YYYY-MM-DD, São Paulo); injectable for tests. */
+  today?: string;
 }): ProcessPosition {
   const { date, process: p, valuations, risks, guarantees, params } = input;
+  const history = input.history ?? historyOf(valuations, risks);
+  const today = input.today ?? todayISO();
   let fallback = false;
 
-  const hasClaimHistory = valuations.some((v) => v.kind === "claim" && HISTORY_STATUSES.includes(v.status));
-  const claim = valuationAt(valuations, "claim", date);
+  let claim = valuationAt(valuations, "claim", date);
   let claimCents: number | null = claim?.amountCents ?? null;
-  if (!hasClaimHistory && p.claimAmountCents !== null) {
+  if (!history.claim && p.claimAmountCents !== null) {
     claimCents = p.claimAmountCents;
     fallback = true;
+  } else if (history.claim && !history.claimOfficial && p.claimAmountCents === null && date >= today) {
+    // Valor da causa removido: no official value and an empty record. From today on the claim is
+    // NOT INFORMED (null, never zero) and no estimate is computed on it (RN-03, RN-07).
+    claim = null;
+    claimCents = null;
   }
 
-  const hasLiquidatedHistory = valuations.some((v) => v.kind === "liquidated" && HISTORY_STATUSES.includes(v.status));
   const liquidated = valuationAt(valuations, "liquidated", date);
   let liquidatedCents: number | null = liquidated?.amountCents ?? null;
-  if (!hasLiquidatedHistory && p.liquidatedAmountCents !== null) {
+  if (!history.liquidated && p.liquidatedAmountCents !== null) {
     liquidatedCents = p.liquidatedAmountCents;
     fallback = true;
   }
 
-  const hasRiskHistory = risks.some((r) => r.status === "official");
   const risk = riskAt(risks, date);
   let classification: LossProbability | null = risk?.classification ?? null;
   let percentageBp: number | null = risk?.percentageBp ?? null;
-  if (!hasRiskHistory && (p.lossProbability !== null || p.riskPercentageBp !== null)) {
+  if (!history.risk && (p.lossProbability !== null || p.riskPercentageBp !== null)) {
     classification = p.lossProbability;
     percentageBp = recordRiskBp(p, params);
     fallback = true;

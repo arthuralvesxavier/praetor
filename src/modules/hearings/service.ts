@@ -11,7 +11,7 @@
  *   hearing is kept as `rescheduled` and a new `scheduled` one is created; both audited).
  * - Free text (notes, outcome, meeting links) is never written to the audit trail.
  */
-import { and, asc, count, desc, eq, gte, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { cnjDigits, normalizeCnj } from "@/domain/cnj";
@@ -24,7 +24,7 @@ import {
   type HearingStatus,
 } from "@/domain/enums";
 import { addDaysISO, formatDate, todayISO } from "@/lib/format";
-import { canViewScopedRecord, hearingWhere, processWhere } from "@/server/auth/access";
+import { canViewScopedRecord, hearingWhere, processWhere, userDirectoryWhere } from "@/server/auth/access";
 import type { AuthContext } from "@/server/auth/context";
 import { assertCan, can } from "@/server/auth/permissions";
 import { getDb, type DbOrTx } from "@/server/db/client";
@@ -333,25 +333,30 @@ export async function listProcessHearings(ctx: AuthContext, processId: string): 
   return mapRows(ctx, rows, now);
 }
 
+function upcomingDays(days: number | undefined): number {
+  return Math.min(366, Math.max(0, Math.floor(Number.isFinite(days) ? (days as number) : 30)));
+}
+
+/** Scheduled hearings of visible processes within [now, end of today + days). */
+function upcomingHearingsWhere(ctx: AuthContext, days: number, now: Date): SQL {
+  const until = endOfZonedDayExclusive(addDaysISO(todayISO(now), days));
+  return and(
+    hearingWhere(ctx),
+    eq(hearings.status, "scheduled"),
+    gte(hearings.scheduledAt, now),
+    lt(hearings.scheduledAt, until),
+  )!;
+}
+
 /** Scheduled hearings of visible processes from now on (default 30 days, 10 items). Requires `process:read`. */
 export async function listUpcomingHearings(
   ctx: AuthContext,
   opts: { days?: number; limit?: number } = {},
 ): Promise<UpcomingHearing[]> {
   assertCan(ctx, "process:read");
-  const days = Math.min(366, Math.max(0, Math.floor(Number.isFinite(opts.days) ? (opts.days as number) : 30)));
+  const days = upcomingDays(opts.days);
   const limit = Math.min(50, Math.max(1, Math.floor(Number.isFinite(opts.limit) ? (opts.limit as number) : 10)));
-  const now = new Date();
-  const until = endOfZonedDayExclusive(addDaysISO(todayISO(now), days));
-  const rows = await selectHearingRows(
-    ctx,
-    and(
-      hearingWhere(ctx),
-      eq(hearings.status, "scheduled"),
-      gte(hearings.scheduledAt, now),
-      lt(hearings.scheduledAt, until),
-    ),
-  )
+  const rows = await selectHearingRows(ctx, upcomingHearingsWhere(ctx, days, new Date()))
     .orderBy(asc(hearings.scheduledAt), asc(hearings.id))
     .limit(limit);
   return rows.map((r) => ({
@@ -366,6 +371,19 @@ export async function listUpcomingHearings(
     location: r.h.location,
     responsibleName: r.responsibleName,
   }));
+}
+
+/**
+ * How many hearings `listUpcomingHearings` would list for the same window
+ * (default 30 days), without its 50-item cap. Requires `process:read`.
+ */
+export async function countUpcomingHearings(ctx: AuthContext, days?: number): Promise<number> {
+  assertCan(ctx, "process:read");
+  const [row] = await getDb()
+    .select({ total: sql<number>`count(*)::int` })
+    .from(hearings)
+    .where(upcomingHearingsWhere(ctx, upcomingDays(days), new Date()));
+  return row?.total ?? 0;
 }
 
 /** Indicators of the agenda page (same scope as the list). */
@@ -401,13 +419,36 @@ export async function getHearingCounts(ctx: AuthContext): Promise<HearingCounts>
   };
 }
 
-/** Active users of the organization who can read processes (responsible select). */
+/**
+ * Active users of the organization who can read processes (responsible select
+ * and filter). External counsel only receives the users of their own firm, the
+ * responsible people of the processes they see (`userDirectoryWhere`) and the
+ * responsible people of the hearings they see — never the whole internal staff.
+ */
 export async function listHearingUserOptions(ctx: AuthContext): Promise<HearingUserOption[]> {
   assertCan(ctx, "process:read");
+  const directory = userDirectoryWhere(ctx);
   const rows = await getDb()
     .select({ id: users.id, name: users.name, role: users.role })
     .from(users)
-    .where(and(eq(users.organizationId, ctx.organizationId), eq(users.isActive, true)))
+    .where(
+      and(
+        eq(users.organizationId, ctx.organizationId),
+        eq(users.isActive, true),
+        directory
+          ? or(
+              directory,
+              inArray(
+                users.id,
+                getDb()
+                  .select({ id: hearings.responsibleId })
+                  .from(hearings)
+                  .where(and(hearingWhere(ctx), isNotNull(hearings.responsibleId))),
+              ),
+            )
+          : undefined,
+      ),
+    )
     .orderBy(asc(users.name))
     .limit(1000);
   return rows
@@ -690,7 +731,19 @@ export async function getHearingProcessId(ctx: AuthContext, id: string): Promise
   return row.processId;
 }
 
-/** Internal (routine): scheduled hearings of the organization within [from, until). No user scope. */
+/**
+ * Processes whose hearings are alerted and reminded: the active portfolio
+ * (same statuses as `ACTIVE_PORTFOLIO_STATUSES` in processes/service, not
+ * imported here to keep this module free of a load-order cycle).
+ */
+const ALERTED_PROCESS_STATUSES = ["active", "suspended"] as const;
+
+/**
+ * Internal (routine): scheduled hearings of the organization within [from, until)
+ * whose process is in the active portfolio (archived or closed processes are
+ * neither alerted nor reminded; their open alerts are resolved by the routine).
+ * No user scope.
+ */
 export async function listScheduledHearingsForAlerts(
   organizationId: string,
   from: Date,
@@ -718,6 +771,7 @@ export async function listScheduledHearingsForAlerts(
         eq(legalProcesses.id, hearings.processId),
         eq(legalProcesses.organizationId, organizationId),
         isNull(legalProcesses.deletedAt),
+        inArray(legalProcesses.status, [...ALERTED_PROCESS_STATUSES]),
       ),
     )
     .leftJoin(users, and(eq(users.id, hearings.responsibleId), eq(users.organizationId, organizationId)))

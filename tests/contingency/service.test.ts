@@ -210,8 +210,9 @@ describe("valuations: append-only, review and mirrors (RN-08, RN-11, RF-09)", ()
 
   it("bulk approval only for confidence at or above the threshold (RN-11)", async () => {
     const id = await insertProcess();
-    const high = await proposeValuation(f.ctx.admin, { processId: id, kind: "claim", amountCents: 700_000, baseDate: d(-2), source: "simulation", confidence: 92 });
-    const low = await proposeValuation(f.ctx.admin, { processId: id, kind: "liquidated", amountCents: 200_000, baseDate: d(-2), source: "simulation", confidence: 40 });
+    // Spreadsheet proposals: simulated extractions are never bulk-approved (see tests/fixes/contingency-reports).
+    const high = await proposeValuation(f.ctx.admin, { processId: id, kind: "claim", amountCents: 700_000, baseDate: d(-2), source: "spreadsheet", confidence: 92 });
+    const low = await proposeValuation(f.ctx.admin, { processId: id, kind: "liquidated", amountCents: 200_000, baseDate: d(-2), source: "spreadsheet", confidence: 40 });
     const none = await proposeValuation(f.ctx.admin, { processId: id, kind: "fees", amountCents: 5_000, baseDate: d(-2), source: "manual" });
     const result = await bulkApproveValuations(f.ctx.accountant, [high.id, low.id, none.id]);
     expect(result.approved).toBe(1);
@@ -307,7 +308,8 @@ describe("review queue (TE-04)", () => {
       confidence: 95,
     });
     const high = await listReviewQueue(f.ctx.accountant, { confidence: "alta" });
-    expect(high.items.some((i) => i.id === p.id && i.bulkEligible)).toBe(true);
+    // Listed under "alta" by confidence, but a simulated extraction is never eligible for bulk approval.
+    expect(high.items.some((i) => i.id === p.id && !i.bulkEligible)).toBe(true);
     const low = await listReviewQueue(f.ctx.accountant, { confidence: "baixa" });
     expect(low.items.some((i) => i.id === p.id)).toBe(false);
     const bySource = await listReviewQueue(f.ctx.accountant, { source: "spreadsheet" });

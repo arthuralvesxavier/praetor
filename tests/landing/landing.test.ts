@@ -35,6 +35,15 @@ const { ProductPreview } = await import("@/components/landing/product-preview");
 const { FlowStepper } = await import("@/components/landing/flow-stepper");
 
 const DASHES = /[—–]/;
+
+/** Block titles of the real "Exige decisão agora" band, in order. */
+const DECISION_BAND_TITLES = [
+  "Audiências",
+  "Prazos fatais",
+  "Parcelas de acordo a vencer",
+  "Garantias sem movimentação",
+  "Valores pendentes de conferência",
+];
 const CNJ_PATTERN = /\b\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}\b/g;
 
 function decode(text: string): string {
@@ -169,9 +178,7 @@ describe("product preview and flow screens", () => {
   it("label the data as illustrative and render the four screens", () => {
     for (const p of previews) expect(textOf(p)).toContain("Dados ilustrativos");
     expect(textOf(previews[0])).toContain("Exige decisão agora");
-    for (const block of ["Audiências em 7 dias", "Prazos fatais", "Parcelas de acordo", "Garantias paradas", "Valores a conferir"]) {
-      expect(textOf(previews[0])).toContain(block);
-    }
+    for (const block of DECISION_BAND_TITLES) expect(textOf(previews[0])).toContain(block);
     // As in the real dashboard, coverage opens "Carteira de passivo", outside the decision band.
     const panel = textOf(previews[0]);
     expect(panel.indexOf("Cobertura do valor apurado")).toBeGreaterThan(panel.indexOf("Carteira de passivo"));
@@ -189,6 +196,19 @@ describe("product preview and flow screens", () => {
     expect(textOf(previews[2])).toContain("Não apurado");
   });
 
+  it("use the block titles of the real dashboard band, in the same order", () => {
+    const real = readFileSync(path.resolve("src/modules/dashboard/components/decision-band.tsx"), "utf8");
+    const realTitles = [...real.matchAll(/^ {4}title: "([^"]+)",$/gm)].map((m) => m[1]);
+    expect(realTitles).toEqual(DECISION_BAND_TITLES);
+    const all = textOf(previews[0]);
+    const panel = all.slice(all.indexOf("Exige decisão agora"));
+    const positions = DECISION_BAND_TITLES.map((t) => panel.indexOf(t));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    // The old shortened titles are gone.
+    for (const old of ["Audiências em 7 dias", "Garantias paradas", "Valores a conferir"]) expect(panel).not.toContain(old);
+  });
+
   it("show import issues with the real codes and levels of the parser", () => {
     const importScreen = textOf(steps[0]);
     const row = (level: keyof typeof ISSUE_LEVEL_LABELS, code: keyof typeof ISSUE_CODE_LABELS) =>
@@ -197,6 +217,9 @@ describe("product preview and flow screens", () => {
     expect(importScreen).toMatch(row("warning", "cnj_invalid_check_digit"));
     expect(importScreen).toMatch(row("warning", "duplicate_in_sheet"));
     expect(importScreen).toMatch(row("info", "court_derived"));
+    // The parser skips a repeated number (warning level), so the legend must not say every alert is imported.
+    expect(importScreen).toContain("Erro e número repetido: linha não importada.");
+    expect(importScreen).not.toContain("Alerta: conferir.");
   });
 
   it("use CNJ numbers with valid check digits", () => {

@@ -67,7 +67,7 @@ Leia antes: [MODULE_CONTRACTS.md](MODULE_CONTRACTS.md), [NEXTJS_16_NOTES.md](NEX
 
 ## 9. Navegação e permissões
 
-- [ ] Item em `src/lib/nav.ts` (`NAV_ITEMS`), com `permissions` (aparece com qualquer uma delas) e ícone `lucide-react`.
+- [ ] Item no grupo certo de `NAV_GROUPS` em `src/lib/nav.ts`, com `permissions` (aparece com qualquer uma delas) e ícone `lucide-react`.
 - [ ] Permissões novas em `src/server/auth/permissions.ts` (`PERMISSIONS`, `ROLE_PERMISSIONS`, `PERMISSION_LABELS`; foundation). Atualize a matriz em `docs/SECURITY.md`. A tela `/admin/permissoes` é gerada do código.
 - [ ] Rótulos de auditoria das novas ações em `src/modules/admin/history-format.ts` (senão o histórico mostra o id cru).
 
@@ -86,7 +86,8 @@ Leia antes: [MODULE_CONTRACTS.md](MODULE_CONTRACTS.md), [NEXTJS_16_NOTES.md](NEX
 
 ## 11. Documentação
 
-- [ ] `docs/STATUS.md` (implementado / simulado / pendente).
+- [ ] `docs/STATUS.md` (implementado / simulado / pendente) e, se o módulo atende requisitos do cliente, `docs/RASTREABILIDADE.md`.
+- [ ] Se o módulo depende de serviço externo ainda não contratado, coloque-o atrás de uma interface de provedor com implementação simulada e rotulada ([ADR-0010](../adr/0010-simulated-integrations-behind-interfaces.md)).
 - [ ] `docs/dev/MODULE_CONTRACTS.md` se o módulo expõe APIs ou parâmetros de URL para outros módulos.
 - [ ] `docs/DATA_MODEL.md` (tabela nova) e `docs/SECURITY.md` (regras de acesso).
 - [ ] `npm run validate` antes de entregar.

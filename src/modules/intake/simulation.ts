@@ -22,9 +22,9 @@ export const FICTITIOUS_PLAINTIFFS = [
 export const FALLBACK_COURT = { court: "TRT10", city: "Palmas", state: "TO", processClass: "ATOrd", origin: "0001" } as const;
 export const FALLBACK_DEFENDANT = "EMPRESA MODELO TESTE LTDA (dados fictícios)";
 
-export const SIMULATION_LABEL = "Chegada simulada — dados fictícios";
+export const SIMULATION_LABEL = "Chegada simulada com dados fictícios";
 export const SIMULATION_DESCRIPTION =
-  "Chegada simulada — dados fictícios. Processo gerado pela demonstração “Simular chegada de processo” para " +
+  "Chegada simulada com dados fictícios. Processo gerado pela demonstração “Simular chegada de processo” para " +
   "mostrar o fluxo de entrada, distribuição, análise preliminar e e-mail (ambos simulados). Não corresponde a " +
   "processo real e nenhum tribunal foi consultado.";
 

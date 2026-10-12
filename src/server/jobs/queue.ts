@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { JOB_TYPES, type JobType } from "@/domain/enums";
 import { getDb, type DbOrTx } from "@/server/db/client";
@@ -75,37 +75,66 @@ export async function claimJobs(
   opts: { organizationId?: string } = {},
 ): Promise<JobRow[]> {
   const n = Math.max(1, Math.min(100, Math.floor(limit)));
-  const due = db
-    .select({ id: jobs.id })
-    .from(jobs)
-    .where(
-      and(
-        eq(jobs.status, "queued"),
-        lte(jobs.runAt, sql`now()`),
-        opts.organizationId ? eq(jobs.organizationId, opts.organizationId) : undefined,
-      ),
-    )
-    .orderBy(asc(jobs.runAt), asc(jobs.createdAt))
-    .limit(n)
-    .for("update", { skipLocked: true });
-  const claimed = await db
-    .update(jobs)
-    .set({
-      status: "running",
-      attempts: sql`${jobs.attempts} + 1`,
-      lockedAt: sql`now()`,
-      lockedBy: workerId.slice(0, 120),
-    })
-    .where(and(inArray(jobs.id, due), eq(jobs.status, "queued")))
-    .returning();
-  return claimed.sort((a, b) => a.runAt.getTime() - b.runAt.getTime());
+  // Two statements in one transaction: the locked ids are read first, so the LIMIT is
+  // honored. (As an `IN (subquery … LIMIT n FOR UPDATE SKIP LOCKED)` the subquery can be
+  // re-scanned per row and claim more than `n` jobs.)
+  const claimed = await db.transaction(async (tx) => {
+    const due = await tx
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.status, "queued"),
+          lte(jobs.runAt, sql`now()`),
+          opts.organizationId ? eq(jobs.organizationId, opts.organizationId) : undefined,
+        ),
+      )
+      .orderBy(asc(jobs.runAt), asc(jobs.createdAt))
+      .limit(n)
+      .for("update", { skipLocked: true });
+    if (due.length === 0) return [];
+    return tx
+      .update(jobs)
+      .set({
+        status: "running",
+        attempts: sql`${jobs.attempts} + 1`,
+        lockedAt: sql`now()`,
+        lockedBy: workerId.slice(0, 120),
+      })
+      .where(and(inArray(jobs.id, due.map((d) => d.id)), eq(jobs.status, "queued")))
+      .returning();
+  });
+  return claimed.sort((a, b) => a.runAt.getTime() - b.runAt.getTime() || a.createdAt.getTime() - b.createdAt.getTime());
 }
 
-export async function completeJob(jobId: string, db: DbOrTx = getDb()): Promise<void> {
-  await db
+/**
+ * The execution that claimed a job: `claimJobs` sets `lockedBy` and increments
+ * `attempts`, so the pair identifies one claim. A job requeued by
+ * `recoverStuckJobs` and claimed again (by any consumer) has another pair.
+ */
+export type JobLease = { lockedBy: string | null; attempts: number };
+
+function leaseWhere(lease: JobLease) {
+  return and(
+    eq(jobs.status, "running"),
+    lease.lockedBy === null ? isNull(jobs.lockedBy) : eq(jobs.lockedBy, lease.lockedBy),
+    eq(jobs.attempts, lease.attempts),
+  );
+}
+
+/**
+ * Marks a job as succeeded. With `lease`, only while that execution still holds
+ * the job (status `running`, same `lockedBy` and `attempts`): a late finish of
+ * an execution that was recovered as stuck does not overwrite the new one.
+ * Returns whether the row was updated.
+ */
+export async function completeJob(jobId: string, db: DbOrTx = getDb(), lease?: JobLease): Promise<boolean> {
+  const rows = await db
     .update(jobs)
     .set({ status: "succeeded", completedAt: new Date(), lockedAt: null, lockedBy: null, lastError: null })
-    .where(eq(jobs.id, jobId));
+    .where(and(eq(jobs.id, jobId), lease ? leaseWhere(lease) : undefined))
+    .returning({ id: jobs.id });
+  return rows.length > 0;
 }
 
 /** Exponential backoff: 30s, 60s, 120s... capped at 30 minutes. */
@@ -138,26 +167,38 @@ export function isRetryableError(error: unknown): boolean {
   return true;
 }
 
+/**
+ * Records a failed execution: back to the queue with backoff, or `dead`. When
+ * the job carries `lockedBy` (a row returned by `claimJobs`), the update only
+ * applies while that execution still holds the job (see `completeJob`);
+ * otherwise nothing changes and `ignored` is returned.
+ */
 export async function failJob(
-  job: Pick<JobRow, "id" | "attempts" | "maxAttempts">,
+  job: Pick<JobRow, "id" | "attempts" | "maxAttempts"> & Partial<Pick<JobRow, "lockedBy">>,
   error: unknown,
   retryable: boolean,
   db: DbOrTx = getDb(),
-): Promise<{ status: "queued" | "dead"; runAt?: Date }> {
+): Promise<{ status: "queued" | "dead" | "ignored"; runAt?: Date }> {
   const lastError = safeErrorMessage(error).slice(0, 500);
+  const where = and(
+    eq(jobs.id, job.id),
+    job.lockedBy !== undefined ? leaseWhere({ lockedBy: job.lockedBy, attempts: job.attempts }) : undefined,
+  );
   if (!retryable || job.attempts >= job.maxAttempts) {
-    await db
+    const rows = await db
       .update(jobs)
       .set({ status: "dead", lastError, completedAt: new Date(), lockedAt: null, lockedBy: null })
-      .where(eq(jobs.id, job.id));
-    return { status: "dead" };
+      .where(where)
+      .returning({ id: jobs.id });
+    return rows.length > 0 ? { status: "dead" } : { status: "ignored" };
   }
   const runAt = new Date(Date.now() + backoffMs(job.attempts));
-  await db
+  const rows = await db
     .update(jobs)
     .set({ status: "queued", lastError, runAt, lockedAt: null, lockedBy: null })
-    .where(eq(jobs.id, job.id));
-  return { status: "queued", runAt };
+    .where(where)
+    .returning({ id: jobs.id });
+  return rows.length > 0 ? { status: "queued", runAt } : { status: "ignored" };
 }
 
 /** Puts back jobs left `running` by a crashed worker. Returns how many were recovered. */

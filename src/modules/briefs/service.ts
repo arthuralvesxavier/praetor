@@ -12,10 +12,16 @@
  *   only come from explicit user actions (deadlines pending validation,
  *   valuations `proposed`);
  * - audit entries and logs carry metadata only — never brief content, document
- *   text or excerpts.
+ *   text or excerpts; deadlines/tasks created from a brief carry document text
+ *   only in the gated `sourceExcerpt`, never in their description;
+ * - only the latest generated version of a process can be reviewed or applied
+ *   (older ones are "superseded"), and the intake of the process follows the
+ *   latest version (`case_intakes.brief_id`, moved by `requestCaseBrief`; the
+ *   intake pipeline is queued again when that version becomes ready).
  */
 import { createHash } from "node:crypto";
-import { and, asc, count, desc, eq, inArray, isNull, max, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, gt, inArray, isNotNull, isNull, max, ne, notExists, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import {
   CASE_BRIEF_DEMO_NOTICE,
@@ -32,6 +38,7 @@ import { normalizePage, type Page, type Paginated } from "@/domain/entities";
 import type { AiMode, CaseBriefStatus, DocumentCategory, Priority, ValuationKind } from "@/domain/enums";
 import { todayISO } from "@/lib/format";
 import { resolveAlertsByDedupeKeys, upsertAlert } from "@/modules/alerts/service";
+import { errorSummary } from "@/modules/documents/log";
 import { caseBriefWhere, documentWhere, processWhere } from "@/server/auth/access";
 import { systemContext, type AuthContext } from "@/server/auth/context";
 import { assertCan, can } from "@/server/auth/permissions";
@@ -52,6 +59,7 @@ import {
   processValuations,
   tasks,
   users,
+  type IntakeStep,
 } from "@/server/db/schema";
 import {
   getCaseBriefProvider,
@@ -121,6 +129,8 @@ export type CaseBriefListItem = {
   approvedAt: Date | null;
   createdAt: Date;
   counts: { contradictions: number; missingDocuments: number; urgencies: number } | null;
+  /** A newer version of the same process already has content: this one can no longer be reviewed or applied. */
+  superseded: boolean;
 };
 
 export type CaseBriefSourceItem = {
@@ -170,6 +180,10 @@ export type CaseBriefDetail = {
   sources: CaseBriefSourceItem[];
   revisions: CaseBriefRevisionItem[];
   otherVersions: { id: string; version: number; status: CaseBriefStatus; createdAt: Date }[];
+  /** A newer version of the same process already has content: this one can no longer be reviewed or applied. */
+  superseded: boolean;
+  /** Newest generated version visible to the user, when this one is superseded (null if it is not visible). */
+  latestVersion: { id: string; version: number } | null;
 };
 
 /** Statuses in which the content can be edited, approved or rejected. */
@@ -188,6 +202,9 @@ export function isStuckGenerating(createdAt: Date, now: Date = new Date()): bool
 }
 
 const UNEXPECTED_RUN_ERROR = "Falha inesperada ao gerar a análise preliminar. Tente gerar novamente.";
+export const SUPERSEDED_MESSAGE = "Existe uma versão mais recente desta análise preliminar. Revise a versão mais recente.";
+/** Statuses of a version that has content (generated). */
+const GENERATED_STATUSES: readonly CaseBriefStatus[] = ["ready_for_review", "in_review", "approved", "rejected"];
 const PROCESS_GONE_MESSAGE = "O processo foi excluído ou não está mais disponível.";
 const MAX_CONTENT_BYTES = 600_000;
 
@@ -275,7 +292,7 @@ function isDemoMode(mode: AiMode): boolean {
 /** Text that labels anything derived from a brief (simulated briefs are always demonstrative). */
 function originLabel(b: { version: number; mode: AiMode }): string {
   return isDemoMode(b.mode)
-    ? `análise preliminar v${b.version} — SIMULAÇÃO (conteúdo demonstrativo, sem inteligência artificial real)`
+    ? `análise preliminar v${b.version}, SIMULAÇÃO (conteúdo demonstrativo, sem inteligência artificial real)`
     : `análise preliminar v${b.version} (IA)`;
 }
 
@@ -287,6 +304,60 @@ async function loadVisibleBrief(ctx: AuthContext, id: string, db: DbOrTx = getDb
     .limit(1);
   if (!row) throw new NotFoundError("Análise preliminar não encontrada ou sem permissão de acesso.");
   return row;
+}
+
+// ---------------------------------------------------------------------------
+// Versions: only the latest generated version of a process is reviewed
+// ---------------------------------------------------------------------------
+
+type VersionRef = { organizationId: string; processId: string; version: number };
+
+const newerBrief = alias(caseBriefs, "newer_brief");
+
+/** Generated versions (with content) of the same process that are newer than `b`. */
+function newerGeneratedVersionsOf(b: VersionRef): SQL {
+  return and(
+    eq(newerBrief.organizationId, b.organizationId),
+    eq(newerBrief.processId, b.processId),
+    gt(newerBrief.version, b.version),
+    isNotNull(newerBrief.content),
+  )!;
+}
+
+/** Correlated SQL: the current `case_briefs` row is superseded by a newer generated version. */
+function supersededSql(): SQL {
+  return exists(
+    getDb()
+      .select({ one: sql`1` })
+      .from(newerBrief)
+      .where(
+        and(
+          eq(newerBrief.organizationId, caseBriefs.organizationId),
+          eq(newerBrief.processId, caseBriefs.processId),
+          gt(newerBrief.version, caseBriefs.version),
+          isNotNull(newerBrief.content),
+        ),
+      ),
+  );
+}
+
+/** Guard for review updates: no newer generated version of the process of `b` exists. */
+function notSupersededGuard(b: VersionRef): SQL {
+  return notExists(getDb().select({ one: sql`1` }).from(newerBrief).where(newerGeneratedVersionsOf(b)));
+}
+
+/** A newer version of the same process already has content (whatever its visibility). */
+async function isSuperseded(b: VersionRef, db: DbOrTx = getDb()): Promise<boolean> {
+  const [newer] = await db.select({ id: newerBrief.id }).from(newerBrief).where(newerGeneratedVersionsOf(b)).limit(1);
+  return !!newer;
+}
+
+/**
+ * A superseded version can no longer be edited, approved, rejected or
+ * applied: the process and its intake follow the latest version.
+ */
+async function assertLatestVersion(b: VersionRef, db: DbOrTx = getDb()): Promise<void> {
+  if (await isSuperseded(b, db)) throw new ConflictError(SUPERSEDED_MESSAGE);
 }
 
 // ---------------------------------------------------------------------------
@@ -536,15 +607,25 @@ async function sourceInfoForBrief(briefId: string, organizationId: string, db: D
  * Creates a new brief version for the process and generates it. `inline: true`
  * generates synchronously (used by the intake pipeline, which already runs in a
  * job); otherwise a `case_brief.generate` job is enqueued. Requires
- * `brief:review` or `intake:manage` (system context allowed). When a version is
- * already being generated for the process, that one is returned.
+ * `brief:review`; `intake:manage` alone (analysts) is accepted only with the
+ * `intakeId` of an intake of that process (the intake page). System context
+ * allowed. When a version is already being generated for the process (and is
+ * visible to ctx), that one is returned.
+ *
+ * Without `intakeId`, an intake of the process that follows an older version
+ * (not cancelled, its brief not approved) is moved to the new version in the
+ * same transaction (`case_intakes.brief_id`, status "analyzing", e-mail step
+ * reopened, step appended): the intake always follows the latest version.
  */
 export async function requestCaseBrief(
   ctx: AuthContext,
   processId: string,
   opts: { intakeId?: string | null; inline?: boolean } = {},
 ): Promise<{ briefId: string; status: CaseBriefStatus }> {
-  if (!can(ctx, "brief:review") && !can(ctx, "intake:manage")) throw new ForbiddenError();
+  if (!can(ctx, "brief:review")) {
+    // A new version supersedes the lawyer's review: analysts only generate it from the intake page.
+    if (!can(ctx, "intake:manage") || !opts.intakeId) throw new ForbiddenError();
+  }
   const v = parseOrThrow(requestBriefSchema, { processId, intakeId: opts.intakeId ?? null, inline: opts.inline });
   const db = getDb();
 
@@ -611,12 +692,15 @@ export async function requestCaseBrief(
       const candidateHash = sha256(
         canonical({ provider: provider.name, model: provider.model, prompt: provider.promptVersion, docs: docs.map((d) => d.versionId) }),
       );
+      // The intake page passes its intake (and links it itself); any other request moves the
+      // intake that still follows an older, not approved version to this one.
+      const relinked = v.intakeId ? [] : await intakesFollowingOlderVersion(tx, ctx.organizationId, process.id);
       const [row] = await tx
         .insert(caseBriefs)
         .values({
           organizationId: ctx.organizationId,
           processId: process.id,
-          intakeId: v.intakeId ?? null,
+          intakeId: v.intakeId ?? relinked[0] ?? null,
           version,
           status: "generating",
           mode: provider.mode,
@@ -650,6 +734,26 @@ export async function requestCaseBrief(
           contentHash: "pending",
         })),
       ]);
+      if (relinked.length) {
+        const step: IntakeStep = {
+          status: "analyzing",
+          at: new Date().toISOString(),
+          detail:
+            `Nova versão da análise preliminar (versão ${version}) solicitada por ${ctx.name} na análise preliminar do processo` +
+            `${provider.mode === "demo" ? " (simulação)" : ""}. A entrada passa a acompanhar esta versão e o e-mail ao advogado será refeito quando ela ficar pronta.`,
+          actorName: ctx.name,
+        };
+        await tx
+          .update(caseIntakes)
+          .set({
+            briefId: row.id,
+            status: "analyzing",
+            errorMessage: null,
+            lastEmailId: null,
+            steps: sql`${caseIntakes.steps} || ${JSON.stringify([step])}::jsonb`,
+          })
+          .where(and(eq(caseIntakes.organizationId, ctx.organizationId), inArray(caseIntakes.id, relinked)));
+      }
       await recordAudit(
         ctx,
         {
@@ -657,7 +761,14 @@ export async function requestCaseBrief(
           entityType: "case_brief",
           entityId: row.id,
           summary: `Análise preliminar (versão ${version}) solicitada para o processo ${process.number}.`,
-          metadata: { processId: process.id, version, documentCount: docs.length, intakeId: v.intakeId ?? null, inline: !!v.inline },
+          metadata: {
+            processId: process.id,
+            version,
+            documentCount: docs.length,
+            intakeId: v.intakeId ?? relinked[0] ?? null,
+            relinkedIntakes: relinked.length,
+            inline: !!v.inline,
+          },
         },
         tx,
       );
@@ -690,6 +801,57 @@ export async function requestCaseBrief(
   }
   const [after] = await db.select({ status: caseBriefs.status }).from(caseBriefs).where(eq(caseBriefs.id, briefId));
   return { briefId, status: after?.status ?? "failed" };
+}
+
+/**
+ * Intakes of the process bound to an older version that is not approved (and
+ * not cancelled). Intakes without a brief are left to their own pipeline.
+ */
+async function intakesFollowingOlderVersion(db: DbOrTx, organizationId: string, processId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: caseIntakes.id })
+    .from(caseIntakes)
+    .innerJoin(caseBriefs, and(eq(caseBriefs.id, caseIntakes.briefId), eq(caseBriefs.organizationId, caseIntakes.organizationId)))
+    .where(
+      and(
+        eq(caseIntakes.organizationId, organizationId),
+        eq(caseIntakes.processId, processId),
+        ne(caseIntakes.status, "cancelled"),
+        ne(caseBriefs.status, "approved"),
+      ),
+    )
+    .orderBy(desc(caseIntakes.receivedAt));
+  return rows.map((r) => r.id);
+}
+
+/** Enqueues the intake pipeline (e-mail step) of intakes that follow a version that just became ready. */
+async function resumeIntakes(organizationId: string, briefId: string, intakeIds: string[]): Promise<void> {
+  for (const intakeId of intakeIds) {
+    try {
+      // Same dedupe key as the intake module: an already queued run is reused.
+      await enqueueJob({ type: "intake.process", organizationId, payload: { intakeId }, dedupeKey: `intake.process:${intakeId}` });
+    } catch (err) {
+      // The brief is already stored; "Continuar processamento" on the intake page resumes it.
+      logger.warn("case_brief_intake_resume_failed", { briefId, intakeId, errorName: err instanceof Error ? err.name : typeof err });
+    }
+  }
+}
+
+/**
+ * After a version becomes `ready_for_review` (post-commit, best effort): its
+ * pedidos become SUGGESTIONS in the process through the claims module (origin
+ * `ai_suggested`, pending confirmation; never counted in the risk until a
+ * person confirms them; idempotent). A failure is logged without content and
+ * never fails the brief: the claims panel still offers the import by hand.
+ */
+async function suggestClaimsFromReadyBrief(organizationId: string, briefId: string): Promise<void> {
+  try {
+    const { suggestClaimsFromBriefAsSystem } = await import("@/modules/claims/service");
+    const { created, skipped } = await suggestClaimsFromBriefAsSystem(organizationId, briefId);
+    if (created > 0) logger.info("case_brief_claims_suggested", { briefId, created, skipped });
+  } catch (err) {
+    logger.warn("case_brief_claims_suggest_failed", { briefId, ...errorSummary(err) });
+  }
 }
 
 class AlreadyProcessed extends Error {}
@@ -847,7 +1009,7 @@ export async function runCaseBriefJob(briefId: string, opts: { attempt: number; 
       .where(eq(legalProcesses.id, b.processId))
       .limit(1);
 
-    await db.transaction(async (tx) => {
+    const intakesToResume = await db.transaction(async (tx) => {
       const now = new Date();
       const updated = await tx
         .update(caseBriefs)
@@ -906,7 +1068,7 @@ export async function runCaseBriefJob(briefId: string, opts: { attempt: number; 
           title: `${demo ? "[Simulação] " : ""}Análise preliminar pronta para revisão`,
           message:
             `A análise preliminar (versão ${b.version}) do processo ${process?.number ?? ""} está pronta para revisão do advogado` +
-            `${demo ? " — gerada por simulação, conteúdo demonstrativo" : ""}. ` +
+            `${demo ? " (gerada por simulação, conteúdo demonstrativo)" : ""}. ` +
             `${stored.urgencies.length} urgência(s) e ${stored.missingDocuments.length} documento(s) faltante(s) apontados.`,
           entityType: "case_brief",
           entityId: b.id,
@@ -933,8 +1095,29 @@ export async function runCaseBriefJob(briefId: string, opts: { attempt: number; 
         },
         tx,
       );
+
+      // Intakes following this version (moved here by requestCaseBrief, or one that reused this
+      // generation while it was running) continue: "brief_ready" now, the e-mail step via the
+      // intake.process job enqueued after the commit. Never on failure (the intake retries itself).
+      const readyStep: IntakeStep = {
+        status: "brief_ready",
+        at: now.toISOString(),
+        detail: `Análise preliminar versão ${b.version} gerada${demo ? " pela simulação" : ""} e pronta para revisão do advogado.`,
+        actorName: demo ? "Sistema (simulação)" : "Sistema",
+      };
+      await tx
+        .update(caseIntakes)
+        .set({ status: "brief_ready", errorMessage: null, steps: sql`${caseIntakes.steps} || ${JSON.stringify([readyStep])}::jsonb` })
+        .where(and(eq(caseIntakes.organizationId, b.organizationId), eq(caseIntakes.briefId, b.id), eq(caseIntakes.status, "analyzing")));
+      const following = await tx
+        .select({ id: caseIntakes.id })
+        .from(caseIntakes)
+        .where(and(eq(caseIntakes.organizationId, b.organizationId), eq(caseIntakes.briefId, b.id), ne(caseIntakes.status, "cancelled")));
+      return following.map((r) => r.id);
     });
     logger.info("case_brief_generated", { briefId: b.id, documents: docSources.length, dropped });
+    await suggestClaimsFromReadyBrief(b.organizationId, b.id);
+    await resumeIntakes(b.organizationId, b.id, intakesToResume);
   } catch (err) {
     if (err instanceof AlreadyProcessed) return;
     const retryable = err instanceof AiProviderError ? err.retryable : !(err instanceof AppError);
@@ -993,13 +1176,19 @@ function contentCounts(content: StoredCaseBrief | null): CaseBriefListItem["coun
   };
 }
 
-/** Review queue (`brief:read`). Filters by status, process responsible and process. */
+/**
+ * Review queue (`brief:read`). Filters by status, process responsible and
+ * process. Filtering by a review status (ready for review / in review) lists
+ * only the latest generated version of each process: superseded versions are
+ * no longer reviewable (`superseded` marks them in unfiltered lists).
+ */
 export async function listCaseBriefs(ctx: AuthContext, filters: ListBriefsFilters & Page = {}): Promise<Paginated<CaseBriefListItem>> {
   assertCan(ctx, "brief:read");
   const f = parseOrThrow(listBriefsSchema, filters ?? {});
   const { page, pageSize, offset } = normalizePage(f);
   const conds: (SQL | undefined)[] = [caseBriefWhere(ctx)];
   if (f.status) conds.push(eq(caseBriefs.status, f.status));
+  if (f.status && REVIEWABLE_STATUSES.includes(f.status)) conds.push(sql`not ${supersededSql()}`);
   if (f.processId) conds.push(eq(caseBriefs.processId, f.processId));
   if (f.responsibleId) conds.push(eq(legalProcesses.responsibleId, f.responsibleId));
   if (f.staleOnly) conds.push(eq(caseBriefs.isStale, true));
@@ -1023,6 +1212,7 @@ export async function listCaseBriefs(ctx: AuthContext, filters: ListBriefsFilter
           createdAt: caseBriefs.createdAt,
           content: caseBriefs.content,
         },
+        superseded: sql<boolean>`${supersededSql()}`,
         processNumber: legalProcesses.number,
         processTitle: legalProcesses.title,
         responsibleId: legalProcesses.responsibleId,
@@ -1052,6 +1242,7 @@ export async function listCaseBriefs(ctx: AuthContext, filters: ListBriefsFilter
       approvedAt: r.b.approvedAt,
       createdAt: r.b.createdAt,
       counts: contentCounts(r.b.content),
+      superseded: r.superseded === true,
     })),
     total: Number(total),
     page,
@@ -1059,13 +1250,13 @@ export async function listCaseBriefs(ctx: AuthContext, filters: ListBriefsFilter
   };
 }
 
-/** Number of visible briefs per status (queue header). */
+/** Number of visible briefs per status (queue header); review statuses count only non-superseded versions. */
 export async function countCaseBriefsByStatus(ctx: AuthContext): Promise<Record<CaseBriefStatus, number>> {
   assertCan(ctx, "brief:read");
   const rows = await getDb()
     .select({ status: caseBriefs.status, total: count() })
     .from(caseBriefs)
-    .where(caseBriefWhere(ctx))
+    .where(and(caseBriefWhere(ctx), or(notInArray(caseBriefs.status, [...REVIEWABLE_STATUSES]), sql`not ${supersededSql()}`)))
     .groupBy(caseBriefs.status);
   const out: Record<CaseBriefStatus, number> = {
     generating: 0,
@@ -1095,7 +1286,7 @@ export async function getCaseBrief(ctx: AuthContext, id: string): Promise<CaseBr
     .limit(1);
   if (!process) throw new NotFoundError();
 
-  const [sources, revisions, others] = await Promise.all([
+  const [sources, revisions, others, superseded] = await Promise.all([
     db
       .select()
       .from(caseBriefSources)
@@ -1115,7 +1306,11 @@ export async function getCaseBrief(ctx: AuthContext, id: string): Promise<CaseBr
       .from(caseBriefs)
       .where(and(eq(caseBriefs.processId, b.processId), caseBriefWhere(ctx)))
       .orderBy(desc(caseBriefs.version)),
+    isSuperseded(b),
   ]);
+  const latestVisible = superseded
+    ? (others.find((o) => o.version > b.version && GENERATED_STATUSES.includes(o.status)) ?? null)
+    : null;
   const names = await userNames(ctx.organizationId, [
     b.requestedById,
     b.lastEditedById,
@@ -1170,6 +1365,8 @@ export async function getCaseBrief(ctx: AuthContext, id: string): Promise<CaseBr
       createdAt: r.createdAt,
     })),
     otherVersions: others,
+    superseded,
+    latestVersion: latestVisible ? { id: latestVisible.id, version: latestVisible.version } : null,
   };
 }
 
@@ -1400,6 +1597,7 @@ async function storeRevision(
           eq(caseBriefs.organizationId, ctx.organizationId),
           eq(caseBriefs.currentRevision, b.currentRevision),
           inArray(caseBriefs.status, [...REVIEWABLE_STATUSES]),
+          notSupersededGuard(b),
         ),
       )
       .returning({ id: caseBriefs.id });
@@ -1420,7 +1618,7 @@ async function storeRevision(
         action: "case_brief.edit",
         entityType: "case_brief",
         entityId: b.id,
-        summary: `Análise preliminar (versão ${b.version}) editada pelo advogado — revisão ${revision}.`,
+        summary: `Análise preliminar (versão ${b.version}) editada pelo advogado: revisão ${revision}.`,
         changes: b.status !== "in_review" ? { status: { from: b.status, to: "in_review" } } : null,
         // Section keys only: the content itself is never audited.
         metadata: { revision, sections: changedSections, reviewerItems: changedItems },
@@ -1447,6 +1645,7 @@ export async function saveCaseBriefRevision(
   if (!parsed.success) throw new ValidationError("O conteúdo da análise é inválido. Recarregue a página e tente novamente.");
   const b = await loadVisibleBrief(ctx, id);
   assertReviewable(b);
+  await assertLatestVersion(b);
   return storeRevision(ctx, b, parsed.data, meta);
 }
 
@@ -1461,6 +1660,7 @@ export async function saveCaseBriefSection(
   const meta = parseOrThrow(revisionMetaSchema, { baseRevision: input?.baseRevision, changeNote: input?.changeNote });
   const b = await loadVisibleBrief(ctx, id);
   assertReviewable(b);
+  await assertLatestVersion(b);
   const schema =
     section === "headline"
       ? z.string().trim().min(1, "Informe o resumo.").max(3000, "O resumo pode ter no máximo 3.000 caracteres.")
@@ -1480,6 +1680,7 @@ export async function approveCaseBrief(ctx: AuthContext, id: string, input: { no
   const v = parseOrThrow(approveBriefSchema, input ?? {});
   const b = await loadVisibleBrief(ctx, id);
   assertReviewable(b);
+  await assertLatestVersion(b);
   await getDb().transaction(async (tx) => {
     const now = new Date();
     const updated = await tx
@@ -1490,6 +1691,7 @@ export async function approveCaseBrief(ctx: AuthContext, id: string, input: { no
           eq(caseBriefs.id, b.id),
           eq(caseBriefs.organizationId, ctx.organizationId),
           inArray(caseBriefs.status, [...REVIEWABLE_STATUSES]),
+          notSupersededGuard(b),
         ),
       )
       .returning({ id: caseBriefs.id });
@@ -1515,6 +1717,7 @@ export async function rejectCaseBrief(ctx: AuthContext, id: string, input: { rea
   const v = parseOrThrow(rejectBriefSchema, input ?? {});
   const b = await loadVisibleBrief(ctx, id);
   assertReviewable(b);
+  await assertLatestVersion(b);
   await getDb().transaction(async (tx) => {
     const now = new Date();
     const updated = await tx
@@ -1525,6 +1728,7 @@ export async function rejectCaseBrief(ctx: AuthContext, id: string, input: { rea
           eq(caseBriefs.id, b.id),
           eq(caseBriefs.organizationId, ctx.organizationId),
           inArray(caseBriefs.status, [...REVIEWABLE_STATUSES]),
+          notSupersededGuard(b),
         ),
       )
       .returning({ id: caseBriefs.id });
@@ -1560,6 +1764,7 @@ async function loadApplicableBrief(ctx: AuthContext, briefId: string): Promise<B
   if (!b.content || !APPLICABLE_STATUSES.includes(b.status)) {
     throw new ConflictError("Somente análises prontas, em revisão ou aprovadas podem gerar prazos, tarefas ou valores.");
   }
+  await assertLatestVersion(b);
   return b as BriefRow & { content: StoredCaseBrief };
 }
 
@@ -1599,9 +1804,11 @@ export async function applyBriefDeadline(ctx: AuthContext, briefId: string, inde
     .limit(1);
   if (dup) throw new ConflictError("Este possível prazo já foi enviado para validação.");
 
+  // The basis quotes the document: it goes only to `sourceExcerpt`, which the work module shows
+  // only to whoever can open this brief (and so its sources). The description stays document-free.
   const excerpt = d.citations.find((c) => c.excerpt)?.excerpt ?? d.basis;
   const description =
-    `${d.basis.trim()}\n\nOrigem: ${originLabel(b)}; fonte: ${citationLabel(d.citations)}. ` +
+    `Possível prazo da ${originLabel(b)}; fonte: ${citationLabel(d.citations)}. ` +
     "Data copiada do documento, não calculada: confirme o prazo antes de validar.";
   const input = {
     title,
@@ -1647,9 +1854,11 @@ export async function applyBriefNextStep(ctx: AuthContext, briefId: string, inde
     .limit(1);
   if (dup) throw new ConflictError("Esta tarefa já foi criada a partir da análise.");
 
+  // Neither the note nor citation excerpts are copied (they may quote the documents, and the task
+  // follows only the process visibility); the step itself is the title. Details stay in the brief.
   const description =
-    `${step.description.trim()}${step.note ? `\n\nObservação: ${step.note}` : ""}\n\n` +
-    `Sugestão da ${originLabel(b)}; fonte: ${citationLabel(step.citations)}.`;
+    `Sugestão da ${originLabel(b)}; fonte: ${citationLabel(step.citations)}.` +
+    `${title !== step.description.replace(/\s+/g, " ").trim() ? " O texto completo do passo está na análise preliminar." : ""}`;
   const priority: Priority = step.priority;
   const input = {
     title,
@@ -1761,7 +1970,7 @@ export async function proposeBriefAmount(ctx: AuthContext, briefId: string, inde
     page: citation.page,
     excerpt: citation.excerpt ? clip(citation.excerpt, 500) : null,
     confidence: profile.confidence,
-    reason: `${amount.label} — enviado da ${originLabel(b)}. Conferir no documento antes de oficializar.`.slice(0, 1000),
+    reason: `${amount.label}: enviado da ${originLabel(b)}. Conferir no documento antes de oficializar.`.slice(0, 1000),
     briefId: b.id,
     isEstimate: profile.isEstimate,
   });

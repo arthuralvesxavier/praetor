@@ -70,16 +70,24 @@ export default async function ImportBatchesPage(props: PageProps<"/importacoes">
                       {b.fileName}
                     </Link>
                   </TableCell>
-                  <TableCell>{b.companyName ?? "—"}</TableCell>
+                  <TableCell>{b.companyName ?? <span className="text-muted-foreground">Não informada</span>}</TableCell>
                   <TableCell>
                     <BatchStatusBadge status={b.status} />
                   </TableCell>
-                  <TableCell className="text-right">{formatNumber(b.stats?.processesDetected)}</TableCell>
-                  <TableCell className="text-right">{formatNumber(b.stats?.toCreate)}</TableCell>
-                  <TableCell className="text-right">{formatNumber(b.stats?.toUpdate)}</TableCell>
-                  <TableCell className="text-right">{formatNumber(b.stats?.errors)}</TableCell>
-                  <TableCell className="text-right">{formatNumber(b.stats?.divergences)}</TableCell>
-                  <TableCell>{b.createdByName ?? "—"}</TableCell>
+                  {b.stats ? (
+                    <>
+                      <TableCell className="text-right">{formatNumber(b.stats.processesDetected)}</TableCell>
+                      <TableCell className="text-right">{formatNumber(b.stats.toCreate)}</TableCell>
+                      <TableCell className="text-right">{formatNumber(b.stats.toUpdate)}</TableCell>
+                      <TableCell className="text-right">{formatNumber(b.stats.errors)}</TableCell>
+                      <TableCell className="text-right">{formatNumber(b.stats.divergences)}</TableCell>
+                    </>
+                  ) : (
+                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                      Contagens não calculadas
+                    </TableCell>
+                  )}
+                  <TableCell>{b.createdByName ?? <span className="text-muted-foreground">Não informado</span>}</TableCell>
                   <TableCell className="whitespace-nowrap">{formatDateTime(b.createdAt)}</TableCell>
                 </TableRow>
               ))

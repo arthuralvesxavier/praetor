@@ -36,7 +36,7 @@ export function AutoRefresh({
       {running ? (
         <>
           <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />
-          Processamento em andamento — esta página se atualiza sozinha.
+          Processamento em andamento. Esta página se atualiza sozinha.
         </>
       ) : (
         <>O processamento está demorando. Recarregue a página para ver o andamento.</>

@@ -19,6 +19,7 @@ import { FormMessage } from "@/components/ui/form-message";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/select";
 import { SubmitButton } from "@/components/ui/submit-button";
+import { usePreservingSubmit } from "@/components/ui/use-preserving-submit";
 import { PROCESS_INSTANCE_LABELS, PROCESS_PHASE_LABELS } from "@/domain/enums";
 import { fieldError } from "@/lib/form";
 import { optionsFromLabels } from "@/lib/options";
@@ -92,12 +93,14 @@ function InstanceForm<S extends ValuesFormState>({
     if (result.ok) onDone();
     return result;
   }, null);
+  // No automatic reset on error: grau, UF and fase stay selected.
+  const onSubmit = usePreservingSubmit(formAction);
   const sent = state && !state.ok ? state.values : undefined;
   const val = (key: Exclude<keyof InstanceDefaults, "isCurrent">) => (sent ? (sent[key] ?? "") : defaults[key]);
   const err = (field: string) => fieldError(state, field);
 
   return (
-    <form action={formAction} className="flex flex-col gap-4" noValidate>
+    <form action={formAction} onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
       <DialogHeader>
         <DialogTitle>{mode === "add" ? "Incluir instância" : "Editar instância"}</DialogTitle>
         <DialogDescription>

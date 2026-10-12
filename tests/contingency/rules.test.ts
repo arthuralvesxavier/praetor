@@ -63,6 +63,17 @@ describe("suggestRiskByRule (RF-12)", () => {
     expect(suggestRiskByRule({ ...base, phase: "enforcement" }).classification).toBe("probable");
     expect(suggestRiskByRule({ ...base, liquidatedCents: 10_000 }).classification).toBe("probable");
   });
+  it("appeal is the INSTANCE (2º/3º grau), not a phase: knowledge in grau de recurso stays possível (P0.5)", () => {
+    const second = suggestRiskByRule({ ...base, instance: "second" });
+    expect(second.classification).toBe("possible");
+    expect(second.factors[0]).toBe("o processo está na fase de conhecimento em grau de recurso (2º grau), com resultado ainda reversível");
+    expect(suggestRiskByRule({ ...base, instance: "superior" }).factors[0]).toContain("(3º grau)");
+    expect(suggestRiskByRule({ ...base, instance: null }).factors[0]).toBe("o processo está em fase de conhecimento, sem condenação definida");
+    // An appellate instance never lowers a materialized phase: liquidação/execução stay provável.
+    expect(suggestRiskByRule({ ...base, phase: "liquidation", instance: "superior" }).classification).toBe("probable");
+    const opinion = ruleSuggestionOpinion(second, 3, "50%");
+    expect(opinion).not.toMatch(/recursal|pré-ajuizamento|acordo em andamento/i);
+  });
   it("closed process or zeroed value → remota", () => {
     expect(suggestRiskByRule({ ...base, status: "closed", closureReason: "paid_extinct" }).classification).toBe("remote");
     expect(suggestRiskByRule({ ...base, liquidatedCents: 0 }).classification).toBe("remote");
@@ -183,7 +194,8 @@ describe("CSV export", () => {
       totalsAreOrganizationWide: true,
     });
     expect(csv.startsWith("﻿")).toBe(true);
-    expect(csv).toContain("ATENÇÃO (RN-07): 1 processo(s)");
+    expect(csv).toContain("ATENÇÃO: 1 processo(s) com valores ESTIMADOS.");
+    expect(csv).not.toMatch(/—|\b(RN|RF|TE)-\d/);
     expect(csv).toContain("2 processo(s) sigiloso(s) não listado(s)");
     const lines = csv.split("\r\n");
     const data = lines.find((l) => l.startsWith("0000001"))!;
@@ -198,7 +210,7 @@ describe("CSV export", () => {
   });
 
   it("explains the calculation per process", () => {
-    expect(calculationMemo(row({}))).toContain("ESTIMATIVA (RN-07)");
+    expect(calculationMemo(row({}))).toContain("ESTIMATIVA: sem valor liquidado");
     expect(
       calculationMemo(row({ liquidatedAmountCents: 300_000, guaranteesCents: 100_000, percentageBp: 10_000 })),
     ).toContain("− garantias vinculadas");

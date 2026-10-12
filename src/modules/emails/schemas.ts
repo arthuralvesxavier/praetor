@@ -50,6 +50,7 @@ export const templateDataSchemas = {
     missingDocumentsCount: count,
     isDemo: z.boolean(),
     briefVersion: z.number().int().min(1),
+    digestOmitted: z.boolean().optional(),
   }),
   intake_assigned: z.object({
     processNumber: clip(60).pipe(z.string().min(1)),

@@ -18,23 +18,41 @@
 import { and, asc, count, desc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { emptyBucket, percentToBp, periodReferenceDate, previousPeriod, type BucketItem } from "@/domain/contingency";
+import {
+  emptyBasisCounts,
+  emptyBucket,
+  exposureBasisCounts,
+  percentToBp,
+  periodReferenceDate,
+  previousPeriod,
+  type AmountBasisCounts,
+  type BucketItem,
+} from "@/domain/contingency";
 import {
   CLOSURE_REASON_LABELS,
+  CORRECTION_INDEX_LABELS,
+  type CorrectionIndex,
   PROCESS_INSTANCE_LABELS,
-  PROCESS_PHASE_LABELS,
   PROCESS_STATUS_LABELS,
   VALUATION_KIND_LABELS,
   VALUATION_SOURCE_LABELS,
   type ClosureReason,
   type LossProbability,
   type ProcessInstance,
-  type ProcessPhase,
   type ProcessStatus,
   type SnapshotStatus,
+  type StoredProcessPhase,
+  isProcessPhase,
+  processPhaseLabel,
 } from "@/domain/enums";
-import { addDaysISO, formatDate, formatMonthYear, toISODate, todayISO } from "@/lib/format";
-import { hasOrganizationWideScope, processWhere, seesConfidential, valuationWhere } from "@/server/auth/access";
+import { addDaysISO, formatDate, formatMoneyCents, formatMonthYear, formatNumber, toISODate, todayISO } from "@/lib/format";
+import {
+  canViewScopedRecord,
+  hasOrganizationWideScope,
+  processWhere,
+  seesConfidential,
+  valuationWhere,
+} from "@/server/auth/access";
 import type { AuthContext } from "@/server/auth/context";
 import { assertCan } from "@/server/auth/permissions";
 import { getDb } from "@/server/db/client";
@@ -87,6 +105,7 @@ import {
   type PreviousPosition,
   type ProvisionAmounts,
   type ProvisionClassRow,
+  type ProvisionPreviousPosition,
   type ProvisionItem,
   type ProvisionMovementKind,
   type ProvisionReport,
@@ -280,21 +299,42 @@ type SnapshotItem = SnapshotPosition & {
   unitId: string | null;
   court: string | null;
   instance: ProcessInstance | null;
-  phase: ProcessPhase | null;
+  /** Closed competências keep the phase frozen at the close, possibly of the previous model (RN-10). */
+  phase: StoredProcessPhase | null;
   city: string | null;
   classification: LossProbability | null;
   percentageBp: number | null;
+  /** CLOSED competência whose process was deleted (or rolled back) afterwards: the row stays (RN-10). */
+  deletedAfterClose: boolean;
 };
 
-/** Items of a snapshot whose process is visible to ctx (current visibility), with the company/unit filters. */
-async function loadSnapshotItems(ctx: AuthContext, snapshotId: string, f: ReportFilters): Promise<SnapshotItem[]> {
+/** Caveat of a row whose process was deleted after the close (audit letter). */
+export const DELETED_AFTER_CLOSE_CAVEAT =
+  "Processo excluído do sistema após o fechamento da competência: mantida a posição registrada no fechamento.";
+
+/**
+ * Items of a snapshot visible to ctx, with the company/unit filters.
+ *  - PREVIEW: current visibility (`processWhere`, deleted processes excluded) — it is recalculable.
+ *  - CLOSED (immutable, RN-10): the same row rule WITHOUT the soft-delete condition, so a
+ *    process deleted or rolled back after the close keeps its row (flagged `deletedAfterClose`);
+ *    roles that see confidential records get every item, like the monthly-close screen.
+ */
+async function loadSnapshotItems(ctx: AuthContext, snap: SnapshotRow, f: ReportFilters): Promise<SnapshotItem[]> {
   const i = portfolioSnapshotItems;
-  return getDb()
+  const closed = snap.status === "closed";
+  const rows = await getDb()
     .select({
       processId: i.processId,
       number: i.number,
       title: legalProcesses.title,
       courtDivision: legalProcesses.courtDivision,
+      pOrganizationId: legalProcesses.organizationId,
+      pUnitId: legalProcesses.unitId,
+      pResponsibleId: legalProcesses.responsibleId,
+      pCreatedById: legalProcesses.createdById,
+      pIsConfidential: legalProcesses.isConfidential,
+      pLawFirmId: legalProcesses.lawFirmId,
+      pDeletedAt: legalProcesses.deletedAt,
       companyId: i.companyId,
       unitId: i.unitId,
       court: i.court,
@@ -312,16 +352,56 @@ async function loadSnapshotItems(ctx: AuthContext, snapshotId: string, f: Report
       provisionIsEstimate: i.provisionIsEstimate,
     })
     .from(i)
-    .innerJoin(legalProcesses, and(eq(legalProcesses.id, i.processId), processWhere(ctx)))
+    .leftJoin(
+      legalProcesses,
+      closed
+        ? and(eq(legalProcesses.id, i.processId), eq(legalProcesses.organizationId, ctx.organizationId))
+        : and(eq(legalProcesses.id, i.processId), processWhere(ctx)),
+    )
     .where(
       and(
-        eq(i.snapshotId, snapshotId),
+        eq(i.snapshotId, snap.id),
         eq(i.organizationId, ctx.organizationId),
         f.companyId ? eq(i.companyId, f.companyId) : undefined,
         f.unitId ? eq(i.unitId, f.unitId) : undefined,
       ),
     )
     .orderBy(asc(i.number));
+  const all = seesConfidential(ctx);
+  const out: SnapshotItem[] = [];
+  for (const r of rows) {
+    // No joined process: not visible now (preview) or not of this organization.
+    if (r.pOrganizationId === null) continue;
+    if (
+      closed &&
+      !all &&
+      !canViewScopedRecord(ctx, {
+        organizationId: r.pOrganizationId,
+        unitId: r.pUnitId,
+        responsibleId: r.pResponsibleId,
+        createdById: r.pCreatedById,
+        isConfidential: r.pIsConfidential ?? true,
+        lawFirmId: r.pLawFirmId,
+        deletedAt: null,
+      })
+    ) {
+      continue;
+    }
+    const {
+      pOrganizationId: _o,
+      pUnitId: _u,
+      pResponsibleId: _r,
+      pCreatedById: _c,
+      pIsConfidential: _i,
+      pLawFirmId: _l,
+      pDeletedAt,
+      title,
+      ...item
+    } = r;
+    void [_o, _u, _r, _c, _i, _l];
+    out.push({ ...item, title: title ?? "", deletedAfterClose: closed && pDeletedAt !== null });
+  }
+  return out;
 }
 
 function exposureFilters(f: ReportFilters) {
@@ -383,7 +463,7 @@ type Grouping = { key: string; label: string };
 
 function dimensionGroup(
   dim: ExposureDimension,
-  v: { court: string | null; city: string | null; phase: ProcessPhase | null; instance: ProcessInstance | null },
+  v: { court: string | null; city: string | null; phase: StoredProcessPhase | null; instance: ProcessInstance | null },
 ): Grouping {
   switch (dim) {
     case "court":
@@ -391,7 +471,7 @@ function dimensionGroup(
     case "city":
       return cityGroup(v.city);
     case "phase":
-      return v.phase ? { key: v.phase, label: PROCESS_PHASE_LABELS[v.phase] } : { key: NONE_KEY, label: "Fase não informada" };
+      return v.phase ? { key: v.phase, label: processPhaseLabel(v.phase)! } : { key: NONE_KEY, label: "Fase não informada" };
     case "instance":
       return v.instance
         ? { key: v.instance, label: PROCESS_INSTANCE_LABELS[v.instance] }
@@ -411,6 +491,7 @@ function previousFromItems(items: SnapshotItem[]): PreviousPosition {
     exposureCents: b.exposureCents,
     exposureEstimateCents: b.exposureEstimateCents,
     exposureUnknown: b.exposureUnknown,
+    exposureBasis: exposureBasisCounts(b),
   };
 }
 
@@ -422,13 +503,19 @@ export async function getExposureReport(ctx: AuthContext, filters: ReportFilters
 
   const [{ rows }, snapshots] = await Promise.all([getPortfolioExposure(ctx, exposureFilters(f)), listSnapshots(ctx)]);
   const snap = snapshots.find((s) => s.period === comparisonPeriod) ?? null;
-  const prevItems = snap ? await loadSnapshotItems(ctx, snap.id, f) : [];
+  const prevItems = snap ? await loadSnapshotItems(ctx, snap, f) : [];
 
   let comparisonNote: string | null = null;
   if (!snap) {
     comparisonNote = `Não há fechamento mensal registrado para ${periodLabel(comparisonPeriod)}: a comparação não está disponível. Os valores abaixo são a posição atual.`;
   } else if (snap.status === "preview") {
     comparisonNote = `A comparação usa a PRÉVIA de ${periodLabel(comparisonPeriod)} (competência ainda não fechada: os valores podem mudar até o fechamento).`;
+  }
+  // P0.5: a competência calculated before phase and instance were split keeps the former phases (RN-10).
+  const legacyPhases = [...new Set(prevItems.map((i) => i.phase).filter((ph): ph is StoredProcessPhase => !!ph && !isProcessPhase(ph)))];
+  if (legacyPhases.length > 0) {
+    const note = `Na dimensão Fase, a competência de comparação usa fases do modelo anterior à separação entre fase e instância (${legacyPhases.map((ph) => processPhaseLabel(ph)).join(", ")}): os valores dela não são recalculados.`;
+    comparisonNote = comparisonNote ? `${comparisonNote} ${note}` : note;
   }
 
   const dimensions = EXPOSURE_DIMENSIONS.map((dim) => {
@@ -497,6 +584,22 @@ function addAmounts(a: ProvisionAmounts, b: ProvisionAmounts, sign = 1): Provisi
 
 const ZERO: ProvisionAmounts = { provisionCents: 0, provisionEstimateCents: 0 };
 
+/** Stored provisions of snapshot items by basis (RN-10: read as recorded, never recomputed). */
+function provisionBasisOf(items: readonly { provisionCents: number | null; provisionIsEstimate: boolean }[]): AmountBasisCounts {
+  const counts = emptyBasisCounts();
+  for (const i of items) {
+    if (i.provisionCents === null) counts.none += 1;
+    else if (i.provisionIsEstimate) counts.estimate += 1;
+    else counts.official += 1;
+  }
+  return counts;
+}
+
+/** Snapshot items with a valor apurado (stored liquidated value). */
+function liquidatedCountOf(items: readonly { liquidatedAmountCents: number | null }[]): number {
+  return items.reduce((n, i) => n + (i.liquidatedAmountCents === null ? 0 : 1), 0);
+}
+
 function sameProvision(a: SnapshotItem, b: SnapshotItem): boolean {
   return (
     a.provisionCents === b.provisionCents &&
@@ -547,13 +650,22 @@ export async function getProvisionReport(ctx: AuthContext, filters: ReportFilter
   // Previous CLOSED competência (the latest one before the target).
   const prevSnap = closed.find((s) => s.period < target.period) ?? null;
   const [items, prevItems] = await Promise.all([
-    loadSnapshotItems(ctx, target.id, f),
-    prevSnap ? loadSnapshotItems(ctx, prevSnap.id, f) : Promise.resolve([] as SnapshotItem[]),
+    loadSnapshotItems(ctx, target, f),
+    prevSnap ? loadSnapshotItems(ctx, prevSnap, f) : Promise.resolve([] as SnapshotItem[]),
   ]);
 
   const pct = meta?.params?.riskPercentages;
   const classPct = (k: ClassificationKey): number | null =>
     k === "unclassified" || !pct ? null : percentToBp(pct[k as LossProbability]);
+
+  // RN-03: both sides carry their basis, so a class where nothing was calculated (now or in the
+  // previous competência) reads "Não apurada" / "Não calculada" and is never compared as R$ 0.
+  const previousOf = (prev: SnapshotItem[]): ProvisionPreviousPosition => ({
+    processCount: new Set(prev.map((i) => cnjKey(i.number))).size,
+    ...prev.reduce((acc, i) => addAmounts(acc, provisionAmounts(i)), ZERO),
+    basis: provisionBasisOf(prev),
+    liquidatedCount: liquidatedCountOf(prev),
+  });
 
   const byClassification: ProvisionClassRow[] = CLASSIFICATION_KEYS.map((k) => {
     const cur = items.filter((i) => (i.classification ?? "unclassified") === k);
@@ -564,12 +676,9 @@ export async function getProvisionReport(ctx: AuthContext, filters: ReportFilter
       percentageBp: classPct(k),
       processCount: new Set(cur.map((i) => cnjKey(i.number))).size,
       current: cur.reduce((acc, i) => addAmounts(acc, provisionAmounts(i)), ZERO),
-      previous: prevSnap
-        ? {
-            processCount: new Set(prev.map((i) => cnjKey(i.number))).size,
-            ...prev.reduce((acc, i) => addAmounts(acc, provisionAmounts(i)), ZERO),
-          }
-        : null,
+      currentBasis: provisionBasisOf(cur),
+      currentLiquidatedCount: liquidatedCountOf(cur),
+      previous: prevSnap ? previousOf(prev) : null,
     };
   });
 
@@ -579,12 +688,9 @@ export async function getProvisionReport(ctx: AuthContext, filters: ReportFilter
     percentageBp: null,
     processCount: new Set(items.map((i) => cnjKey(i.number))).size,
     current: items.reduce((acc, i) => addAmounts(acc, provisionAmounts(i)), ZERO),
-    previous: prevSnap
-      ? {
-          processCount: new Set(prevItems.map((i) => cnjKey(i.number))).size,
-          ...prevItems.reduce((acc, i) => addAmounts(acc, provisionAmounts(i)), ZERO),
-        }
-      : null,
+    currentBasis: provisionBasisOf(items),
+    currentLiquidatedCount: liquidatedCountOf(items),
+    previous: prevSnap ? previousOf(prevItems) : null,
   };
 
   // Movement of the period, process by process.
@@ -624,6 +730,7 @@ export async function getProvisionReport(ctx: AuthContext, filters: ReportFilter
       previousProvisionCents: prev ? prev.provisionCents : null,
       previousIsEstimate: prev ? prev.provisionIsEstimate : false,
       movement,
+      deletedAfterClose: i.deletedAfterClose,
     };
   });
   for (const prev of prevItems) {
@@ -642,6 +749,7 @@ export async function getProvisionReport(ctx: AuthContext, filters: ReportFilter
       previousProvisionCents: prev.provisionCents,
       previousIsEstimate: prev.provisionIsEstimate,
       movement: "left",
+      deletedAfterClose: prev.deletedAfterClose,
     });
   }
 
@@ -689,8 +797,8 @@ function rowCaveats(r: {
 }): string[] {
   const out: string[] = [];
   if (r.classification === null) out.push("Sem classificação de risco vigente: provisão não calculada.");
-  if (r.provisionIsEstimate) out.push("Provisão estimada sobre o valor da causa (sem valor liquidado) — RN-07.");
-  else if (r.exposureIsEstimate) out.push("Exposição estimada (valor da causa × percentual de risco) — RN-07.");
+  if (r.provisionIsEstimate) out.push("Provisão estimada sobre o valor da causa (sem valor liquidado).");
+  else if (r.exposureIsEstimate) out.push("Exposição estimada (valor da causa × percentual de risco).");
   if (r.liquidatedCents === null) out.push("Valor liquidado não apurado.");
   if (r.claimCents === null) out.push("Valor da causa não informado.");
   if (r.exposureCents === null && r.classification !== null && r.liquidatedCents === null && r.claimCents === null) {
@@ -717,7 +825,7 @@ export async function getAuditLetterReport(ctx: AuthContext, filters: ReportFilt
 
   let rows: AuditLetterRow[];
   if (snap) {
-    const items = await loadSnapshotItems(ctx, snap.id, f);
+    const items = await loadSnapshotItems(ctx, snap, f);
     rows = items.map((i) => {
       const r = {
         processId: i.processId,
@@ -737,7 +845,9 @@ export async function getAuditLetterReport(ctx: AuthContext, filters: ReportFilt
         provisionCents: i.provisionCents,
         provisionIsEstimate: i.provisionIsEstimate,
       };
-      return { ...r, caveats: rowCaveats(r) };
+      const caveats = rowCaveats(r);
+      if (i.deletedAfterClose) caveats.push(DELETED_AFTER_CLOSE_CAVEAT);
+      return { ...r, caveats, deletedAfterClose: i.deletedAfterClose };
     });
   } else {
     const { rows: current } = await getPortfolioExposure(ctx, exposureFilters(f));
@@ -814,20 +924,26 @@ export async function getAuditLetterReport(ctx: AuthContext, filters: ReportFilt
     snap
       ? `Posições lidas da competência ${periodLabel(snap.period)}, fechada${snap.closedAt ? ` em ${formatDate(snap.closedAt)}` : ""} (registro imutável).`
       : "Posição atual da carteira na data de emissão; não corresponde a uma competência fechada e pode mudar.",
-    "Valor da causa e valor liquidado são grandezas distintas e não são somados (RN-02).",
+    "Valor da causa e valor liquidado são grandezas distintas e não são somados.",
   ];
   if (totals.liquidatedUnknown > 0) {
     generalCaveats.push(
-      `${totals.liquidatedUnknown} processo(s) sem valor liquidado apurado: “não apurado” não equivale a zero (RN-03).`,
+      `${totals.liquidatedUnknown} processo(s) sem valor liquidado apurado: “não apurado” não equivale a zero.`,
     );
   }
   if (hasEstimates) {
     generalCaveats.push(
-      "Há exposições ou provisões ESTIMADAS a partir do valor da causa (sem valor liquidado): estão sinalizadas e devem ser lidas com ressalva (RN-07).",
+      "Há exposições ou provisões ESTIMADAS a partir do valor da causa (sem valor liquidado): estão sinalizadas e devem ser lidas com ressalva.",
     );
   }
   if (totals.unclassified > 0) {
     generalCaveats.push(`${totals.unclassified} processo(s) sem classificação de risco vigente: provisão não calculada.`);
+  }
+  const deletedAfterClose = rows.filter((r) => r.deletedAfterClose).length;
+  if (deletedAfterClose > 0) {
+    generalCaveats.push(
+      `${deletedAfterClose} processo(s) excluído(s) do sistema após o fechamento permanecem na relação com a posição registrada na competência.`,
+    );
   }
   if (!base.scope.orgWide) generalCaveats.push("Relação restrita aos processos visíveis para o emissor; não representa a carteira inteira.");
   else if (!base.scope.includesConfidential) generalCaveats.push("Processos sigilosos não constam desta relação (perfil do emissor).");
@@ -868,14 +984,38 @@ const MOVEMENT_KIND_ORDER: Record<MovementEvent["kind"], number> = {
   closed: 0,
   added: 1,
   value_change: 2,
-  phase_change: 3,
-  status_change: 4,
+  index_change: 3,
+  phase_change: 4,
+  status_change: 5,
 };
+
+/**
+ * "Trocar índice" (P1.7): the official record superseded a row of the same kind, amount, base date
+ * and instance with another correction index. Nothing about the value changed, so it is listed as
+ * an index change, never as a value change of zero.
+ */
+function isIndexSwap(
+  v: { kind: string; amountCents: number; baseDate: string; instance: string | null; correctionIndex: string | null },
+  prev: { kind: string | null; amountCents: number | null; baseDate: string | null; instance: string | null; correctionIndex: string | null },
+): boolean {
+  return (
+    prev.kind === v.kind &&
+    prev.amountCents === v.amountCents &&
+    prev.baseDate === v.baseDate &&
+    prev.instance === v.instance &&
+    prev.correctionIndex !== v.correctionIndex
+  );
+}
+
+function correctionIndexText(index: CorrectionIndex | null): string {
+  return index ? CORRECTION_INDEX_LABELS[index] : "sem índice informado";
+}
 
 type AuditChange = { from: unknown; to: unknown };
 
 function phaseLabel(v: unknown): string {
-  return typeof v === "string" && v in PROCESS_PHASE_LABELS ? PROCESS_PHASE_LABELS[v as ProcessPhase] : "não informada";
+  // Audit history keeps phases of the previous model (before P0.5): shown with their former labels.
+  return (typeof v === "string" ? processPhaseLabel(v) : null) ?? "não informada";
 }
 
 function statusLabel(v: unknown): string {
@@ -928,10 +1068,17 @@ export async function getMovementReport(ctx: AuthContext, filters: ReportFilters
         title: lp.title,
         kind: processValuations.kind,
         amountCents: processValuations.amountCents,
+        baseDate: processValuations.baseDate,
+        instance: processValuations.instance,
+        correctionIndex: processValuations.correctionIndex,
         source: processValuations.source,
         isEstimate: processValuations.isEstimate,
         moment: valuationMoment,
         previousCents: prev.amountCents,
+        prevKind: prev.kind,
+        prevBaseDate: prev.baseDate,
+        prevInstance: prev.instance,
+        prevCorrectionIndex: prev.correctionIndex,
       })
       .from(processValuations)
       .innerJoin(lp, and(eq(lp.id, processValuations.processId), processFilter))
@@ -973,6 +1120,9 @@ export async function getMovementReport(ctx: AuthContext, filters: ReportFilters
           eq(auditLogs.organizationId, ctx.organizationId),
           eq(auditLogs.entityType, "legal_process"),
           ne(auditLogs.action, "legal_process.create"),
+          // The P0.5 data migration reclassified phases; it is not a procedural phase change.
+          ne(auditLogs.action, "legal_process.phase_migration"),
+          ne(auditLogs.action, "legal_process.phase_migration_rollback"),
           gte(auditLogs.createdAt, start),
           lt(auditLogs.createdAt, end),
           sql`((${auditLogs.changes} -> 'phase' ->> 'from') is not null or (${auditLogs.changes} -> 'status' ->> 'from') is not null)`,
@@ -1011,8 +1161,34 @@ export async function getMovementReport(ctx: AuthContext, filters: ReportFilters
       closureReason: p.closureReason,
     });
   }
+  let valueChanges = 0;
   for (const v of valuations) {
     const moment = v.moment instanceof Date ? v.moment : new Date(v.moment);
+    const prevRow = {
+      kind: v.prevKind,
+      amountCents: v.previousCents,
+      baseDate: v.prevBaseDate,
+      instance: v.prevInstance,
+      correctionIndex: v.prevCorrectionIndex,
+    };
+    if (isIndexSwap(v, prevRow)) {
+      events.push({
+        ...blank,
+        date: toISODate(moment),
+        kind: "index_change",
+        processId: v.processId,
+        number: v.number,
+        title: v.title,
+        detail:
+          `${VALUATION_KIND_LABELS[v.kind]} de ${formatMoneyCents(v.amountCents)} (data-base ${formatDate(v.baseDate)}) · ` +
+          `índice de ${correctionIndexText(v.prevCorrectionIndex)} para ${correctionIndexText(v.correctionIndex)} · ` +
+          "valor e data-base mantidos",
+        valuationKind: v.kind,
+        isEstimate: v.isEstimate,
+      });
+      continue;
+    }
+    valueChanges += 1;
     events.push({
       ...blank,
       date: toISODate(moment),
@@ -1086,7 +1262,7 @@ export async function getMovementReport(ctx: AuthContext, filters: ReportFilters
           count: n,
         }))
         .sort((a, b) => b.count - a.count),
-      valueChanges: valuations.length,
+      valueChanges,
       phaseChanges,
       statusChanges,
     },
@@ -1223,6 +1399,16 @@ const CONTENT_TYPES: Record<ExportFormat, string> = {
 
 export type ReportFile = { fileName: string; contentType: string; body: Uint8Array; rowCount: number };
 
+/** Maximum rows of the main table of one export file (same limit as the process export). */
+export const REPORT_EXPORT_LIMIT = 20_000;
+
+/** Refuses an export whose main table exceeds the limit (before the CSV/XLSX file is built). */
+export function assertExportRowLimit(rowCount: number, limit = REPORT_EXPORT_LIMIT): void {
+  if (rowCount > limit) {
+    throw new ValidationError(`A exportação está limitada a ${formatNumber(limit)} linhas por arquivo. Refine os filtros.`);
+  }
+}
+
 /**
  * Builds the CSV/XLSX file of a report and records `report.export` in the
  * audit trail (type, format, filters and row count only).
@@ -1239,6 +1425,7 @@ export async function exportReport(
   const exp = buildReportExport(report);
   const main = exp.sheets[exp.csvSheet];
   const rowCount = main?.rows.length ?? 0;
+  assertExportRowLimit(rowCount);
   const body = format === "csv" ? new TextEncoder().encode(sheetToCsv(main)) : new Uint8Array(await reportToXlsxLazy(exp));
 
   await recordAudit(ctx, {

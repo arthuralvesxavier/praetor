@@ -15,9 +15,10 @@ vi.mock("@/modules/distribution/service", () => ({
   }),
 }));
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { analyzeImport, commitImport, getImportBatch, getRollbackBlockers, rollbackImport } from "@/modules/imports/service";
-import { companies, legalProcesses, processInstances, processValuations } from "@/server/db/schema";
+import { companies, importRows, legalProcesses, processInstances, processValuations } from "@/server/db/schema";
+import { processPendingJobs } from "@/server/jobs/worker";
 import { makeProcess, setupFixture, type Fixture } from "../helpers/fixtures";
 import { DEMO_CLIENT, row, sheet, validCnj } from "./helpers";
 
@@ -101,9 +102,12 @@ describe("update of existing processes and rollback with restore", () => {
     const sameNumber = await fx.db.select({ org: legalProcesses.organizationId }).from(legalProcesses).where(eq(legalProcesses.number, CNJ_ORG_B));
     expect(sameNumber.map((x) => x.org).sort()).toEqual([fx.orgA, fx.orgB].sort());
 
-    // Distribution failures are reported per process, never break the commit.
+    // Distribution failures are reported per process (in the "import.distribute" job), never break the commit.
+    expect(result.distributionQueued).toBe(true);
+    await processPendingJobs({ organizationId: fx.orgA });
     const b = await getImportBatch(fx.ctx.admin, batchId);
     expect(b.status).toBe("committed");
+    expect(b.distributionState).toBe("done");
     expect(b.distribution).toMatchObject({ attempted: 2, assigned: 0, failed: 2 });
     expect(b.distribution!.failures[0].message).toMatch(/Falha inesperada/);
   });
@@ -130,5 +134,49 @@ describe("update of existing processes and rollback with restore", () => {
       .from(legalProcesses)
       .where(and(eq(legalProcesses.organizationId, fx.orgA), isNull(legalProcesses.deletedAt)));
     expect(alive.map((x) => x.number)).toEqual([CNJ_EXISTING]);
+  });
+});
+
+describe("batch analyzed before P0.5 and committed after it", () => {
+  const CNJ_APPEAL = validCnj(511);
+  const CNJ_CLOSED = validCnj(512);
+
+  it("re-reads the phase of rows stored with a phase of the previous model, and the commit succeeds", async () => {
+    sheets.current = [
+      sheet("Consolidado Geral", [
+        row({ number: CNJ_APPEAL, instance: "2º Grau", phase: "Conhecimento (recurso) — em tramitação", claim: 900 }),
+        row({ number: CNJ_CLOSED, instance: "1º Grau", phase: "PAGO/EXTINTO — arquivado def. 2026-06-25", claim: 400, liquidated: 0 }),
+      ]),
+    ];
+    const { batchId } = await analyzeImport(fx.ctx.admin, {
+      file: { name: "carteira-antiga-ficticia.xlsx", bytes },
+      companyId: companyDemo,
+      baseDate: "2026-06-30",
+    });
+    // What the parser before P0.5 stored in import_rows.normalized: phase "appeal" / "closed", no phase.instance.
+    for (const [cnj, legacy] of [
+      [CNJ_APPEAL, "appeal"],
+      [CNJ_CLOSED, "closed"],
+    ] as const) {
+      await fx.db.execute(
+        sql`update import_rows set normalized = jsonb_set(normalized #- '{data,phase,instance}' #- '{data,instanceFromPhase}', '{data,phase,phase}', to_jsonb(${legacy}::text))
+            where batch_id = ${batchId} and normalized->'data'->>'cnj' = ${cnj}`,
+      );
+    }
+    const stored = await fx.db.select({ normalized: importRows.normalized }).from(importRows).where(eq(importRows.batchId, batchId));
+    expect(stored.map((r) => (r.normalized as { data: { phase: { phase: string } } }).data.phase.phase).sort()).toEqual(["appeal", "closed"]);
+
+    await expect(commitImport(fx.ctx.admin, batchId, { baseDate: "2026-06-30" })).resolves.toMatchObject({ created: 2 });
+
+    const [appeal] = await fx.db.select().from(legalProcesses).where(eq(legalProcesses.number, CNJ_APPEAL));
+    expect(appeal).toMatchObject({ phase: "knowledge", instance: "second", status: "active" });
+    const [closed] = await fx.db.select().from(legalProcesses).where(eq(legalProcesses.number, CNJ_CLOSED));
+    expect(closed).toMatchObject({ phase: "knowledge", status: "closed", closureReason: "paid_extinct", closedAt: "2026-06-25" });
+    const links = await fx.db
+      .select({ phase: processInstances.phase })
+      .from(processInstances)
+      .where(inArray(processInstances.processId, [appeal.id, closed.id]));
+    expect(links).toHaveLength(2);
+    expect(links.map((l) => l.phase)).toEqual(expect.arrayContaining([null, "knowledge"]));
   });
 });

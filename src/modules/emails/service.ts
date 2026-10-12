@@ -9,7 +9,7 @@
  * are never logged nor copied to the audit trail (only template + ids).
  */
 import { randomUUID } from "node:crypto";
-import { and, asc, count, desc, eq, inArray, isNotNull, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, notExists, sql, type SQL } from "drizzle-orm";
 import { alias, type AnyPgColumn, type PgTable } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import type { EmailMode, EmailStatus, EmailTemplate, EntityType } from "@/domain/enums";
@@ -465,6 +465,9 @@ export async function resendEmail(ctx: AuthContext, id: string): Promise<SendEma
 
 const DIGEST_HEARING_DAYS = 7;
 
+/** Newer versions of a preliminary analysis (superseded-version filter of the digest). */
+const newerBrief = alias(caseBriefs, "digest_newer_brief");
+
 /**
  * Counts the current user's pending items (scoped exactly like the screens they
  * link to) and sends the `daily_digest` template to the user. Requires a user
@@ -512,23 +515,43 @@ export async function buildDailyDigestData(ctx: AuthContext): Promise<DailyDiges
   }
 
   if (can(ctx, "process:read")) {
-    const { listUpcomingHearings } = await import("@/modules/hearings/service");
-    const hearingsSoon = await listUpcomingHearings(ctx, { days: DIGEST_HEARING_DAYS, limit: 500 });
+    // A count (not the 50-item list): the digest must report the real number.
+    const { countUpcomingHearings } = await import("@/modules/hearings/service");
     items.push({
       label: `Audiências nos próximos ${DIGEST_HEARING_DAYS} dias`,
-      count: hearingsSoon.length,
+      count: await countUpcomingHearings(ctx, DIGEST_HEARING_DAYS),
       path: "/audiencias?periodo=7d",
     });
   }
 
   if (can(ctx, "brief:read")) {
+    // Same queue as /analises-preliminares: a version superseded by a newer generated one
+    // (with content) of the same process is no longer reviewed, so it is not counted.
     const [row] = await getDb()
       .select({
         ready: sql<number>`count(*) filter (where ${caseBriefs.status} = 'ready_for_review')`.mapWith(Number),
         inReview: sql<number>`count(*) filter (where ${caseBriefs.status} = 'in_review')`.mapWith(Number),
       })
       .from(caseBriefs)
-      .where(and(caseBriefWhere(ctx), inArray(caseBriefs.status, ["ready_for_review", "in_review"])));
+      .where(
+        and(
+          caseBriefWhere(ctx),
+          inArray(caseBriefs.status, ["ready_for_review", "in_review"]),
+          notExists(
+            getDb()
+              .select({ one: sql`1` })
+              .from(newerBrief)
+              .where(
+                and(
+                  eq(newerBrief.organizationId, caseBriefs.organizationId),
+                  eq(newerBrief.processId, caseBriefs.processId),
+                  gt(newerBrief.version, caseBriefs.version),
+                  isNotNull(newerBrief.content),
+                ),
+              ),
+          ),
+        ),
+      );
     items.push({
       label: "Análises preliminares prontas para revisão",
       count: row?.ready ?? 0,

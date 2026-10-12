@@ -114,7 +114,7 @@ export default async function LawFirmsPage(props: PageProps<"/admin/escritorios"
                             ) : null}
                           </>
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <span className="text-muted-foreground">Não informado</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{formatNumber(f.activeUserCount)}</TableCell>

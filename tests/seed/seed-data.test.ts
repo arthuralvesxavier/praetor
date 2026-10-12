@@ -2,6 +2,7 @@ import { readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEMO_ACCOUNTS } from "@/domain/demo";
+import { PROCESS_INSTANCES, PROCESS_PHASES } from "@/domain/enums";
 import { isCnjNumberFormat } from "@/modules/processes/schemas";
 import {
   AURORA_CONTRACTS,
@@ -12,6 +13,7 @@ import {
 } from "../../scripts/seed-data/aurora";
 import { brDate, longDate, renderDocument } from "../../scripts/seed-data/helpers";
 import { OUTRA_ADMIN_EMAIL, OUTRA_DOCUMENT, OUTRA_PROCESSES } from "../../scripts/seed-data/outra";
+import { AURORA_V2_USERS } from "../../scripts/seed-data/v2/aurora-v2";
 
 const DOCS_DIR = path.resolve(process.cwd(), "scripts", "seed-data", "documents");
 
@@ -33,12 +35,16 @@ describe("demo seed data", () => {
     for (const c of AURORA_CONTRACTS) expect(c.description).toContain("(dados fictícios)");
   });
 
-  it("maps every demo account to exactly one organization", () => {
+  it("maps every demo account to exactly one organization and seed script", () => {
     const emails = DEMO_ACCOUNTS.map((a) => a.email);
-    for (const e of Object.keys(AURORA_USERS)) expect(emails).toContain(e);
+    expect(new Set(emails).size).toBe(emails.length);
+    const v1 = Object.keys(AURORA_USERS);
+    const v2 = Object.keys(AURORA_V2_USERS);
+    for (const e of [...v1, ...v2]) expect(emails).toContain(e);
     expect(emails).toContain(OUTRA_ADMIN_EMAIL);
-    expect(Object.keys(AURORA_USERS)).not.toContain(OUTRA_ADMIN_EMAIL);
-    expect(Object.keys(AURORA_USERS).length + 1).toBe(DEMO_ACCOUNTS.length);
+    expect(v1).not.toContain(OUTRA_ADMIN_EMAIL);
+    expect(v2.filter((e) => v1.includes(e) || e === OUTRA_ADMIN_EMAIL)).toEqual([]);
+    expect(v1.length + v2.length + 1).toBe(DEMO_ACCOUNTS.length);
   });
 
   it("has exactly one confidential process and it belongs to the São Paulo lawyer", () => {
@@ -46,6 +52,33 @@ describe("demo seed data", () => {
     expect(confidential).toHaveLength(1);
     expect(confidential[0].responsible).toBe("advogada");
     expect(AURORA_PROCESSES.filter((p) => p.imported)).toHaveLength(2);
+  });
+
+  it("gives every process out of the active portfolio a closure reason (RN-12) and an opinion for its risk", () => {
+    for (const p of [...AURORA_PROCESSES, ...OUTRA_PROCESSES]) {
+      if (p.status === "closed" || p.status === "archived") expect(p.closureReason).toBeTruthy();
+      // The risk rationale becomes the opinion of the official classification (min. 10 characters).
+      if (p.lossProbability) expect(p.riskRationale.trim().length).toBeGreaterThanOrEqual(10);
+    }
+  });
+
+  it("uses only the three phases and records 'em recurso' as the instance, never as a phase (P0.5)", () => {
+    const all = [...AURORA_PROCESSES, ...OUTRA_PROCESSES];
+    for (const p of all) {
+      // The CHECK constraints refuse any other value, so `npm run db:seed` would fail at runtime.
+      expect(PROCESS_PHASES).toContain(p.phase);
+      if (p.instance !== undefined) expect(PROCESS_INSTANCES).toContain(p.instance);
+    }
+    // Pending appeals (apelação / recurso ordinário): knowledge phase at the 2nd grau.
+    for (const key of ["coletivaRecife", "mandadoSeguranca", "terceirizado"] as const) {
+      const p = AURORA_PROCESSES.find((x) => x.key === key);
+      expect(p?.phase).toBe("knowledge");
+      expect(p?.instance).toBe("second");
+    }
+    // A closed process is closed by its status (with a closure reason), never by its phase.
+    const closed = AURORA_PROCESSES.find((x) => x.key === "acordoEncerrado");
+    expect(closed?.status).toBe("closed");
+    expect(closed?.closureReason).toBe("settlement_fulfilled");
   });
 
   it("renders every document template without leftover placeholders", () => {

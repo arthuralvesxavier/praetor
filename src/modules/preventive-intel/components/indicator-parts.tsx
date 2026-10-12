@@ -27,7 +27,7 @@ export function DemoDocumentsBadge() {
 export function IllustrativeBadge() {
   return (
     <Badge tone="warning" icon={<Lightbulb />}>
-      Sugestão ilustrativa — avaliar com a área responsável
+      Sugestão ilustrativa, a avaliar com a área responsável
     </Badge>
   );
 }

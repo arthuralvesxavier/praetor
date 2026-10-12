@@ -8,12 +8,12 @@ import { bpToPercent, provisionFor, type MoneyBucket, type SnapshotParams } from
 import {
   LOSS_PROBABILITY_LABELS,
   PROCESS_INSTANCE_LABELS,
-  PROCESS_PHASE_LABELS,
   SNAPSHOT_STATUS_LABELS,
   type LossProbability,
   type ProcessInstance,
-  type ProcessPhase,
   type SnapshotStatus,
+  type StoredProcessPhase,
+  processPhaseLabel,
 } from "@/domain/enums";
 import { formatDate, formatMoneyCents } from "@/lib/format";
 import { formatPeriod } from "./rules";
@@ -24,7 +24,8 @@ export type CsvSnapshotRow = {
   unitName: string | null;
   court: string | null;
   instance: ProcessInstance | null;
-  phase: ProcessPhase | null;
+  /** Items of a closed competência keep the phase frozen at the close (RN-10), possibly of the previous model. */
+  phase: StoredProcessPhase | null;
   city: string | null;
   classification: LossProbability | null;
   percentageBp: number | null;
@@ -35,6 +36,8 @@ export type CsvSnapshotRow = {
   exposureIsEstimate: boolean;
   provisionCents: number | null;
   provisionIsEstimate: boolean;
+  /** The process was deleted from the system after the competência was calculated (row kept, RN-10). */
+  processDeleted?: boolean;
 };
 
 export type SnapshotCsvInput = {
@@ -79,8 +82,25 @@ export function csvCell(value: string | number | null | undefined): string {
   return /[";\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-function line(cells: (string | number | null | undefined)[]): string {
-  return cells.map(csvCell).join(SEP);
+/**
+ * Free-text cell (process number, company, unit, court, city, labels): a value
+ * starting with = + - @ tab or CR is prefixed with an apostrophe so spreadsheets
+ * never evaluate it as a formula (CSV injection), like the other exports.
+ */
+export function csvText(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  let s = String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return csvCell(s);
+}
+
+/** Money/percent cell already formatted by `csvMoney`/`csvPercent`: never prefixed (negative amounts stay numbers). */
+type NumericCell = { readonly numeric: string };
+const num = (value: string): NumericCell => ({ numeric: value });
+type Cell = string | null | undefined | NumericCell;
+
+function line(cells: Cell[]): string {
+  return cells.map((c) => (c !== null && typeof c === "object" ? csvCell(c.numeric) : csvText(c))).join(SEP);
 }
 
 /** Memória de cálculo of one process (RN-04, RN-05, RN-07). */
@@ -101,7 +121,7 @@ export function calculationMemo(r: CsvSnapshotRow): string {
   }
   if (p.base === "claim" && p.baseCents !== null && p.provisionCents !== null) {
     return (
-      `ESTIMATIVA (RN-07): sem valor liquidado; base = valor da causa ${money(p.baseCents)}; ` +
+      `ESTIMATIVA: sem valor liquidado; base = valor da causa ${money(p.baseCents)}; ` +
       `provisão = ${money(p.baseCents)} × ${pct} = ${money(p.provisionCents)}.`
     );
   }
@@ -114,21 +134,21 @@ export function buildSnapshotCsv(input: SnapshotCsvInput): string {
   const out: string[] = [];
   out.push(
     line([
-      `Fechamento da carteira — competência ${formatPeriod(input.period)} — data-base ${formatDate(input.referenceDate)} — ` +
-        `${SNAPSHOT_STATUS_LABELS[input.status]}${input.organizationName ? ` — ${input.organizationName}` : ""}`,
+      `Fechamento da carteira, competência ${formatPeriod(input.period)}, data-base ${formatDate(input.referenceDate)}: ` +
+        `${SNAPSHOT_STATUS_LABELS[input.status]}${input.organizationName ? ` (${input.organizationName})` : ""}`,
     ]),
   );
   out.push(
     line([
       `Percentuais por classificação: remota ${params.riskPercentages.remote}% · possível ${params.riskPercentages.possible}% · ` +
         `provável ${params.riskPercentages.probable}% (versão ${params.rulesVersion} das regras de risco). ` +
-        "Valor da causa e valor liquidado são grandezas diferentes e nunca são somados (RN-02); células vazias = não apurado (RN-03).",
+        "Valor da causa e valor liquidado são grandezas diferentes e nunca são somados; células vazias = não apurado.",
     ]),
   );
   if (estimates > 0) {
     out.push(
       line([
-        `ATENÇÃO (RN-07): ${estimates} processo(s) com valores ESTIMADOS — sem valor liquidado, a base é o valor da causa ` +
+        `ATENÇÃO: ${estimates} processo(s) com valores ESTIMADOS. Sem valor liquidado, a base é o valor da causa ` +
           "ponderado pelo risco. Estimativas não são valores apurados e devem ser tratadas com ressalva.",
       ]),
     );
@@ -140,8 +160,17 @@ export function buildSnapshotCsv(input: SnapshotCsvInput): string {
       ]),
     );
   }
+  const deleted = input.rows.filter((r) => r.processDeleted).length;
+  if (deleted > 0) {
+    out.push(
+      line([
+        `${deleted} processo(s) listado(s) foram excluídos do sistema após o ${input.status === "closed" ? "fechamento" : "cálculo da prévia"}; ` +
+          "a posição registrada na competência foi mantida.",
+      ]),
+    );
+  }
   if (input.status === "preview") {
-    out.push(line(["PRÉVIA: valores recalculáveis até o fechamento da competência (RN-10)."]));
+    out.push(line(["PRÉVIA: valores recalculáveis até o fechamento da competência."]));
   }
   out.push("");
   out.push(
@@ -183,32 +212,34 @@ export function buildSnapshotCsv(input: SnapshotCsvInput): string {
         r.unitName,
         r.court,
         r.instance ? PROCESS_INSTANCE_LABELS[r.instance] : "",
-        r.phase ? PROCESS_PHASE_LABELS[r.phase] : "",
+        processPhaseLabel(r.phase) ?? "",
         r.city,
         r.classification ? LOSS_PROBABILITY_LABELS[r.classification] : "Não classificado",
-        csvPercent(r.percentageBp),
-        csvMoney(r.claimAmountCents),
-        csvMoney(r.liquidatedAmountCents),
-        csvMoney(r.guaranteesCents),
+        num(csvPercent(r.percentageBp)),
+        num(csvMoney(r.claimAmountCents)),
+        num(csvMoney(r.liquidatedAmountCents)),
+        num(csvMoney(r.guaranteesCents)),
         baseLabel,
-        csvMoney(p.baseCents),
-        csvMoney(r.provisionCents),
+        num(csvMoney(p.baseCents)),
+        num(csvMoney(r.provisionCents)),
         r.provisionCents === null ? "" : r.provisionIsEstimate ? "Sim" : "Não",
-        csvMoney(r.exposureCents),
+        num(csvMoney(r.exposureCents)),
         r.exposureCents === null ? "" : r.exposureIsEstimate ? "Sim" : "Não",
-        calculationMemo(r),
+        r.processDeleted ? `${calculationMemo(r)} Processo excluído do sistema após o cálculo da competência.` : calculationMemo(r),
       ]),
     );
   }
   out.push("");
   const scope = input.totalsAreOrganizationWide ? "Totais da organização" : "Totais dos processos listados";
   out.push(line([scope, `${totals.count} processo(s)`]));
-  out.push(line(["Valor da causa (R$)", csvMoney(totals.claimCents), `${totals.claimUnknown} sem valor da causa`]));
-  out.push(line(["Valor liquidado (R$)", csvMoney(totals.liquidatedCents), `${totals.liquidatedUnknown} não apurado(s)`]));
-  out.push(line(["Garantias vinculadas (R$)", csvMoney(totals.guaranteesCents)]));
-  out.push(line(["Exposição líquida oficial (R$)", csvMoney(totals.exposureCents)]));
-  out.push(line(["Exposição estimada (R$) — RN-07", csvMoney(totals.exposureEstimateCents), `${totals.exposureUnknown} sem base`]));
-  out.push(line(["Provisão sobre valores apurados (R$)", csvMoney(totals.provisionCents)]));
-  out.push(line(["Provisão estimada (R$) — RN-07", csvMoney(totals.provisionEstimateCents)]));
+  out.push(line(["Valor da causa (R$)", num(csvMoney(totals.claimCents)), `${totals.claimUnknown} sem valor da causa`]));
+  out.push(line(["Valor liquidado (R$)", num(csvMoney(totals.liquidatedCents)), `${totals.liquidatedUnknown} não apurado(s)`]));
+  out.push(line(["Garantias vinculadas (R$)", num(csvMoney(totals.guaranteesCents))]));
+  out.push(line(["Exposição líquida apurada (R$)", num(csvMoney(totals.exposureCents))]));
+  out.push(
+    line(["Exposição estimada (R$)", num(csvMoney(totals.exposureEstimateCents)), `${totals.exposureUnknown} sem base`]),
+  );
+  out.push(line(["Provisão sobre valores apurados (R$)", num(csvMoney(totals.provisionCents))]));
+  out.push(line(["Provisão estimada (R$)", num(csvMoney(totals.provisionEstimateCents))]));
   return `﻿${out.join("\r\n")}\r\n`;
 }

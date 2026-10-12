@@ -28,7 +28,7 @@ export function BriefNotices({
             {n}
           </Callout>
         ) : (
-          <Callout key={n} tone="info" title={compact ? undefined : "Apoio ao advogado — não é parecer"}>
+          <Callout key={n} tone="info" title={compact ? undefined : "Apoio ao advogado, não é parecer"}>
             {n}
           </Callout>
         ),

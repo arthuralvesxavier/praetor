@@ -479,7 +479,7 @@ export async function requestAnalysis(
           action: "analysis.request",
           entityType: "analysis",
           entityId: row.id,
-          summary: `Análise de IA solicitada: ${ANALYSIS_TYPE_LABELS[v.type]} — ${subject.label}`.slice(0, 300),
+          summary: `Análise de IA solicitada: ${ANALYSIS_TYPE_LABELS[v.type]} (${subject.label})`.slice(0, 300),
           metadata: {
             type: v.type,
             subjectType: v.subjectType,

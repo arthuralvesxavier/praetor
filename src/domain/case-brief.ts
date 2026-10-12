@@ -38,7 +38,7 @@ export const PROVENANCE_DESCRIPTIONS: Record<Provenance, string> = {
   extracted: "Trecho lido em um documento do processo, com página e citação literal.",
   record: "Informação que já estava no cadastro do processo ou na planilha importada.",
   illustrative: "Exemplo gerado pela simulação para demonstrar o recurso. Não é fato do processo.",
-  missing: "Informação procurada e não encontrada nos documentos — precisa ser obtida.",
+  missing: "Informação procurada e não encontrada nos documentos. Precisa ser obtida.",
   reviewer: "Conteúdo escrito ou alterado pelo advogado na revisão (registrado no histórico de revisões).",
 };
 

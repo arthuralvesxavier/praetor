@@ -141,7 +141,7 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: "O que acontece quando falta um dado?",
-    a: "A falta aparece. Um processo sem valor apurado mostra “Não apurado”, nunca zero, e os totais oficiais somam só os processos com valor apurado, dizendo quantos ficaram de fora (por exemplo, apurado em 9 de 14 processos). Quando o painel usa uma estimativa, como o valor da causa multiplicado pelo percentual de risco, ela vem marcada como estimativa. Processos sem tribunal, fase ou cidade entram numa lista de pendências de cadastro.",
+    a: "A falta aparece. Um processo sem valor apurado mostra “Não apurado”, nunca zero, e os totais apurados somam só os processos com valor apurado, dizendo quantos ficaram de fora (por exemplo, apurado em 9 de 14 processos). Quando o painel usa uma estimativa, como o valor da causa multiplicado pelo percentual de risco, ela vem marcada como estimativa. Processos sem tribunal, fase ou cidade entram numa lista de pendências de cadastro.",
   },
   {
     q: "Quem vê o quê?",

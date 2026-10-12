@@ -95,7 +95,7 @@ describe("decideAssignment — fallback and kept", () => {
     expect(d.userId).toBe(lawyer2.userId);
     expect(d.method).toBe("least_loaded");
     expect(d.ruleId).toBeNull();
-    expect(d.reason).toContain("Nenhuma regra aplicável — menor carga entre advogados da unidade São Paulo");
+    expect(d.reason).toContain("Nenhuma regra aplicável; menor carga entre advogados da unidade São Paulo");
     // decide does not persist
     expect((await getProcess(f.ctx.manager, p)).responsibleId).toBeNull();
   });

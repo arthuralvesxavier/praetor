@@ -96,7 +96,7 @@ export default async function UnitsPage(props: PageProps<"/admin/unidades">) {
                           {u.name}
                         </Link>
                       </TableCell>
-                      <TableCell>{u.code ?? <span className="text-muted-foreground">—</span>}</TableCell>
+                      <TableCell>{u.code ?? <span className="text-muted-foreground">Não informado</span>}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatNumber(u.userCount)}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatNumber(u.teamCount)}</TableCell>
                       <TableCell>

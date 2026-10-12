@@ -37,7 +37,7 @@ export default function GlobalError({ error, retry }: { error: Error & { digest?
                 href="/dashboard"
                 className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-800 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
               >
-                Ir para o dashboard
+                Ir para o painel executivo
               </a>
             </div>
           </div>

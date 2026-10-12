@@ -5,7 +5,14 @@
  *
  * Every read is tenant-scoped: organization/unit/law firm by the ids in the
  * AuthContext AND `organization_id = ctx.organizationId`; alert counts use the
- * row-visibility rules of the alerts service.
+ * scope of the alerts center (`countOpenAlerts`: module read permission + row
+ * visibility, built only for the entity types that have open alerts, since the
+ * header renders on every page).
+ *
+ * The provider modes (case brief, AI, e-mail) are runtime facts, not tenant
+ * data: they are returned to every user so the "Simulações" badge can list
+ * every simulation; the links to the related screens are gated by permission
+ * in `simulationItems` (shell-format.ts).
  */
 import { and, eq } from "drizzle-orm";
 import type { AiMode } from "@/domain/enums";
@@ -15,6 +22,7 @@ import type { AuthContext } from "@/server/auth/context";
 import { can } from "@/server/auth/permissions";
 import { getDb } from "@/server/db/client";
 import { lawFirms, organizations, units } from "@/server/db/schema";
+import { getCaseBriefRuntimeInfo } from "@/server/integrations/ai/case-brief";
 import { getEmailRuntimeInfo } from "@/server/integrations/email";
 import { logger } from "@/server/lib/logger";
 
@@ -25,9 +33,12 @@ export type ShellData = {
   lawFirmName: string | null;
   /** Null when the user cannot open /alertas or the count failed. */
   alerts: { total: number; critical: number } | null;
+  /** Mode of the AI center provider; null when it could not be read. */
   aiMode: AiMode | null;
-  /** Null when the user cannot open the e-mail center (email:read). */
-  emailMode: "simulated" | "live" | null;
+  /** Mode of the preliminary analysis provider ("demo" = simulated, always in this version). */
+  caseBriefMode: AiMode;
+  /** Mode of the e-mail provider ("simulated" when it could not be read). */
+  emailMode: "simulated" | "live";
 };
 
 export async function loadShellData(ctx: AuthContext): Promise<ShellData> {
@@ -69,14 +80,19 @@ export async function loadShellData(ctx: AuthContext): Promise<ShellData> {
     logger.error("ai_runtime_info_failed", { error });
   }
 
-  let emailMode: ShellData["emailMode"] = null;
-  if (can(ctx, "email:read")) {
-    try {
-      emailMode = getEmailRuntimeInfo().mode;
-    } catch (error) {
-      logger.error("email_runtime_info_failed", { error });
-      emailMode = "simulated";
-    }
+  // On failure, assume the simulation: labeling too much is safe, labeling too little is not.
+  let caseBriefMode: AiMode = "demo";
+  try {
+    caseBriefMode = getCaseBriefRuntimeInfo().mode;
+  } catch (error) {
+    logger.error("case_brief_runtime_info_failed", { error });
+  }
+
+  let emailMode: ShellData["emailMode"] = "simulated";
+  try {
+    emailMode = getEmailRuntimeInfo().mode;
+  } catch (error) {
+    logger.error("email_runtime_info_failed", { error });
   }
 
   return {
@@ -85,6 +101,7 @@ export async function loadShellData(ctx: AuthContext): Promise<ShellData> {
     lawFirmName: firm?.name ?? null,
     alerts,
     aiMode,
+    caseBriefMode,
     emailMode,
   };
 }

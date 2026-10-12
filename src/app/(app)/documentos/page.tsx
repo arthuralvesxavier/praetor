@@ -34,7 +34,7 @@ export default async function DocumentsPage(props: PageProps<"/documentos">) {
       <PageHeader
         title="Documentos"
         description="Arquivos da organização com versões, extração de texto e vínculos com processos, ocorrências e contratos."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Documentos" }]}
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Documentos" }]}
         actions={
           canUpload ? (
             <ButtonLink href="/documentos/novo">
@@ -110,7 +110,7 @@ export default async function DocumentsPage(props: PageProps<"/documentos">) {
                       <TableCell className="min-w-48 max-w-72">
                         <DocumentLinks links={d.links} />
                       </TableCell>
-                      <TableCell>{d.currentVersionNumber > 0 ? `v${d.currentVersionNumber}` : "—"}</TableCell>
+                      <TableCell>{d.currentVersionNumber > 0 ? `v${d.currentVersionNumber}` : <span className="text-muted-foreground">Sem versão</span>}</TableCell>
                       <TableCell>
                         <ExtractionStatusBadge status={d.extractionStatus} />
                       </TableCell>

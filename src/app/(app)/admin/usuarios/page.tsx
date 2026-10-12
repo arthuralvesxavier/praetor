@@ -148,7 +148,7 @@ export default async function UsersPage(props: PageProps<"/admin/usuarios">) {
                         {u.teams.length > 0 ? (
                           u.teams.map((t) => t.name).join(", ")
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <span className="text-muted-foreground">Sem equipe</span>
                         )}
                       </TableCell>
                       <TableCell>

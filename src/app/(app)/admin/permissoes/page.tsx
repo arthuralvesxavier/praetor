@@ -50,7 +50,7 @@ const VISIBILITY_RULES: { title: string; text: string }[] = [
   },
   {
     title: "Documentos",
-    text: "Seguem a visibilidade de todos os registros a que estão vinculados e o nível de confidencialidade: Interno — quem vê os registros vinculados; Confidencial — administrador, gestor jurídico, advogados e escritório externo (além de quem enviou); Restrito — administrador, gestor jurídico, quem enviou e o responsável por um registro vinculado.",
+    text: "Seguem a visibilidade de todos os registros a que estão vinculados e o nível de confidencialidade. Interno: quem vê os registros vinculados. Confidencial: administrador, gestor jurídico, advogados e escritório externo (além de quem enviou). Restrito: administrador, gestor jurídico, quem enviou e o responsável por um registro vinculado.",
   },
   {
     title: "Dados sensíveis de saúde",
@@ -177,7 +177,7 @@ export default async function PermissionsPage() {
           <CardHeader>
             <CardTitle>Regras de visibilidade dos registros</CardTitle>
             <CardDescription>
-              Aplicadas no servidor em todas as consultas — esconder um botão nunca é a única proteção.
+              Aplicadas no servidor em todas as consultas. Esconder um botão nunca é a única proteção.
             </CardDescription>
           </CardHeader>
           <CardContent>

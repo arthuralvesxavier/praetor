@@ -77,7 +77,7 @@ export default async function AudienciasPage(props: PageProps<"/audiencias">) {
       <PageHeader
         title="Audiências e pauta"
         description="Agenda das audiências e sessões de julgamento dos processos que você pode acessar. As audiências são cadastradas por pessoas: não há integração com tribunais nesta versão."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Audiências" }]}
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Audiências" }]}
         actions={
           canWrite ? (
             <HearingFormDialog askProcessNumber users={userOptions} defaultResponsibleId={ctx.userId} />

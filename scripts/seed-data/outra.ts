@@ -12,14 +12,14 @@ export const OUTRA_ORG = {
 };
 
 export const OUTRA_ADMIN_EMAIL = "admin@outra.praetor.local";
-export const OUTRA_UNIT = { name: "Sede — Belo Horizonte", code: "BH" };
+export const OUTRA_UNIT = { name: "Sede Belo Horizonte", code: "BH" };
 
 type OutraProcess = Omit<ProcessSeed, "key" | "createdBy" | "unit" | "responsible" | "fromOccurrence">;
 
 export const OUTRA_PROCESSES: OutraProcess[] = [
   {
     number: "0009001-00.2025.5.03.0000",
-    title: "Reclamação trabalhista — Outra Empresa (isolamento)",
+    title: "Reclamação trabalhista: Outra Empresa (isolamento)",
     court: "TRT-3 (Minas Gerais)",
     courtDivision: "Vara do Trabalho fictícia nº 2",
     jurisdiction: "Belo Horizonte/MG",
@@ -27,7 +27,6 @@ export const OUTRA_PROCESSES: OutraProcess[] = [
     phase: "knowledge",
     status: "active",
     claim: 54000,
-    provision: 15000,
     riskLevel: "medium",
     lossProbability: "possible",
     riskRationale: "Registro de outra organização, usado para testar o isolamento.",
@@ -44,7 +43,7 @@ export const OUTRA_PROCESSES: OutraProcess[] = [
   },
   {
     number: "0009002-00.2025.8.13.0000",
-    title: "Ação de cobrança — Outra Empresa (isolamento)",
+    title: "Ação de cobrança: Outra Empresa (isolamento)",
     court: "TJMG",
     courtDivision: "Vara Cível fictícia nº 1",
     jurisdiction: "Belo Horizonte/MG",
@@ -52,7 +51,6 @@ export const OUTRA_PROCESSES: OutraProcess[] = [
     phase: "knowledge",
     status: "active",
     claim: 120000,
-    provision: null,
     riskLevel: "low",
     lossProbability: "remote",
     riskRationale: "Registro de outra organização, usado para testar o isolamento.",
@@ -81,6 +79,6 @@ export const OUTRA_OCCURRENCE = {
 
 export const OUTRA_DOCUMENT = {
   file: "comunicado-outra-empresa.txt",
-  title: "Comunicado interno — Outra Empresa (isolamento)",
+  title: "Comunicado interno: Outra Empresa (isolamento)",
   description: "Documento de outra organização, usado para testar o isolamento.",
 };

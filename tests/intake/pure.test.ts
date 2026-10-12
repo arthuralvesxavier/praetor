@@ -218,6 +218,6 @@ describe("intake status (pure)", () => {
       },
     });
     expect(stages.every((s) => s.state === "done")).toBe(true);
-    expect(stages.find((s) => s.key === "email")?.detail).toContain("nenhuma mensagem foi enviada");
+    expect(stages.find((s) => s.key === "email")?.detail).toContain("Nenhuma mensagem foi enviada");
   });
 });

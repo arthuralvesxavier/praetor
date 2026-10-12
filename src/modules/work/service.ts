@@ -26,6 +26,7 @@ import {
   processWhere,
   seesConfidential,
   taskWhere,
+  userDirectoryWhere,
 } from "@/server/auth/access";
 import type { AuthContext } from "@/server/auth/context";
 import { assertCan, can } from "@/server/auth/permissions";
@@ -67,7 +68,7 @@ import {
   type TaskPatch,
   type ValidateDeadlineInput,
 } from "./schemas";
-import type { WorkLinkOptions, WorkUserOption } from "./types";
+import type { WorkLinkOptions, WorkProcessHit, WorkUserOption } from "./types";
 
 /**
  * Deadlines (prazos) and tasks (tarefas).
@@ -85,6 +86,10 @@ import type { WorkLinkOptions, WorkUserOption } from "./types";
  *   (`ai_analyses`, /ia) or a preliminary case analysis id (`case_briefs`,
  *   simulated in this version). Both must be visible to ctx; the UI labels
  *   brief-sourced items "Sugerido pela análise preliminar (simulação)".
+ * - Deadlines/tasks follow only their parents' scope, but a suggestion may
+ *   carry text of its source documents: its `sourceExcerpt` is null and its
+ *   description is replaced by `HIDDEN_SOURCE_DESCRIPTION` for users who
+ *   cannot open the source analysis.
  */
 
 export type { DeadlineInput, TaskInput } from "./schemas";
@@ -257,7 +262,7 @@ export type CalendarData = {
 /** What a suggestion's `sourceAnalysisId` points to. */
 export type SuggestionSourceKind = "analysis" | "case_brief";
 
-export type { FixedWorkLink, WorkLinkOptions, WorkUserOption } from "./types";
+export type { FixedWorkLink, WorkLinkOptions, WorkProcessHit, WorkUserOption } from "./types";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -265,6 +270,19 @@ export type { FixedWorkLink, WorkLinkOptions, WorkUserOption } from "./types";
 
 const REAL_VALIDATION: ValidationStatus[] = ["not_required", "validated"];
 const LIST_HARD_LIMIT = 1000;
+
+/**
+ * Shown instead of the description of a suggestion whose source analysis the
+ * user cannot open: older suggestions copied passages of the source documents
+ * into the description, and deadlines/tasks follow only their parents' scope.
+ */
+export const HIDDEN_SOURCE_DESCRIPTION = "Descrição baseada em documento sem acesso para você.";
+
+/** Description visible to ctx: hidden when it comes from a source analysis ctx cannot open. */
+function visibleDescription(description: string | null, sourceAnalysisId: string | null, sourceVisible: boolean): string | null {
+  if (!description || !sourceAnalysisId || sourceVisible) return description;
+  return HIDDEN_SOURCE_DESCRIPTION;
+}
 
 function parseOrThrow<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
   const result = schema.safeParse(input);
@@ -356,10 +374,11 @@ async function assertActiveUser(
   userId: string,
   field: string,
 ): Promise<{ id: string; unitId: string | null }> {
+  // Same directory as the selects (listWorkUserOptions): external counsel cannot pick internal staff by id.
   const [u] = await db
     .select({ id: users.id, unitId: users.unitId })
     .from(users)
-    .where(and(eq(users.id, userId), eq(users.organizationId, ctx.organizationId), eq(users.isActive, true)))
+    .where(and(eq(users.id, userId), eq(users.organizationId, ctx.organizationId), eq(users.isActive, true), userDirectoryWhere(ctx)))
     .limit(1);
   if (!u) {
     throw new ValidationError("Responsável inválido.", { [field]: ["Selecione um usuário ativo da organização."] });
@@ -463,7 +482,7 @@ function buildLinks(r: LinkColumnsRow): WorkLink[] {
     links.push({
       type: "legal_process",
       id: r.processId,
-      label: visible ? `${r.pNumber} — ${r.pTitle}` : null,
+      label: visible ? `${r.pNumber} · ${r.pTitle}` : null,
       href: visible ? entityHref({ type: "legal_process", id: r.processId }) : null,
     });
   }
@@ -562,7 +581,7 @@ async function mapDeadlineRows(ctx: AuthContext, rows: DeadlineRow[], today: str
     return {
       id: d.id,
       title: d.title,
-      description: d.description,
+      description: visibleDescription(d.description, d.sourceAnalysisId, analysisVisible),
       dueDate: d.dueDate,
       kind: d.kind,
       status: d.status,
@@ -965,10 +984,11 @@ async function mapTaskRows(ctx: AuthContext, rows: TaskRow[], today: string): Pr
   );
   return rows.map((r) => {
     const t = r.t;
+    const sourceVisible = t.sourceAnalysisId ? (sources.get(t.sourceAnalysisId)?.visible ?? false) : true;
     return {
       id: t.id,
       title: t.title,
-      description: t.description,
+      description: visibleDescription(t.description, t.sourceAnalysisId, sourceVisible),
       kind: t.kind,
       status: t.status,
       priority: t.priority,
@@ -1303,30 +1323,52 @@ export async function listCalendarItems(ctx: AuthContext, month: string): Promis
 // Form options (scoped)
 // ---------------------------------------------------------------------------
 
-/** Active users of the organization (responsible / assignee selects). */
+/**
+ * Active users of the organization for the responsible / assignee selects and
+ * filters, within the user directory of ctx (rule 10 of access.ts): internal
+ * roles see every user; external counsel only themselves, their law firm and
+ * the responsible people of the processes they can see (never the internal staff).
+ */
 export async function listWorkUserOptions(ctx: AuthContext): Promise<WorkUserOption[]> {
   if (!can(ctx, "deadline:read") && !can(ctx, "task:read")) throw new ForbiddenError();
   return getDb()
     .select({ id: users.id, name: users.name })
     .from(users)
-    .where(and(eq(users.organizationId, ctx.organizationId), eq(users.isActive, true)))
+    .where(and(eq(users.organizationId, ctx.organizationId), eq(users.isActive, true), userDirectoryWhere(ctx)))
     .orderBy(asc(users.name))
     .limit(LIST_HARD_LIMIT);
 }
 
-/** Records the user can link a deadline/task to (only visible ones). */
-export async function listWorkLinkOptions(ctx: AuthContext): Promise<WorkLinkOptions> {
+/** Quick picks of the process search (most recently updated active/suspended processes). */
+const RECENT_PROCESS_OPTIONS = 20;
+
+/**
+ * Records the user can link a deadline/task to (only visible ones).
+ * `processes` holds only the most recently updated processes: the forms search
+ * every visible process (`searchWorkLinkProcesses`). `includeProcessId` adds
+ * that process when it is visible to ctx (e.g. a preselected link).
+ */
+export async function listWorkLinkOptions(
+  ctx: AuthContext,
+  opts: { includeProcessId?: string | null } = {},
+): Promise<WorkLinkOptions> {
   if (!can(ctx, "deadline:write") && !can(ctx, "task:write")) throw new ForbiddenError();
   const db = getDb();
   const limit = 300;
-  const [processes, occs, ctrs] = await Promise.all([
-    can(ctx, "process:read")
+  const canReadProcesses = can(ctx, "process:read");
+  const includeId = opts.includeProcessId && uuidSchema.safeParse(opts.includeProcessId).success ? opts.includeProcessId : null;
+  const processColumns = { id: legalProcesses.id, number: legalProcesses.number, title: legalProcesses.title };
+  const [processes, included, occs, ctrs] = await Promise.all([
+    canReadProcesses
       ? db
-          .select({ id: legalProcesses.id, number: legalProcesses.number, title: legalProcesses.title })
+          .select(processColumns)
           .from(legalProcesses)
           .where(and(processWhere(ctx), or(eq(legalProcesses.status, "active"), eq(legalProcesses.status, "suspended"))))
-          .orderBy(desc(legalProcesses.updatedAt))
-          .limit(limit)
+          .orderBy(desc(legalProcesses.updatedAt), asc(legalProcesses.id))
+          .limit(RECENT_PROCESS_OPTIONS)
+      : [],
+    canReadProcesses && includeId
+      ? db.select(processColumns).from(legalProcesses).where(and(eq(legalProcesses.id, includeId), processWhere(ctx))).limit(1)
       : [],
     can(ctx, "occurrence:read")
       ? db
@@ -1345,10 +1387,25 @@ export async function listWorkLinkOptions(ctx: AuthContext): Promise<WorkLinkOpt
           .limit(limit)
       : [],
   ]);
+  const processRows = included[0] && !processes.some((p) => p.id === included[0].id) ? [included[0], ...processes] : processes;
   return {
-    processes: processes.map((p) => ({ id: p.id, label: `${p.number} — ${p.title}` })),
+    processes: processRows.map((p) => ({ id: p.id, label: `${p.number} · ${p.title}` })),
     occurrences: occs.map((o) => ({ id: o.id, label: o.title })),
     contracts: ctrs.map((c) => ({ id: c.id, label: `${c.title} (${c.counterparty})` })),
+    processSearch: canReadProcesses,
   };
+}
+
+/**
+ * Process search of the deadline/task forms (`deadline:write` or `task:write`,
+ * plus `process:read`): number, title, court, parties… of every process
+ * visible to ctx (`searchProcesses` applies `processWhere`), any status.
+ */
+export async function searchWorkLinkProcesses(ctx: AuthContext, query: unknown): Promise<WorkProcessHit[]> {
+  if (!can(ctx, "deadline:write") && !can(ctx, "task:write")) throw new ForbiddenError();
+  if (!can(ctx, "process:read") || typeof query !== "string") return [];
+  const { searchProcesses } = await import("@/modules/processes/service");
+  const rows = await searchProcesses(ctx, query, 10);
+  return rows.map((p) => ({ id: p.id, label: `${p.number} · ${p.title}`, status: p.status }));
 }
 

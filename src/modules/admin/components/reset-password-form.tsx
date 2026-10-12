@@ -30,7 +30,7 @@ export function ResetPasswordForm<S extends FormState>({
       <FormMessage state={state} />
       <p className="text-sm text-muted-foreground">
         Mínimo de 10 caracteres, com letras e números. Todas as sessões abertas do usuário serão encerradas
-        {isSelf ? " — inclusive a sua, e você precisará entrar novamente." : "."}
+        {isSelf ? ", inclusive a sua, e você precisará entrar novamente." : "."}
       </p>
       <div className="grid gap-4 sm:grid-cols-2">
         <FormField label="Nova senha" htmlFor="new-password" required error={fieldError(state, "password")}>

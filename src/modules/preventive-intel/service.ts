@@ -10,7 +10,7 @@
  * an explicit user action (`createOccurrenceFromSuggestion`,
  * `createActionPlanFromSuggestion`). No sensitive data (PD-06) in indicators.
  */
-import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { BriefClaim } from "@/domain/case-brief";
 import { parseCnj } from "@/domain/cnj";
@@ -154,7 +154,7 @@ function scopeOf(ctx: AuthContext) {
   return {
     orgWide: false,
     includesConfidential: false,
-    label: "Somente os processos visíveis para o seu perfil — os indicadores não representam a organização inteira.",
+    label: "Somente os processos visíveis para o seu perfil: os indicadores não representam a organização inteira.",
   };
 }
 
@@ -235,15 +235,18 @@ export async function getPreventiveIntelligence(
           inArray(processParties.role, ["plaintiff", "public_prosecutor"]),
         ),
       ),
+    // Only the latest version (among the usable statuses) of each process: older versions'
+    // claims are never loaded.
     db
-      .select({
+      .selectDistinctOn([caseBriefs.processId], {
         processId: caseBriefs.processId,
         version: caseBriefs.version,
         claims: sql<BriefClaim[] | null>`${caseBriefs.content} -> 'claims'`,
       })
       .from(caseBriefs)
       .innerJoin(lp, and(eq(lp.id, caseBriefs.processId), where))
-      .where(and(caseBriefWhere(ctx), inArray(caseBriefs.status, [...BRIEF_STATUSES]), isNotNull(caseBriefs.content))),
+      .where(and(caseBriefWhere(ctx), inArray(caseBriefs.status, [...BRIEF_STATUSES]), isNotNull(caseBriefs.content)))
+      .orderBy(caseBriefs.processId, desc(caseBriefs.version)),
   ]);
 
   const all = procs as ProcessRow[];
@@ -414,7 +417,7 @@ export async function getPreventiveIntelligence(
     },
     repeatPlaintiffs: {
       basis: {
-        formula: "Partes do polo ativo (exceto a empresa) com o mesmo nome — sem diferenciar acentos e maiúsculas — em mais de um processo.",
+        formula: "Partes do polo ativo (exceto a empresa) com o mesmo nome (sem diferenciar acentos e maiúsculas) em mais de um processo.",
         population: "Processos ativos e encerrados",
         processCount: all.length,
       },
@@ -433,7 +436,7 @@ export async function getPreventiveIntelligence(
     },
     verification: {
       basis: {
-        formula: "Processos ativos marcados para verificação ÷ total da carteira ativa.",
+        formula: "Processos ativos pendentes de conferência ÷ total da carteira ativa.",
         population: "Carteira ativa",
         processCount: active.length,
       },
@@ -552,9 +555,9 @@ function computeRiskFactors(d: {
   if (activeCount > 0 && d.verifyCount / activeCount >= t.verificationShare) {
     out.push({
       key: "verification",
-      title: "Cadastros a verificar",
+      title: "Cadastros pendentes de conferência",
       value: `${pct(d.verifyCount / activeCount)} da carteira ativa`,
-      explanation: `${formatNumber(d.verifyCount)} de ${formatNumber(activeCount)} processos ativos estão marcados para verificação (dados incompletos ou divergentes). Limiar de referência: ${pct(t.verificationShare)}.`,
+      explanation: `${formatNumber(d.verifyCount)} de ${formatNumber(activeCount)} processos ativos estão pendentes de conferência (dados incompletos ou divergentes). Limiar de referência: ${pct(t.verificationShare)}.`,
     });
   }
   const topClass = d.classRows.find((g) => g.key !== NONE_KEY);
@@ -638,7 +641,7 @@ async function createFromSuggestion(
   filterText: string,
 ): Promise<{ occurrenceId: string }> {
   const { id } = await createOccurrence(ctx, {
-    title: `Inteligência preventiva — ${s.title}`.slice(0, 200),
+    title: `Inteligência preventiva: ${s.title}`.slice(0, 200),
     facts: buildSuggestionFacts(s, { today: todayISO(), filterSummary: filterText }),
     category: "labor",
     riskLevel: "medium",

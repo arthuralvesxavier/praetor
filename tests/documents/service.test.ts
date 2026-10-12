@@ -96,7 +96,7 @@ describe("uploadDocument", () => {
 
     const doc = await getDocument(lawyerSp, result.documentId);
     expect(doc).toMatchObject({ title: "Contestação", currentVersionId: result.versionId, currentVersionNumber: 1, processId: ids.pSp });
-    expect(doc.links).toEqual([{ type: "legal_process", id: ids.pSp, label: "0001 — Processo SP" }]);
+    expect(doc.links).toEqual([{ type: "legal_process", id: ids.pSp, label: "0001 · Processo SP" }]);
     expect(doc.versions).toHaveLength(1);
     expect(doc.versions[0]).toMatchObject({ fileName: "contestacao.txt", mimeType: "text/plain", extractionStatus: "pending", isCurrent: true });
 

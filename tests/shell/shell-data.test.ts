@@ -107,11 +107,12 @@ describe("loadShellData (app header and user menu)", () => {
     expect(data.alerts).toEqual({ total: 0, critical: 0 });
   });
 
-  it("shows the simulated e-mail badge only to users with email:read", async () => {
-    expect((await loadShellData(fx.ctx.lawyer)).emailMode).toBe("simulated");
-    expect((await loadShellData(fx.ctx.auditor)).emailMode).toBe("simulated");
-    expect((await loadShellData(fx.ctx.externalCounsel)).emailMode).toBe("simulated");
-    expect((await loadShellData(fx.ctx.accountant)).emailMode).toBeNull();
-    expect((await loadShellData(fx.ctx.executive)).emailMode).toBeNull();
+  it("returns the provider modes to every user (links are gated in simulationItems)", async () => {
+    for (const ctx of [fx.ctx.lawyer, fx.ctx.auditor, fx.ctx.externalCounsel, fx.ctx.accountant, fx.ctx.executive]) {
+      const data = await loadShellData(ctx);
+      expect(data.emailMode).toBe("simulated");
+      expect(data.caseBriefMode).toBe("demo");
+      expect(data.aiMode).toBe("demo");
+    }
   });
 });

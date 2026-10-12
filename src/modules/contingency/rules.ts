@@ -150,18 +150,22 @@ export type RiskRuleResult = {
   factors: string[];
 };
 
-const ENFORCEMENT_PHASES: readonly ProcessPhase[] = ["liquidation", "enforcement", "settlement"];
+const ENFORCEMENT_PHASES: readonly ProcessPhase[] = ["liquidation", "enforcement"];
+
+/** 2º e 3º grau: o processo tramita em grau de recurso (a instância diz isso, não a fase). */
+const APPELLATE_INSTANCES: readonly ProcessInstance[] = ["second", "superior"];
 
 /**
  * Transparent rule (no AI): uses only phase, instance, closure and the
- * presence of a liquidated value.
- *   1. Closed/archived process, phase "encerrado" or liquidated value zeroed (quitação) → remota.
- *   2. Liquidated value assessed, or phase liquidação / execução / acordo → provável.
- *   3. Otherwise (conhecimento, recursal, pré-ajuizamento) → possível.
+ * presence of a liquidated value. Fase e instância são eixos distintos (P0.5):
+ * "em recurso" é a INSTÂNCIA (2º/3º grau), nunca uma fase.
+ *   1. Closed/archived process or liquidated value zeroed (quitação) → remota.
+ *   2. Liquidated value assessed, or phase liquidação / execução → provável.
+ *   3. Otherwise (conhecimento, em 1º grau ou em grau de recurso) → possível.
  */
 export function suggestRiskByRule(input: RiskRuleInput): RiskRuleResult {
   const factors: string[] = [];
-  if (input.status === "closed" || input.status === "archived" || input.phase === "closed") {
+  if (input.status === "closed" || input.status === "archived") {
     factors.push("o processo está encerrado ou arquivado, sem expectativa de novo desembolso");
     if (input.closureReason) factors.push(`motivo de encerramento registrado: ${closureText(input.closureReason)}`);
     return { classification: "remote", factors };
@@ -173,19 +177,14 @@ export function suggestRiskByRule(input: RiskRuleInput): RiskRuleResult {
   if (input.liquidatedCents !== null || ENFORCEMENT_PHASES.includes(input.phase)) {
     if (input.liquidatedCents !== null) factors.push("há valor liquidado/apurado oficial vigente");
     if (input.phase === "liquidation") factors.push("o processo está em fase de liquidação");
-    if (input.phase === "enforcement") factors.push("o processo está em fase de execução / cumprimento");
-    if (input.phase === "settlement") factors.push("há acordo em andamento");
+    if (input.phase === "enforcement") factors.push("o processo está em fase de execução");
     factors.push("a obrigação de pagar já está definida ou em definição");
     return { classification: "probable", factors };
   }
-  if (input.phase === "appeal") {
+  if (input.instance !== null && APPELLATE_INSTANCES.includes(input.instance)) {
     factors.push(
-      input.instance === "second" || input.instance === "superior"
-        ? "o processo está em fase recursal em instância superior, com resultado ainda reversível"
-        : "o processo está em fase recursal, com resultado ainda reversível",
+      `o processo está na fase de conhecimento em grau de recurso (${input.instance === "superior" ? "3º grau" : "2º grau"}), com resultado ainda reversível`,
     );
-  } else if (input.phase === "pre_filing") {
-    factors.push("a demanda ainda não foi ajuizada");
   } else {
     factors.push("o processo está em fase de conhecimento, sem condenação definida");
   }

@@ -93,7 +93,7 @@ export default async function ContractDetailPage(props: PageProps<"/contratos/[i
         title={contract.title}
         description={`${CONTRACT_TYPE_LABELS[contract.type]} · ${contract.counterparty}`}
         breadcrumbs={[
-          { label: "Dashboard", href: "/dashboard" },
+          { label: "Painel executivo", href: "/dashboard" },
           { label: "Contratos", href: "/contratos" },
           { label: contract.title },
         ]}
@@ -330,7 +330,7 @@ function Overview({
                 },
                 { label: "Valor", value: contract.valueCents !== null ? formatMoneyCents(contract.valueCents) : null },
                 { label: "Risco", value: <RiskBadge level={contract.riskLevel} /> },
-                { label: "Vigência", value: contract.startDate || contract.endDate ? `${formatDate(contract.startDate)} a ${contract.endDate ? formatDate(contract.endDate) : "prazo indeterminado"}` : null },
+                { label: "Vigência", value: contract.startDate || contract.endDate ? `${formatDate(contract.startDate, "Início não informado")} a ${contract.endDate ? formatDate(contract.endDate) : "prazo indeterminado"}` : null },
                 { label: "Descrição", value: contract.description ? <p className="whitespace-pre-line">{contract.description}</p> : null, full: true },
               ]}
             />
@@ -368,7 +368,9 @@ function Overview({
                         {next.dueDate ? `${formatDate(next.dueDate)} · ${formatRelativeDays(next.dueDate, today)}` : "Sem data"}
                       </span>
                     </Link>
-                  ) : null,
+                  ) : (
+                    <span className="text-muted-foreground">Nenhuma</span>
+                  ),
                 },
               ]}
             />

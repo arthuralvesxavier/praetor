@@ -48,7 +48,7 @@ const COLUMNS: Column[] = [
   { header: "Fase (classificação)", kind: "text", width: 20 },
   { header: "Área", kind: "text", width: 14 },
   { header: "Ajuizamento", kind: "text", width: 12 },
-  { header: "Verificar", kind: "text", width: 9 },
+  { header: "Pendente de conferência", kind: "text", width: 14 },
   { header: "Sigiloso", kind: "text", width: 9 },
   { header: "CPF/CNPJ Parte Autora (mascarado)", kind: "text", width: 22 },
   { header: "CPF/CNPJ Parte Ré (mascarado)", kind: "text", width: 22 },
@@ -65,7 +65,7 @@ function partyLabel(name: string | null, count: number): string | null {
 
 function situation(p: ProcessExportRow): string {
   const status = PROCESS_STATUS_LABELS[p.status];
-  return p.closureReason ? `${status} — ${CLOSURE_REASON_LABELS[p.closureReason]}` : status;
+  return p.closureReason ? `${status}: ${CLOSURE_REASON_LABELS[p.closureReason]}` : status;
 }
 
 function maskedOrNull(value: string | null): string | null {

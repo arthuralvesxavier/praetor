@@ -39,7 +39,7 @@ export default async function EmailsPage(props: PageProps<"/emails">) {
   const filtered = hasAnyParam(sp, FILTER_KEYS);
 
   // Keep a selected process/recipient selectable even when it has no visible message yet.
-  const processOptions = options.processes.map((p) => ({ value: p.id, label: `${p.number} — ${p.title}` }));
+  const processOptions = options.processes.map((p) => ({ value: p.id, label: `${p.number} · ${p.title}` }));
   if (processId && !processOptions.some((o) => o.value === processId)) {
     processOptions.unshift({ value: processId, label: "Processo selecionado" });
   }
@@ -48,8 +48,8 @@ export default async function EmailsPage(props: PageProps<"/emails">) {
     <>
       <PageHeader
         title="Central de e-mails"
-        description="Avisos gerados pelo sistema (análise preliminar, atribuição, prazos, audiências e resumo diário)."
-        breadcrumbs={[{ label: "Dashboard", href: "/dashboard" }, { label: "Central de e-mails" }]}
+        description="Avisos simulados gerados pelo sistema: análise preliminar disponível, processo atribuído (quando ativado nas configurações), lembretes de audiência e resumo diário."
+        breadcrumbs={[{ label: "Painel executivo", href: "/dashboard" }, { label: "Central de e-mails" }]}
         actions={
           canSend ? (
             <ConfirmDialog

@@ -130,10 +130,18 @@ beforeAll(async () => {
     })
   ).id;
   await suggestRiskAssessment(f.ctx.lawyer, confidentialId).catch(() => undefined); // lawyer cannot see it: ignored
+  // P1.9 close gate: the confidential process also needs an OFFICIAL classification in force on the
+  // reference date (the "possível" typed on its record does not count).
+  await addRiskAssessment(f.ctx.manager, confidentialId, {
+    classification: "possible",
+    opinion: "Parecer fictício: pedido controvertido, prova dividida.",
+    effectiveFrom: `${previous}-01`,
+  });
   const s = await createSettlement(f.ctx.manager, { processId, status: "signed", totalAmountCents: 300_000, installmentsCount: 3, firstDueDate: d(2) });
   await setSettlementStatus(f.ctx.manager, s.id, { status: "homologated" });
   await generateSnapshot(f.ctx.manager, previous);
-  await closeSnapshot(f.ctx.manager, previous);
+  const closed = await closeSnapshot(f.ctx.manager, previous);
+  if (closed.override) throw new Error("expected a close without reservation (every process classified)");
   await generateSnapshot(f.ctx.manager, current);
 });
 
@@ -145,7 +153,8 @@ describe("process tabs", () => {
   it("renders the values tab with RN-02/RN-03 labels, history, guarantees and risk", async () => {
     const out = html(await ProcessContingencyTab({ ctx: f.ctx.manager, processId }));
     expect(out).toContain("Valor da causa (declarado)");
-    expect(out).toContain("nunca somadas (RN-02)");
+    expect(out).toContain("nunca somadas.");
+    expect(out).not.toMatch(/\b(RN|RF|TE)-\d/);
     expect(out).toContain("Histórico de valores");
     expect(out).toContain("Extração simulada (demonstração)");
     expect(out).toContain("Garantias e deduções");

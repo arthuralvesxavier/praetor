@@ -21,7 +21,7 @@ import { uploadDocument } from "@/modules/documents/service";
 import { alerts, auditLogs, caseBriefRevisions, caseBriefSources, caseBriefs, deadlines, tasks } from "@/server/db/schema";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/lib/errors";
 import { runJobs, setupFixture, utf8, type Fixture } from "../helpers/fixtures";
-import { demoInfo, makeLaborProcess, uploadDemoPack } from "./helpers";
+import { demoInfo, insertIntake, makeLaborProcess, uploadDemoPack } from "./helpers";
 
 const proposeValuation = vi.hoisted(() => vi.fn(async () => ({ id: "00000000-0000-4000-8000-0000000000aa" })));
 vi.mock("@/modules/contingency/service", async (importOriginal) => {
@@ -172,12 +172,14 @@ describe("generation", () => {
 });
 
 describe("permissions and visibility", () => {
-  it("requires brief:review or intake:manage to request; brief:read to list", async () => {
+  it("requires brief:review (or intake:manage with an intake of the process) to request; brief:read to list", async () => {
     const { admin, analyst, accountant, executive } = fx.ctx;
     const info = demoInfo();
     const processId = await makeLaborProcess(admin, info, { unitId: fx.unitSp });
-    // Analyst has intake:manage.
-    const r = await requestCaseBrief(analyst, processId, { inline: true });
+    // Analyst has intake:manage: only from the intake of the process (intake page), never directly.
+    await expect(requestCaseBrief(analyst, processId, { inline: true })).rejects.toBeInstanceOf(ForbiddenError);
+    const intakeId = await insertIntake(fx.orgA, processId);
+    const r = await requestCaseBrief(analyst, processId, { intakeId, inline: true });
     expect(r.status).toBe("ready_for_review");
     await expect(requestCaseBrief(executive, processId)).rejects.toBeInstanceOf(ForbiddenError);
     await expect(listCaseBriefs(accountant, {})).rejects.toBeInstanceOf(ForbiddenError);
@@ -199,8 +201,9 @@ describe("permissions and visibility", () => {
     expect((await listCaseBriefs(analyst, { processId })).items.map((i) => i.id)).not.toContain(briefId);
     expect((await getCaseBrief(lawyer, briefId)).id).toBe(briefId);
 
-    // A brief requested by the analyst only uses what the analyst can see, so it is visible to them.
-    const own = await requestCaseBrief(analyst, processId, { inline: true });
+    // A brief requested by the analyst (from the intake) only uses what the analyst can see, so it is visible to them.
+    const intakeId = await insertIntake(fx.orgA, processId);
+    const own = await requestCaseBrief(analyst, processId, { intakeId, inline: true });
     const detail = await getCaseBrief(analyst, own.briefId);
     expect(detail.sources.filter((s) => s.sourceType === "document_version")).toHaveLength(1);
   });

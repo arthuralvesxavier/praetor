@@ -18,7 +18,7 @@ export default async function NewDistributionRulePage() {
         title="Nova regra de distribuição"
         description="Defina quando a regra se aplica e quem recebe os processos. Ela passa a valer para as próximas entradas."
         breadcrumbs={[
-          { label: "Dashboard", href: "/dashboard" },
+          { label: "Painel executivo", href: "/dashboard" },
           { label: "Distribuição", href: "/distribuicao?aba=regras" },
           { label: "Nova regra" },
         ]}

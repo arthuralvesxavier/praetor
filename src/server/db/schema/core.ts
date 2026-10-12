@@ -8,7 +8,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { EntityType, Role } from "@/domain/enums";
+import type { CorrectionIndex, EntityType, Role } from "@/domain/enums";
 import { createdAt, id, ts, updatedAt } from "./_columns";
 
 export type OrganizationSettings = {
@@ -46,6 +46,12 @@ export type OrganizationSettings = {
     idleGuaranteeDays: number;
     /** Incrementado a cada mudança de percentual; gravado em cada classificação e fechamento. */
     rulesVersion: number;
+    /**
+     * Índice de atualização gravado nas NOVAS valorações (P1.7). "none" até a
+     * organização escolher. Escolha do advogado: o sistema não decide qual índice
+     * vale para cada caso.
+     */
+    defaultCorrectionIndex: CorrectionIndex;
   };
   /** E-mail. Nesta etapa o único modo disponível é `simulated` (nada é enviado). */
   email: {
@@ -62,6 +68,34 @@ export type OrganizationSettings = {
     autoGenerateBrief: boolean;
     autoNotify: boolean;
   };
+  /** Coleta automática nos tribunais e integrações de entrada. */
+  integrations: {
+    datajud: {
+      /** Acompanhamento automático da carteira na API pública do CNJ (requer DATAJUD_API_KEY). */
+      enabled: boolean;
+      /** Intervalo mínimo entre duas consultas do mesmo processo. */
+      syncIntervalHours: number;
+      /** Limite de requisições por minuto por tribunal (RNF-03). */
+      maxRequestsPerMinute: number;
+      /** Números por requisição (consulta em lote). */
+      batchSize: number;
+      /** Aplica sozinho mudanças de fase inequívocas (ex.: "Liquidação iniciada"); as demais viram alerta. */
+      autoApplyPhase: boolean;
+      /** Consulta o DataJud ao receber um processo novo (por API) para completar os campos vazios. */
+      enrichOnIntake: boolean;
+    };
+    /** Chegada automática SIMULADA (demonstração): um processo fictício a cada intervalo. */
+    simulatedFeed: { enabled: boolean; intervalMinutes: number };
+  };
+  /** Relatórios jurídicos (PDF): limite de confiança, faixas de probabilidade e base legal (LGPD). */
+  legalReports: {
+    /** Itens com confiança (0–100) abaixo deste limite não são afirmados: vão para "Pendências do relatório". */
+    confidenceThreshold: number;
+    /** Faixas de probabilidade dos cenários, em percentuais inteiros (mínimo e máximo, 0–100). */
+    bands: Record<"very_high" | "high" | "moderate" | "low" | "very_low", { min: number; max: number }>;
+    /** Base legal do tratamento de dados pessoais citada nos relatórios. */
+    legalBasisText: string;
+  };
 };
 
 export const DEFAULT_ORGANIZATION_SETTINGS: OrganizationSettings = {
@@ -73,6 +107,7 @@ export const DEFAULT_ORGANIZATION_SETTINGS: OrganizationSettings = {
     confidenceThreshold: 85,
     idleGuaranteeDays: 180,
     rulesVersion: 1,
+    defaultCorrectionIndex: "none",
   },
   email: {
     mode: "simulated",
@@ -82,6 +117,28 @@ export const DEFAULT_ORGANIZATION_SETTINGS: OrganizationSettings = {
     notifyOnAssignment: true,
   },
   intake: { autoAssign: true, autoGenerateBrief: true, autoNotify: true },
+  integrations: {
+    datajud: {
+      enabled: true,
+      syncIntervalHours: 24,
+      maxRequestsPerMinute: 20,
+      batchSize: 50,
+      autoApplyPhase: true,
+      enrichOnIntake: true,
+    },
+    simulatedFeed: { enabled: false, intervalMinutes: 120 },
+  },
+  legalReports: {
+    confidenceThreshold: 70,
+    bands: {
+      very_high: { min: 80, max: 100 },
+      high: { min: 60, max: 80 },
+      moderate: { min: 40, max: 60 },
+      low: { min: 20, max: 40 },
+      very_low: { min: 0, max: 20 },
+    },
+    legalBasisText: "Exercício regular de direitos em processo judicial e cumprimento de obrigação legal (LGPD)",
+  },
 };
 
 export const organizations = pgTable("organizations", {
